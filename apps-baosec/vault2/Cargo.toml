@@ -30,6 +30,7 @@ maki-launcher = { path = "../maki-launcher" }
 maki-proto = { path = "../../libs/maki-proto" }
 maki-vault-api = { path = "../../libs/maki-vault-api" }
 maki-icons = { path = "../../libs/maki-icons" }
+maki-keys = { path = "../../services/maki-keys" }
 bao1x-api = { path = "../../libs/bao1x-api" }
 bao1x-hal = { path = "../../libs/bao1x-hal" }
 bao1x-hal-service = { path = "../../services/bao1x-hal-service", optional = true }

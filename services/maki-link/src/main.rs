@@ -40,14 +40,18 @@ fn send(usb: &usb_bao1x::UsbHid, lock: &Mutex<()>, bytes: &[u8]) {
     log::warn!("gave up on a frame after {} of {} bytes", sent, bytes.len());
 }
 
-/// Answers for when the vault can't take another request.
-fn unavailable(ask: &Ask) -> (u8, Vec<u8>) {
+/// A refusal, for when the vault can't take another request or maki is locked.
+fn refused(ask: &Ask, why: Approval) -> (u8, Vec<u8>) {
     match ask {
-        Ask::Login { .. } => reply::login(Approval::Unavailable, "", ""),
-        Ask::Totp { .. } => reply::totp(Approval::Unavailable, "", 0),
-        Ask::SaveLogin { .. } => reply::save(Approval::Unavailable),
+        Ask::Login { .. } => reply::login(why, "", ""),
+        Ask::Totp { .. } => reply::totp(why, "", 0),
+        Ask::SaveLogin { .. } => reply::save(why),
     }
 }
+
+fn unavailable(ask: &Ask) -> (u8, Vec<u8>) { refused(ask, Approval::Unavailable) }
+
+fn locked(ask: &Ask) -> (u8, Vec<u8>) { refused(ask, Approval::Locked) }
 
 /// Takes requests for the owner to the vault, one at a time, and sends each answer back with
 /// its request's id. Connects to the vault at boot: the vault accepts one connection only.
@@ -161,6 +165,7 @@ fn main() -> ! {
     let tt = ticktimer_server::Ticktimer::new().unwrap();
     let launcher = maki_launcher::Launcher::new(&xns).expect("couldn't connect to the launcher");
 
+    let keys = maki_keys::Keys::new(&xns).expect("couldn't connect to maki-keys");
     let send_lock = Arc::new(Mutex::new(()));
     let waiting = Arc::new(AtomicU32::new(0));
     let (to_vault, asks) = mpsc::channel::<(u16, Ask)>();
@@ -205,6 +210,8 @@ fn main() -> ! {
                     }
                     let (kind, body) = match device.handle(&packet) {
                         Handled::Reply(kind, body) => (kind, body),
+                        // nothing is asked of a maki that hasn't had its PIN
+                        Handled::Ask(ask) if keys.status().0 != maki_keys::State::Unlocked => locked(&ask),
                         Handled::Ask(ask) => {
                             if waiting.fetch_add(1, Ordering::SeqCst) >= MAX_WAITING_ASKS {
                                 waiting.fetch_sub(1, Ordering::SeqCst);

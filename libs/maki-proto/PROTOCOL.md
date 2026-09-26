@@ -64,7 +64,8 @@ TIME_PROOF `answer`: 0 verified, 1 unknown server, 2 duplicate, 3 invalid, 4 too
 ERROR `code`: 1 malformed, 2 unknown kind, 3 no challenge, 4 challenge expired, 5 bad argument.
 `approval`: 0 approved, 1 denied, 2 nothing saved for the site (the owner wasn't asked), 3 timed
 out, 4 vault unavailable (or busy: at most three requests wait for the owner at once), 5 clock
-not verified (GET_TOTP only). Only an approved reply carries a username, password or code.
+not verified (GET_TOTP only), 6 locked (maki is waiting for its PIN). Only an approved reply
+carries a username, password or code.
 
 ## Setting the time
 

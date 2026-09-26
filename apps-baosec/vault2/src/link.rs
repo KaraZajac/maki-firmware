@@ -23,6 +23,8 @@ pub(crate) fn start(main_conn: xous::CID) {
         let sid = xns.register_name(SERVER_NAME_VAULT_LINK, Some(1)).expect("can't register the vault link");
         let launcher = Launcher::new(&xns).expect("couldn't connect to the launcher");
         pddb::Pddb::new().is_mounted_blocking();
+        // maki-link answers "locked" until the PIN is in; this is belt and braces
+        maki_keys::Keys::new(&xns).expect("couldn't connect to maki-keys").wait_unlocked();
         let mut storage = storage::Manager::new(&xns);
         loop {
             let mut msg = xous::receive_message(sid).unwrap();
@@ -107,8 +109,8 @@ fn ask(launcher: &Launcher, site: &str, question: &str, detail: &str, choices: &
 fn now_s() -> u64 { get_current_unix_time().unwrap_or(0) }
 
 /// How long the owner has. The emulator skips ahead through idle time, so a demo build
-/// (MAKI_DEMO_ASKS, see maki-link) waits long enough to be pressed there.
-const TIMEOUT_S: u32 = if option_env!("MAKI_DEMO_ASKS").is_some() { 600 } else { ASK_TIMEOUT_S };
+/// (MAKI_DEMO, see maki-link) waits long enough to be pressed there.
+const TIMEOUT_S: u32 = if option_env!("MAKI_DEMO").is_some() { 600 } else { ASK_TIMEOUT_S };
 
 /// Everything of one kind in the vault. A vault that has never held any has no dictionary for
 /// it yet, which means nothing saved; and the vault's own screen may be reading the same list,

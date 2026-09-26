@@ -131,6 +131,8 @@ pub enum Approval {
     /// A code needs a clock verified by Roughtime. The host's word isn't enough: a host that
     /// could set the clock could collect codes for times still to come.
     ClockNotVerified = 5,
+    /// maki is waiting for its PIN; nothing is asked before then.
+    Locked = 6,
 }
 
 impl Approval {
@@ -142,6 +144,7 @@ impl Approval {
             3 => Approval::TimedOut,
             4 => Approval::Unavailable,
             5 => Approval::ClockNotVerified,
+            6 => Approval::Locked,
             _ => return None,
         })
     }

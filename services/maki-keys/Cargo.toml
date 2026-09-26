@@ -1,0 +1,31 @@
+[package]
+name = "maki-keys"
+version = "0.1.0"
+edition = "2021"
+description = "maki's boot PIN, and the secrets it guards"
+
+[dependencies]
+log = "0.4.14"
+num-derive = { version = "0.4.2", default-features = false }
+num-traits = { version = "0.2.14", default-features = false }
+xous = "0.9.66"
+xous-ipc = "0.10.6"
+rkyv = { version = "0.8.8", default-features = false, features = [
+    "std",
+    "alloc",
+] }
+log-server = { package = "xous-api-log", version = "0.1.65" }
+xous-names = { package = "xous-api-names", version = "0.9.67" }
+ticktimer-server = { package = "xous-api-ticktimer", version = "0.9.65" }
+pddb = { path = "../pddb" }
+getrandom = "0.2"
+sha2 = { version = "0.10.8" }
+hmac = "0.12.1"
+pbkdf2 = { version = "0.12.2", default-features = false, features = ["hmac"] }
+aes-gcm-siv = { version = "0.11.1", default-features = false, features = ["alloc", "aes"] }
+zeroize = "1.8.1"
+
+[features]
+board-baosec = ["pddb/board-baosec"]
+hosted-baosec = []
+default = []

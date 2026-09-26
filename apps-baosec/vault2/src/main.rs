@@ -193,6 +193,22 @@ fn main() -> ! {
     // maki: logins and codes for the browser, approved on screen
     link::start(conn);
 
+    // maki: the records live in the secret basis, which opens with the PIN, after this has
+    // loaded its lists; load them again then
+    thread::spawn({
+        let conn = conn.clone();
+        move || {
+            maki_keys::Keys::new(&xous_names::XousNames::new().unwrap())
+                .expect("couldn't connect to maki-keys")
+                .wait_unlocked();
+            xous::send_message(
+                conn,
+                xous::Message::new_scalar(VaultOp::ReloadDbAndFullRedraw.to_usize().unwrap(), 0, 0, 0, 0),
+            )
+            .ok();
+        }
+    });
+
     // spawn the actions server. This is responsible for grooming the UX elements. It
     // has to be in its own thread because it uses blocking modal calls that would cause
     // redraws of the background list to block/fail.
@@ -307,6 +323,11 @@ fn main() -> ! {
             // block until the PDDB is mounted
             let pddb = pddb::Pddb::new();
             pddb.is_mounted_blocking();
+            // maki: and until the PIN has opened the secret basis, so that the FIDO store (and
+            // the keys it makes on first use) lands in it, not in the system basis
+            maki_keys::Keys::new(&xous_names::XousNames::new().unwrap())
+                .expect("couldn't connect to maki-keys")
+                .wait_unlocked();
 
             let env = XousEnv::new(conn);
             let mut ctap = vault2::Ctap::new(env, Instant::now());

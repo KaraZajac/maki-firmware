@@ -13,14 +13,17 @@
 mod api;
 mod ask;
 mod menu;
+mod pin;
 mod splash;
 mod ui;
 
 use api::*;
 use ask::Asking;
 use blitstr2::GlyphStyle;
+use maki_keys::{Keys, PinResult, State};
 use menu::Menu;
 use num_traits::{FromPrimitive, ToPrimitive};
+use pin::PinPad;
 use ui::{Key, LINE, Screen, W};
 use xous_ipc::Buffer;
 
@@ -34,6 +37,12 @@ struct App {
     focus_op: usize,
     menu_op: usize,
     icon: Option<[u32; 128]>,
+}
+
+/// Overwrite a PIN before letting it go.
+fn forget(pin: String) {
+    let mut bytes = pin.into_bytes();
+    bytes.fill(0);
 }
 
 fn set_focus(app: &App, focus: Focus) {
@@ -90,19 +99,37 @@ enum MenuFor {
     App(usize),
 }
 
-/// What's on screen. Asks go over any of these.
+/// What a PIN pad is for.
+enum PinFor {
+    /// unlocking, at boot
+    Enter,
+    /// the first PIN, at setup
+    Choose,
+    /// the same again, to be sure of it
+    Confirm(String),
+}
+
+/// Where a page of text goes when the owner confirms it.
+#[derive(Clone, Copy)]
+enum Next {
+    Home,
+    ChoosePin,
+}
+
+/// What's on screen. Asks go over any of these, once maki is unlocked.
 enum View {
     Splash,
     Home,
     Menu(Menu, MenuFor),
-    /// a page of text with one thing to do: close it
-    Info(String, Vec<String>),
+    /// a page of text with one thing to do: `action`, which goes to `next`
+    Info { title: String, lines: Vec<String>, action: &'static str, next: Next },
+    Pin(PinPad, PinFor),
     /// an app is in front and draws for itself
     App(usize),
 }
 
-/// maki's own menu. Lock, change PIN and backup join it with the boot PIN.
-const MAKI_MENU: [&str; 2] = ["About", "Close"];
+/// maki's own menu. Change PIN and backup join it with the recovery phrase.
+const MAKI_MENU: [&str; 3] = ["Lock", "About", "Close"];
 
 struct System {
     screen: Screen,
@@ -118,6 +145,9 @@ struct System {
     linked: bool,
     clock: String,
     time_conn: xous::CID,
+    keys: Option<Keys>,
+    /// the PIN has been entered: apps and asks may have the screen
+    unlocked: bool,
 }
 
 impl System {
@@ -145,17 +175,111 @@ impl System {
         s.end();
     }
 
-    fn draw_info(&self, title: &str, lines: &[String]) {
+    fn draw_info(&self, title: &str, lines: &[String], action: &str) {
         let s = &self.screen;
         s.begin();
         s.status_bar(&self.clock, self.linked);
         let top = s.bar + 6;
         s.text(top, LINE, GlyphStyle::Bold, false, true, title);
         for (i, line) in lines.iter().enumerate() {
-            s.text(top + LINE + 4 + i as isize * LINE, LINE, GlyphStyle::Regular, false, false, line);
+            s.text(top + LINE + 6 + i as isize * 13, 13, GlyphStyle::Small, false, true, line);
         }
-        s.action_bar("close", false);
+        if !action.is_empty() {
+            s.action_bar(action, false);
+        }
         s.end();
+    }
+
+    fn info(&mut self, title: &str, lines: &[&str], action: &'static str, next: Next) {
+        self.view = View::Info {
+            title: title.into(),
+            lines: lines.iter().map(|l| l.to_string()).collect(),
+            action,
+            next,
+        };
+        self.redraw();
+    }
+
+    /// Something slow is happening (the PIN's key derivation): say so first.
+    fn busy(&self, title: &str) { self.draw_info(title, &[], ""); }
+
+    fn pin_pad(&mut self, title: &str, note: &str, purpose: PinFor) {
+        self.view = View::Pin(PinPad::new(title, note), purpose);
+        self.redraw();
+    }
+
+    /// After the boot image: set up, unlock, or straight home.
+    fn first_screen(&mut self) {
+        let status = self.keys.as_ref().map(|k| k.status()).unwrap_or((State::Unlocked, 0));
+        match status {
+            (State::Unset, _) => self.info(
+                "Welcome to maki",
+                &["Choose a PIN to start.", "You'll enter it each time", "maki is plugged in."],
+                "start",
+                Next::ChoosePin,
+            ),
+            (State::Locked, left) if left < maki_keys::MAX_TRIES => {
+                self.pin_pad("Enter your PIN", &format!("{} tries left", left), PinFor::Enter)
+            }
+            (State::Locked, _) => self.pin_pad("Enter your PIN", "", PinFor::Enter),
+            (State::Unlocked, _) => self.now_unlocked(),
+        }
+    }
+
+    fn now_unlocked(&mut self) {
+        self.unlocked = true;
+        self.go_home();
+        self.start_asking();
+    }
+
+    /// The PIN pad handed over a PIN.
+    fn pin_entered(&mut self, pin: String, purpose: PinFor) {
+        let Some(keys) = self.keys.as_ref() else { return };
+        match purpose {
+            PinFor::Enter => {
+                self.busy("Checking…");
+                let result = keys.unlock(&pin);
+                forget(pin);
+                match result {
+                    PinResult::Ok => self.now_unlocked(),
+                    PinResult::Wrong(left) => {
+                        let note = if left == 1 { "Wrong PIN. Last try!".to_string() } else { format!("Wrong PIN. {} tries left", left) };
+                        self.pin_pad("Enter your PIN", &note, PinFor::Enter)
+                    }
+                    PinResult::Wiped => self.info(
+                        "Too many wrong PINs",
+                        &["maki's secrets were wiped.", "Choose a new PIN, then", "restore from your backup."],
+                        "continue",
+                        Next::ChoosePin,
+                    ),
+                    _ => self.info("Couldn't check the PIN", &["Unplug maki and try again."], "", Next::Home),
+                }
+            }
+            PinFor::Choose => self.pin_pad("Enter it again", "to be sure of it", PinFor::Confirm(pin)),
+            PinFor::Confirm(first) => {
+                let same = first == pin;
+                forget(first);
+                if !same {
+                    forget(pin);
+                    return self.info("The PINs didn't match", &["Choose one again."], "try again", Next::ChoosePin);
+                }
+                self.busy("Setting up…");
+                let result = keys.set_pin(&pin);
+                forget(pin);
+                match result {
+                    PinResult::Ok => {
+                        self.unlocked = true;
+                        self.info(
+                            "maki is ready",
+                            &["Enter this PIN after", "plugging maki in."],
+                            "continue",
+                            Next::Home,
+                        )
+                    }
+                    _ => self.info("Couldn't set the PIN", &["Try again."], "try again", Next::ChoosePin),
+                }
+            }
+        }
     }
 
     /// Draw whatever the launcher itself is showing; an app draws for itself.
@@ -167,13 +291,15 @@ impl System {
             View::Splash | View::App(_) => {}
             View::Home => self.draw_home(),
             View::Menu(menu, _) => menu.draw(&self.screen, &self.clock, self.linked),
-            View::Info(title, lines) => self.draw_info(title, lines),
+            View::Info { title, lines, action, .. } => self.draw_info(title, lines, action),
+            View::Pin(pad, _) => pad.draw(&self.screen, &self.clock, self.linked),
         }
     }
 
-    /// Take the screen for the next ask waiting, if any.
+    /// Take the screen for the next ask waiting, if any. Not before the PIN: nothing is asked of
+    /// a maki that hasn't been unlocked.
     fn start_asking(&mut self) {
-        if !self.ready || self.asking.active() || self.asking.queue.is_empty() {
+        if !self.ready || !self.unlocked || self.asking.active() || self.asking.queue.is_empty() {
             return;
         }
         if let View::App(i) = self.view {
@@ -237,9 +363,26 @@ impl System {
                 }
                 _ => {}
             },
-            View::Info(..) => {
-                if key == Key::Confirm {
-                    self.go_home();
+            View::Info { action, next, .. } => {
+                if key == Key::Confirm && !action.is_empty() {
+                    match *next {
+                        Next::Home if self.unlocked => {
+                            self.go_home();
+                            self.start_asking();
+                        }
+                        Next::Home => self.first_screen(),
+                        Next::ChoosePin => {
+                            self.pin_pad("Choose a PIN", "6 to 12 digits", PinFor::Choose)
+                        }
+                    }
+                }
+            }
+            View::Pin(pad, _) => {
+                if let Some(pin) = pad.key(key) {
+                    let View::Pin(_, purpose) = std::mem::replace(&mut self.view, View::Splash) else { return };
+                    self.pin_entered(pin, purpose);
+                } else {
+                    self.redraw();
                 }
             }
             View::Menu(menu, whose) => {
@@ -268,14 +411,22 @@ impl System {
 
     fn maki_menu(&mut self, picked: usize) {
         match MAKI_MENU.get(picked) {
+            Some(&"Lock") => {
+                if self.keys.as_ref().map(|k| k.lock()).unwrap_or(false) {
+                    self.unlocked = false;
+                    self.pin_pad("Enter your PIN", "", PinFor::Enter);
+                } else {
+                    self.go_home();
+                }
+            }
             Some(&"About") => {
-                let lines = vec![
-                    format!("firmware {}", env!("CARGO_PKG_VERSION")),
-                    String::from(if self.linked { "desktop linked" } else { "desktop not linked" }),
-                    String::from(if self.time_verified { "clock verified" } else { "clock not verified" }),
+                let version = format!("firmware {}", env!("CARGO_PKG_VERSION"));
+                let lines = [
+                    version.as_str(),
+                    if self.linked { "desktop linked" } else { "desktop not linked" },
+                    if self.time_verified { "clock verified" } else { "clock not verified" },
                 ];
-                self.view = View::Info("maki".into(), lines);
-                self.redraw();
+                self.info("maki", &lines, "close", Next::Home);
             }
             _ => self.go_home(),
         }
@@ -340,6 +491,8 @@ fn main() -> ! {
         linked: false,
         clock: String::from("--:--"),
         time_conn,
+        keys: None,
+        unlocked: false,
     };
 
     loop {
@@ -375,12 +528,8 @@ fn main() -> ! {
             Some(LauncherOp::Ready) => {
                 sys.ready = true;
                 sys.clock = clock_text(time_conn, sys.time_verified);
-                sys.view = View::Home;
-                if sys.asking.queue.is_empty() {
-                    sys.redraw();
-                } else {
-                    sys.start_asking();
-                }
+                sys.keys = Keys::new(&xns).ok();
+                sys.first_screen();
             }
             Some(LauncherOp::Tick) => {
                 if sys.asking.active() {

@@ -14,6 +14,7 @@ ticktimer-server = { package = "xous-api-ticktimer", version = "0.9.65" }
 getrandom = "0.2"
 maki-proto = { path = "../../libs/maki-proto" }
 maki-vault-api = { path = "../../libs/maki-vault-api" }
+maki-keys = { path = "../maki-keys" }
 maki-launcher = { path = "../../apps-baosec/maki-launcher" }
 usb-bao1x = { path = "../usb-bao1x" }
 bao1x-hal-service = { path = "../bao1x-hal-service", optional = true }
