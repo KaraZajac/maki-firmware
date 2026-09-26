@@ -620,6 +620,8 @@ dependencies = [
 name = "baokey-launcher"
 version = "0.1.0"
 dependencies = [
+ "bao1x-hal-service",
+ "blitstr2",
  "log",
  "num-derive 0.4.2",
  "num-traits",
@@ -629,6 +631,7 @@ dependencies = [
  "xous 0.9.70 (registry+https://github.com/rust-lang/crates.io-index)",
  "xous-api-log",
  "xous-api-names",
+ "xous-api-ticktimer",
  "xous-ipc 0.10.10 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 

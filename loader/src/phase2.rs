@@ -302,7 +302,11 @@ pub fn phase_2(cfg: &mut BootConfig, env_variables: EnvVariables, mut _fb: Optio
         }
 
         // allocate swap private stack
-        for i in 0..2 {
+        // BAOKEY: 8 pages (32 KiB), up from 2. With the launcher in the image the swap handler
+        // overflowed 8 KiB during boot. At 8 KiB a panic in the handler can't be reported either:
+        // the panic printer alone needs ~20 KiB, so the panic surfaces only as a store fault on
+        // this stack. Why the handler needed more than 8 KiB here is not yet understood.
+        for i in 0..8 {
             let stack_page = cfg.alloc() as usize;
             cfg.map_page(
                 root,

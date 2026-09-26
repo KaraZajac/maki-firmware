@@ -16,10 +16,13 @@ rkyv = { version = "0.8.8", default-features = false, features = [
 ] }
 log-server = { package = "xous-api-log", version = "0.1.65" }
 xous-names = { package = "xous-api-names", version = "0.9.67" }
+ticktimer-server = { package = "xous-api-ticktimer", version = "0.9.65" }
 pddb = { path = "../../services/pddb" }
 ux-api = { path = "../../libs/ux-api" }
+blitstr2 = { path = "../../libs/blitstr2" }
+bao1x-hal-service = { path = "../../services/bao1x-hal-service", optional = true }
 
 [features]
-board-baosec = ["ux-api/board-baosec"]
+board-baosec = ["ux-api/board-baosec", "blitstr2/board-baosec", "bao1x-hal-service"]
 hosted-baosec = ["ux-api/hosted-baosec"]
 default = []

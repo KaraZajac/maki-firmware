@@ -15,15 +15,13 @@ pub(crate) enum LauncherOp {
     /// Memory message carrying an `AppRegistration`.
     Register = 0,
     /// Scalar from bao-video; `arg1..arg4` are key characters.
-    KeyPress,
-    /// Scalar from the home menu; `arg1` is the index of the app to bring to the front.
-    Launch,
+    KeyPress = 1,
     /// Scalar from the app in front: return to the home screen.
-    Home,
-    /// Scalar from the home menu after a selection. Nothing to do: the app is drawing now.
-    MenuDone,
+    Home = 2,
     /// Scalar from our own helper thread once the PDDB has mounted; safe to draw from here on.
-    Ready,
+    Ready = 3,
+    /// Scalar from our own timer thread, once a second, to keep the clock current.
+    Tick = 4,
 }
 
 /// Sent once by an app at startup to appear on the home screen.
