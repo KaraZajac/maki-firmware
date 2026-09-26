@@ -163,6 +163,9 @@ struct System {
     keys: Option<Keys>,
     /// the PIN has been entered: apps and asks may have the screen
     unlocked: bool,
+    /// Home has been reached since the PIN: asks wait until then. During setup the owner is
+    /// writing down or typing in the phrase, and a press meant for that could answer an ask.
+    asks_open: bool,
     /// setting up to restore a phrase rather than make one
     restoring: bool,
     /// the phrase being shown and checked, at setup
@@ -356,10 +359,10 @@ impl System {
         }
     }
 
-    /// Take the screen for the next ask waiting, if any. Not before the PIN: nothing is asked of
-    /// a maki that hasn't been unlocked.
+    /// Take the screen for the next ask waiting, if any. Not before the PIN, nothing being asked
+    /// of a maki that hasn't been unlocked, and not during setup: once Home is reached.
     fn start_asking(&mut self) {
-        if !self.ready || !self.unlocked || self.asking.active() || self.asking.queue.is_empty() {
+        if !self.ready || !self.unlocked || !self.asks_open || self.asking.active() || self.asking.queue.is_empty() {
             return;
         }
         if let View::App(i) = self.view {
@@ -391,6 +394,7 @@ impl System {
     }
 
     fn go_home(&mut self) {
+        self.asks_open = self.unlocked;
         self.view = View::Home;
         self.clock = clock_text(self.time_conn, self.time_verified);
         self.redraw();
@@ -561,6 +565,7 @@ impl System {
             Some(&"Lock") => {
                 if self.keys.as_ref().map(|k| k.lock()).unwrap_or(false) {
                     self.unlocked = false;
+                    self.asks_open = false;
                     self.pin_pad("Enter your PIN", "", PinFor::Enter);
                 } else {
                     self.go_home();
@@ -640,6 +645,7 @@ fn main() -> ! {
         time_conn,
         keys: None,
         unlocked: false,
+        asks_open: false,
         restoring: false,
         phrase: None,
     };
