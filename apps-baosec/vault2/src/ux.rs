@@ -187,9 +187,17 @@ impl VaultUi {
         let mode = *self.mode.lock().unwrap();
         if self.display_list.len() > 0 {
             let selected = self.display_list.get_selected();
+            let (_, row) = self.display_list.get_selected_index();
             let mut locked_lists = self.item_lists.lock().unwrap();
             let full_list = locked_lists.full_list(mode);
-            full_list.iter().find(|&item| item.name() == selected).cloned()
+            // by position first: names repeat (two logins for one site), and a lookup by name
+            // would hand back the first of them whichever row was selected. The display list is
+            // built from this list in order (`refresh_draw_list`); the name check covers the two
+            // drifting apart.
+            match full_list.get(row) {
+                Some(item) if item.name() == selected => Some(item.clone()),
+                _ => full_list.iter().find(|&item| item.name() == selected).cloned(),
+            }
         } else {
             None
         }

@@ -43,10 +43,13 @@ pub(crate) enum VaultOp {
 
     ShowQr,
 
-    /// maki launcher: `arg1` is a `maki_launcher::Focus`
+    /// maki launcher, for the "Authenticator" entry: `arg1` is a `maki_launcher::Focus`.
+    /// Coming to the front this way, the vault opens on TOTP codes.
     FocusChange,
     /// Vault menu: return to the maki home screen
     MenuHome,
+    /// maki launcher, for the "Passwords" entry: as `FocusChange`, opening on passwords.
+    FocusPasswords,
 }
 
 pub fn atime_to_str(req_atime: u64) -> String {

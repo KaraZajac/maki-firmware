@@ -85,6 +85,35 @@ pub struct SelectedEntry {
     pub mode: VaultMode,
 }
 
+/// Show one kind of record: TOTP codes, which tick, or passwords.
+fn switch_mode(
+    to: VaultMode,
+    mode: &Mutex<VaultMode>,
+    actions_conn: xous::CID,
+    pump_conn: xous::CID,
+    allow_totp_rendering: &AtomicBool,
+    vault_ui: &mut VaultUi,
+) {
+    // the lock has to be released before the reload below, which reads the mode
+    *mode.lock().unwrap() = to;
+    if to == VaultMode::Password {
+        allow_totp_rendering.store(false, Ordering::SeqCst);
+    }
+    xous::send_message(
+        actions_conn,
+        xous::Message::new_blocking_scalar(ActionOp::ReloadDb.to_usize().unwrap(), 0, 0, 0, 0),
+    )
+    .ok();
+    // the list on screen is built per mode: without this, passwords showed an empty frame
+    vault_ui.refresh_draw_list();
+    if to == VaultMode::Totp {
+        allow_totp_rendering.store(true, Ordering::SeqCst);
+        xous::send_message(pump_conn, xous::Message::new_scalar(PumpOp::Pump.to_usize().unwrap(), 0, 0, 0, 0))
+            .expect("couldn't start the pumper");
+    }
+    vault_ui.redraw();
+}
+
 fn main() -> ! {
     log_server::init_wait().unwrap();
     log::set_max_level(log::LevelFilter::Info);
@@ -116,15 +145,14 @@ fn main() -> ! {
     // maki: key presses arrive through the launcher, and only while the vault is in front.
     // The launcher is itself a filtered listener on the `Gfx` subsystem, so modals still take
     // precedence exactly as before.
+    // Two ways in from the home screen, one per kind of record: same keys, and each entry's own
+    // focus message says which to open on.
     let launcher = maki_launcher::Launcher::new(&xns).expect("couldn't connect to the launcher");
-    launcher
-        .register(
-            "Vault",
-            SERVER_NAME_VAULT2,
-            VaultOp::KeyPress.to_u32().unwrap(),
-            VaultOp::FocusChange.to_u32().unwrap(),
-        )
-        .expect("couldn't register with the launcher");
+    for (name, focus_op) in [("Authenticator", VaultOp::FocusChange), ("Passwords", VaultOp::FocusPasswords)] {
+        launcher
+            .register(name, SERVER_NAME_VAULT2, VaultOp::KeyPress.to_u32().unwrap(), focus_op.to_u32().unwrap())
+            .expect("couldn't register with the launcher");
+    }
 
     // maki: logins and codes for the browser, approved on screen
     link::start(conn);
@@ -423,12 +451,17 @@ fn main() -> ! {
                 vault_ui.refresh_draw_list();
                 vault_ui.redraw();
             }
-            Some(VaultOp::FocusChange) => xous::msg_scalar_unpack!(msg, focus, _, _, _, {
+            Some(op @ (VaultOp::FocusChange | VaultOp::FocusPasswords)) => xous::msg_scalar_unpack!(msg, focus, _, _, _, {
                 let foreground = focus == maki_launcher::Focus::Foreground.to_usize().unwrap();
                 vault_ui.set_focus(foreground);
                 if foreground {
+                    let wanted =
+                        if matches!(op, VaultOp::FocusPasswords) { VaultMode::Password } else { VaultMode::Totp };
+                    let current = *mode.lock().unwrap();
                     if menu_active {
                         menu_mgr.redraw();
+                    } else if current != wanted {
+                        switch_mode(wanted, &mode, actions_conn, pump_conn, &allow_totp_rendering, &mut vault_ui);
                     } else {
                         vault_ui.refresh_draw_list();
                         vault_ui.redraw();
@@ -472,62 +505,9 @@ fn main() -> ! {
                             vault_ui.redraw();
                         }
                         '→' => {
-                            let current_mode = *mode.lock().unwrap();
-                            match current_mode {
-                                VaultMode::Password => {
-                                    {
-                                        *mode.lock().unwrap() = VaultMode::Totp;
-                                    }
-                                    // reload DB on mode switch
-                                    xous::send_message(
-                                        actions_conn,
-                                        xous::Message::new_blocking_scalar(
-                                            ActionOp::ReloadDb.to_usize().unwrap(),
-                                            0,
-                                            0,
-                                            0,
-                                            0,
-                                        ),
-                                    )
-                                    .ok();
-                                    vault_ui.refresh_draw_list();
-                                    allow_totp_rendering.store(true, Ordering::SeqCst);
-                                    xous::send_message(
-                                        pump_conn,
-                                        xous::Message::new_scalar(
-                                            PumpOp::Pump.to_usize().unwrap(),
-                                            0,
-                                            0,
-                                            0,
-                                            0,
-                                        ),
-                                    )
-                                    .expect("couldn't start the pumper");
-                                    vault_ui.redraw();
-                                }
-                                VaultMode::Totp => {
-                                    {
-                                        // lock needs to go out of scope so we don't hang the later ops
-                                        *mode.lock().unwrap() = VaultMode::Password;
-                                    }
-                                    allow_totp_rendering.store(false, Ordering::SeqCst);
-                                    // reload DB on mode switch
-                                    xous::send_message(
-                                        actions_conn,
-                                        xous::Message::new_blocking_scalar(
-                                            ActionOp::ReloadDb.to_usize().unwrap(),
-                                            0,
-                                            0,
-                                            0,
-                                            0,
-                                        ),
-                                    )
-                                    .ok();
-                                    vault_ui.redraw();
-                                }
-                            }
-
-                            vault_ui.redraw();
+                            let current = *mode.lock().unwrap();
+                            let to = if current == VaultMode::Password { VaultMode::Totp } else { VaultMode::Password };
+                            switch_mode(to, &mode, actions_conn, pump_conn, &allow_totp_rendering, &mut vault_ui);
                         }
                         '🔥' => {
                             allow_totp_rendering.store(false, Ordering::SeqCst);
