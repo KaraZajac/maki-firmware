@@ -94,6 +94,9 @@ pub struct VaultUi {
     last_key_time: u64,
     start_hold_time: u64,
     tt: ticktimer_server::Ticktimer,
+
+    /// BAOKEY launcher focus; the vault draws only while in front
+    focused: bool,
 }
 
 impl VaultUi {
@@ -133,6 +136,7 @@ impl VaultUi {
             tt,
             last_key_time: now,
             start_hold_time: now,
+            focused: false,
         }
     }
 
@@ -271,8 +275,13 @@ impl VaultUi {
     /// Clear the entire screen.
     pub fn clear_area(&self) { self.gfx.clear().ok(); }
 
+    pub fn set_focus(&mut self, focused: bool) { self.focused = focused; }
+
     /// Redraw the text view onto the screen.
     pub fn redraw(&mut self) {
+        if !self.focused {
+            return;
+        }
         // to reduce locking thrash, we cache a copy of the current mode at the top of redraw.
         let mode_at_entry = (*self.mode.lock().unwrap()).clone();
 

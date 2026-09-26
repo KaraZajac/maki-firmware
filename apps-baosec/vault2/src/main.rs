@@ -8,7 +8,6 @@ mod storage;
 mod submenu;
 mod totp;
 pub mod vault_api;
-use ux_api::service::gfx::Gfx;
 pub use vault_api::*;
 mod generator;
 mod vendor_commands;
@@ -113,10 +112,18 @@ fn main() -> ! {
     crate::totp::pumper(mode.clone(), pump_sid, conn, allow_totp_rendering.clone());
     let pump_conn = xous::connect(pump_sid).unwrap();
 
-    // respond to keyboard events - register with the `Gfx` subsystem, so we're getting keypresses
-    // filtered by the modals interface
-    let gfx = Gfx::new(&xns).unwrap();
-    gfx.register_listener(SERVER_NAME_VAULT2, VaultOp::KeyPress.to_u32().unwrap() as usize);
+    // BAOKEY: key presses arrive through the launcher, and only while the vault is in front.
+    // The launcher is itself a filtered listener on the `Gfx` subsystem, so modals still take
+    // precedence exactly as before.
+    let launcher = baokey_launcher::Launcher::new(&xns).expect("couldn't connect to the launcher");
+    launcher
+        .register(
+            "Vault",
+            SERVER_NAME_VAULT2,
+            VaultOp::KeyPress.to_u32().unwrap(),
+            VaultOp::FocusChange.to_u32().unwrap(),
+        )
+        .expect("couldn't register with the launcher");
 
     // spawn the actions server. This is responsible for grooming the UX elements. It
     // has to be in its own thread because it uses blocking modal calls that would cause
@@ -411,6 +418,23 @@ fn main() -> ! {
                 .ok();
                 vault_ui.refresh_draw_list();
                 vault_ui.redraw();
+            }
+            Some(VaultOp::FocusChange) => xous::msg_scalar_unpack!(msg, focus, _, _, _, {
+                let foreground = focus == baokey_launcher::Focus::Foreground.to_usize().unwrap();
+                vault_ui.set_focus(foreground);
+                if foreground {
+                    if menu_active {
+                        menu_mgr.redraw();
+                    } else {
+                        vault_ui.refresh_draw_list();
+                        vault_ui.redraw();
+                    }
+                }
+            }),
+            Some(VaultOp::MenuHome) => {
+                // stop drawing first: the menu's MenuDone, which follows this, triggers a redraw
+                vault_ui.set_focus(false);
+                launcher.home().ok();
             }
             Some(VaultOp::MenuDone) => {
                 menu_active = false;

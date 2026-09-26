@@ -617,6 +617,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "baokey-launcher"
+version = "0.1.0"
+dependencies = [
+ "log",
+ "num-derive 0.4.2",
+ "num-traits",
+ "pddb",
+ "rkyv 0.8.8",
+ "ux-api",
+ "xous 0.9.70 (registry+https://github.com/rust-lang/crates.io-index)",
+ "xous-api-log",
+ "xous-api-names",
+ "xous-ipc 0.10.10 (registry+https://github.com/rust-lang/crates.io-index)",
+]
+
+[[package]]
 name = "bare-metal"
 version = "0.2.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7613,6 +7629,7 @@ dependencies = [
  "bao1x-emu",
  "bao1x-hal",
  "bao1x-hal-service",
+ "baokey-launcher",
  "base32",
  "base45",
  "blitstr2",

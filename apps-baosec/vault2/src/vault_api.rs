@@ -42,6 +42,11 @@ pub(crate) enum VaultOp {
     BasisChange,
 
     ShowQr,
+
+    /// BAOKEY launcher: `arg1` is a `baokey_launcher::Focus`
+    FocusChange,
+    /// Vault menu: return to the BAOKEY home screen
+    MenuHome,
 }
 
 pub fn atime_to_str(req_atime: u64) -> String {

@@ -398,6 +398,13 @@
         "ja": "アイテムを編集する",
         "zh": "编辑项目"
     },
+    "vault.menu_home": {
+        "en": "Home screen",
+        "en-tts": "Home screen",
+        "fr": "Écran d'accueil",
+        "ja": "ホーム画面",
+        "zh": "主屏幕"
+    },
     "vault.menu_manage_basis": {
         "en": "Manage Bases",
         "en-tts": "Manage Bases",
