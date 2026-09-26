@@ -42,11 +42,10 @@ pub enum KeysOp {
     /// piece opens it, asks the owner on screen, and adds what maki doesn't have.
     RestoreChunk = 8,
     /// Memory message (mutable lend) with a `Wallet`: the Bitcoin account for wallet software
-    /// (its zpub and descriptor), once the owner agrees on screen.
+    /// (its zpub and descriptor). With `ask`, once the owner agrees on screen.
     BtcAccount = 9,
-    /// Memory message (mutable lend) with a `Wallet`: an address. With `show`, it's put on screen
-    /// for the owner to compare with the computer's, and the answer says whether it matched;
-    /// without (the screen's own use), it's just handed back.
+    /// Memory message (mutable lend) with a `Wallet`: an address. With `ask`, it's put on screen
+    /// for the owner to compare with the computer's, and the answer says whether it matched.
     BtcAddress = 10,
     /// Memory message (mutable lend) with a `Chunk`: a piece of a PSBT to sign. The last piece
     /// checks it, shows the owner what it does, and signs it if they say so.
@@ -92,8 +91,10 @@ pub struct Wallet {
     /// an address: on the change chain or the receiving one, at this index
     pub change: bool,
     pub index: u32,
-    /// an address: put it on screen for the owner to compare
-    pub show: bool,
+    /// Ask the owner first: for what goes to the computer. An app on maki that shows the answer
+    /// on maki's own screen doesn't. (Every process on maki is maki's own firmware; third-party
+    /// apps will need this narrowed.)
+    pub ask: bool,
     pub result: u32,
     /// the account's zpub, or the address
     pub text: String,
@@ -266,16 +267,16 @@ impl Keys {
         buf.to_original::<Wallet, _>().unwrap_or(failed)
     }
 
-    /// The Bitcoin account's zpub (`text`) and descriptor, once the owner agrees. Blocks while
-    /// they decide.
-    pub fn btc_account(&self, network: u8) -> Wallet {
-        self.wallet_call(KeysOp::BtcAccount, Wallet { network, ..Default::default() })
+    /// The Bitcoin account's zpub (`text`) and descriptor. With `ask`, once the owner agrees,
+    /// blocking while they decide.
+    pub fn btc_account(&self, network: u8, ask: bool) -> Wallet {
+        self.wallet_call(KeysOp::BtcAccount, Wallet { network, ask, ..Default::default() })
     }
 
-    /// An address (`text`). With `show`, the owner compares it on screen first (blocking while
+    /// An address (`text`). With `ask`, the owner compares it on screen first (blocking while
     /// they do), and `result` says whether it matched.
-    pub fn btc_address(&self, network: u8, change: bool, index: u32, show: bool) -> Wallet {
-        self.wallet_call(KeysOp::BtcAddress, Wallet { network, change, index, show, ..Default::default() })
+    pub fn btc_address(&self, network: u8, change: bool, index: u32, ask: bool) -> Wallet {
+        self.wallet_call(KeysOp::BtcAddress, Wallet { network, change, index, ask, ..Default::default() })
     }
 
     /// A piece of a PSBT to sign. The last one blocks while the owner reviews it; its answer's

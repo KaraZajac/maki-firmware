@@ -89,7 +89,7 @@ impl Btc {
         Ok(account)
     }
 
-    /// `KeysOp::BtcAccount`: the zpub and descriptor, once the owner agrees.
+    /// `KeysOp::BtcAccount`: the zpub and descriptor, once the owner agrees if asked to ask.
     pub(crate) fn share_account(&mut self, mut msg: xous::MessageEnvelope, entropy: Option<Vec<u8>>) {
         let Some(mem) = msg.body.memory_message_mut() else { return };
         let mut buffer = unsafe { Buffer::from_memory_message_mut(mem) };
@@ -102,6 +102,13 @@ impl Btc {
                 return;
             }
         };
+        if !req.ask {
+            req.result = RESULT_OK;
+            req.text = account.zpub();
+            req.descriptor = account.descriptor();
+            buffer.replace(req).ok();
+            return;
+        }
         drop(buffer);
         std::thread::spawn(move || {
             let name = display::network_name(account.network);
@@ -117,7 +124,7 @@ impl Btc {
         });
     }
 
-    /// `KeysOp::BtcAddress`: an address, compared on screen first if asked.
+    /// `KeysOp::BtcAddress`: an address, compared on screen first if asked to ask.
     pub(crate) fn address(&mut self, mut msg: xous::MessageEnvelope, entropy: Option<Vec<u8>>) {
         let Some(mem) = msg.body.memory_message_mut() else { return };
         let mut buffer = unsafe { Buffer::from_memory_message_mut(mem) };
@@ -127,7 +134,7 @@ impl Btc {
             Err(result) => Err(result),
         };
         let address = match address {
-            Ok(a) if req.show => a,
+            Ok(a) if req.ask => a,
             Ok(a) => {
                 req.result = RESULT_OK;
                 req.text = a;

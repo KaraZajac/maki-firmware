@@ -16,7 +16,7 @@ mod menu;
 mod pin;
 mod setup;
 mod splash;
-mod ui;
+use maki_ui as ui;
 
 use api::*;
 use ask::Asking;
@@ -659,7 +659,11 @@ fn main() -> ! {
                 match xns.request_connection_blocking(&reg.server_name) {
                     Ok(app_conn) => {
                         log::info!("registered app '{}' ({})", reg.name, reg.server_name);
-                        sys.apps.push(App {
+                        // in alphabetical order, whichever started first: the home screen is
+                        // the same every time
+                        let key = reg.name.to_lowercase();
+                        let pos = sys.apps.iter().position(|a| a.name.to_lowercase() > key).unwrap_or(sys.apps.len());
+                        sys.apps.insert(pos, App {
                             name: reg.name,
                             conn: app_conn,
                             key_op: reg.key_op as usize,
@@ -667,6 +671,22 @@ fn main() -> ! {
                             menu_op: reg.menu_op as usize,
                             icon: reg.icon.as_slice().try_into().ok(),
                         });
+                        // apps are known by position: move along those after it
+                        let shift = |i: &mut usize| {
+                            if *i >= pos {
+                                *i += 1
+                            }
+                        };
+                        if let View::App(i) | View::Menu(_, MenuFor::App(i)) = &mut sys.view {
+                            shift(i);
+                        }
+                        if let Some(i) = &mut sys.paused {
+                            shift(i);
+                        }
+                        // the one the owner is looking at stays put (before that, the first)
+                        if sys.unlocked && sys.apps.len() > 1 {
+                            shift(&mut sys.selected);
+                        }
                         if matches!(sys.view, View::Home) {
                             sys.redraw();
                         }

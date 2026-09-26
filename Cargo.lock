@@ -4328,6 +4328,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "maki-bitcoin"
+version = "0.1.0"
+dependencies = [
+ "blitstr2",
+ "log",
+ "maki-icons",
+ "maki-keys-api",
+ "maki-launcher",
+ "maki-ui",
+ "num-derive 0.4.2",
+ "num-traits",
+ "xous 0.9.70 (registry+https://github.com/rust-lang/crates.io-index)",
+ "xous-api-log",
+ "xous-api-names",
+]
+
+[[package]]
 name = "maki-btc"
 version = "0.1.0"
 dependencies = [
@@ -4397,6 +4414,7 @@ dependencies = [
  "maki-keys-api",
  "maki-proto",
  "maki-seed",
+ "maki-ui",
  "num-derive 0.4.2",
  "num-traits",
  "pddb",
@@ -4449,6 +4467,17 @@ dependencies = [
  "serde_json",
  "sha2 0.10.8",
  "zeroize",
+]
+
+[[package]]
+name = "maki-ui"
+version = "0.1.0"
+dependencies = [
+ "bao1x-api 0.1.4",
+ "blitstr2",
+ "qrcode",
+ "ux-api",
+ "xous-api-names",
 ]
 
 [[package]]

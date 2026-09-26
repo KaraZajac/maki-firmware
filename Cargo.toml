@@ -122,6 +122,7 @@ members = [
   "libs/precursor-hal",
   "apps-baosec/vault2",
   "apps-baosec/maki-launcher",
+  "apps-baosec/maki-bitcoin",
   "libs/roughtime",
   "libs/maki-proto",
   "libs/maki-vault-api",
@@ -130,6 +131,7 @@ members = [
   "libs/maki-keys-api",
   "libs/maki-seed",
   "libs/maki-btc",
+  "libs/maki-ui",
   "services/maki-link",
   # Defcon 34 badge
   "libs/dc34-api",

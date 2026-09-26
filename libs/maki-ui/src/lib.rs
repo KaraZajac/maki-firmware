@@ -1,9 +1,14 @@
-//! Drawing and keys shared by the launcher's screens.
+//! maki's screen: the keys and the drawing shared by the launcher and every app, so that all of
+//! them look and work alike.
 //!
 //! Everything runs on the three buttons on the badge's face (ARCHITECTURE.md, "Three
 //! buttons"): left and right move, the centre confirms what the screen offers, and left and
 //! right pressed together open the menu. There is no back button: leaving is always something a
 //! screen offers. The jog dial on the side isn't used.
+//!
+//! A screen has a status bar at the top (`status_bar`, or `titled_bar` with a page's heading)
+//! and an action bar at the bottom saying what the centre does (`action_bar`), with arrows when
+//! left and right have somewhere to go.
 
 use std::fmt::Write;
 
@@ -13,18 +18,18 @@ use ux_api::platform::{HEIGHT, WIDTH};
 use ux_api::service::api::Gid;
 use ux_api::service::gfx::Gfx;
 
-pub(crate) const W: isize = WIDTH as isize;
-pub(crate) const H: isize = HEIGHT as isize;
+pub const W: isize = WIDTH as isize;
+pub const H: isize = HEIGHT as isize;
 /// A line of regular or fixed-width text.
-pub(crate) const LINE: isize = 16;
+pub const LINE: isize = 16;
 /// A line of small text: the button labels.
-pub(crate) const SMALL_LINE: isize = 12;
+pub const SMALL_LINE: isize = 12;
 /// Width of the right-hand slot of the status bar (the clock, or an ask's countdown).
 const CLOCK_WIDTH: isize = 40;
 const NAME: &str = "maki";
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub(crate) enum Key {
+pub enum Key {
     Left,
     Right,
     /// the centre
@@ -36,7 +41,7 @@ pub(crate) enum Key {
 impl Key {
     /// The face buttons. The jog dial's up and down mean nothing here; pressing it in does what
     /// the centre does.
-    pub(crate) fn from_char(c: char) -> Option<Key> {
+    pub fn from_char(c: char) -> Option<Key> {
         match c {
             '←' => Some(Key::Left),
             '→' => Some(Key::Right),
@@ -47,30 +52,30 @@ impl Key {
     }
 }
 
-pub(crate) struct Screen {
-    pub(crate) gfx: Gfx,
+pub struct Screen {
+    pub gfx: Gfx,
     /// height of the status bar
-    pub(crate) bar: isize,
+    pub bar: isize,
 }
 
 impl Screen {
-    pub(crate) fn new(xns: &xous_names::XousNames) -> Self {
+    pub fn new(xns: &xous_names::XousNames) -> Self {
         let bar = ux_api::widgets::ScrollableList::default().row_height() as isize;
         Screen { gfx: Gfx::new(xns).unwrap(), bar }
     }
 
     /// Start a frame: whatever was queued goes out, then a blank screen.
-    pub(crate) fn begin(&self) {
+    pub fn begin(&self) {
         self.gfx.flush().ok();
         self.gfx.clear().ok();
     }
 
-    pub(crate) fn end(&self) { self.gfx.flush().ok(); }
+    pub fn end(&self) { self.gfx.flush().ok(); }
 
     /// Text in a band across the screen, light on dark; `highlight` for dark on light, as a
     /// selection is marked. Anything but fixed-width text ends in "…" if it runs long; callers
     /// lay fixed-width text out to fit (a site's end must never be cut).
-    pub(crate) fn text(&self, top: isize, height: isize, style: GlyphStyle, highlight: bool, centred: bool, s: &str) {
+    pub fn text(&self, top: isize, height: isize, style: GlyphStyle, highlight: bool, centred: bool, s: &str) {
         let band = Rectangle::new(Point::new(0, top), Point::new(W, top + height));
         let mut tv =
             TextView::new(Gid::dummy(), if centred { TextBounds::CenteredTop(band) } else { TextBounds::BoundingBox(band) });
@@ -87,10 +92,10 @@ impl Screen {
 
     /// The bar across the top: the name on the left, `right` (the clock, or a countdown) on the
     /// right, and a dot between while the desktop app is linked.
-    pub(crate) fn status_bar(&self, right: &str, linked: bool) { self.titled_bar(NAME, right, linked) }
+    pub fn status_bar(&self, right: &str, linked: bool) { self.titled_bar(NAME, right, linked) }
 
     /// The bar across the top with a title in place of the name: the heading of a page.
-    pub(crate) fn titled_bar(&self, title: &str, right: &str, linked: bool) {
+    pub fn titled_bar(&self, title: &str, right: &str, linked: bool) {
         let mut name = TextView::new(
             Gid::dummy(),
             TextBounds::BoundingBox(Rectangle::new(Point::new(0, 0), Point::new(W - CLOCK_WIDTH, self.bar))),
@@ -129,7 +134,7 @@ impl Screen {
     }
 
     /// A small arrow, `size` pixels from tip to base, its tip at (x, y).
-    pub(crate) fn arrow(&self, x: isize, y: isize, size: isize, left: bool) {
+    pub fn arrow(&self, x: isize, y: isize, size: isize, left: bool) {
         for i in 0..size {
             let col = if left { x + i } else { x - i };
             self.gfx
@@ -140,7 +145,7 @@ impl Screen {
 
     /// The bottom line: what a press of the centre does now, boxed, and arrows at the sides
     /// when left and right have somewhere to go.
-    pub(crate) fn action_bar(&self, action: &str, arrows: bool) {
+    pub fn action_bar(&self, action: &str, arrows: bool) {
         let top = H - SMALL_LINE;
         if arrows {
             self.arrow(3, top + SMALL_LINE / 2, 5, true);
@@ -160,7 +165,7 @@ impl Screen {
     }
 
     /// A 64x64 icon (see `maki_icons`) with its top left corner at (x, y).
-    pub(crate) fn icon(&self, icon: &[u32; 128], x: isize, y: isize) {
+    pub fn icon(&self, icon: &[u32; 128], x: isize, y: isize) {
         let mut bits = [0u32; 512];
         for row in 0..64 {
             bits[row * 4] = icon[row * 2];
@@ -172,7 +177,7 @@ impl Screen {
     }
 
     /// An app without an icon of its own: its initial in a rounded square.
-    pub(crate) fn letter_icon(&self, name: &str, x: isize, y: isize) {
+    pub fn letter_icon(&self, name: &str, x: isize, y: isize) {
         self.gfx
             .draw_rounded_rectangle(RoundedRectangle::new(
                 Rectangle::new_with_style(
@@ -196,8 +201,43 @@ impl Screen {
         self.gfx.draw_textview(&mut tv).ok();
     }
 
+    /// `text` as a QR code, as big as fits a `size` pixel square centred at `x`, top at `top`,
+    /// quiet zone included: dark modules on light, however dark the screen around it. Returns
+    /// false if it can't fit (too much text for the room).
+    pub fn qr(&self, text: &str, x: isize, top: isize, size: isize) -> bool {
+        let Ok(code) = qrcode::QrCode::with_error_correction_level(text.as_bytes(), qrcode::EcLevel::L) else {
+            return false;
+        };
+        let modules = code.width() as isize;
+        // two modules of quiet zone each side: less than the standard's four, which scanners
+        // manage at this size, and it buys a bigger module
+        let quiet = 2;
+        let scale = size / (modules + 2 * quiet);
+        if scale < 1 {
+            return false;
+        }
+        let side = (modules + 2 * quiet) * scale;
+        let mut bits = [0u32; 512];
+        for (i, color) in code.to_colors().iter().enumerate() {
+            if *color != qrcode::Color::Dark {
+                continue;
+            }
+            let (mx, my) = ((i as isize % modules + quiet) * scale, (i as isize / modules + quiet) * scale);
+            for y in my..my + scale {
+                for x in mx..mx + scale {
+                    // a 128-pixel-wide bitmap, a set bit dark
+                    bits[(y * 4 + x / 32) as usize] |= 1 << (x % 32);
+                }
+            }
+        }
+        self.gfx
+            .bitmap(&bits, Some(Point::new(x - side / 2, top)), Some(Rectangle::new(Point::new(0, 0), Point::new(side, side))))
+            .ok();
+        true
+    }
+
     /// One dot per page, the current one filled, centred at height `y`.
-    pub(crate) fn dots(&self, count: usize, current: usize, y: isize) {
+    pub fn dots(&self, count: usize, current: usize, y: isize) {
         if count < 2 {
             return;
         }

@@ -120,7 +120,7 @@ fn vault_worker(work: mpsc::Receiver<Work>, waiting: Arc<AtomicU32>, send_lock: 
 fn bitcoin(keys: &maki_keys::Keys, request: Bitcoin) -> (u8, Vec<u8>) {
     match request {
         Bitcoin::Account { network } => {
-            let w = keys.btc_account(network);
+            let w = keys.btc_account(network, true);
             reply::btc_account(approval(w.result), &w.text, &w.descriptor)
         }
         Bitcoin::Address { network, change, index } => {
@@ -328,7 +328,7 @@ fn main() -> ! {
                 tt.sleep_ms(500).ok();
             }
             tt.sleep_ms(3_000).ok();
-            let w = keys.btc_account(maki_keys::NETWORK_BITCOIN);
+            let w = keys.btc_account(maki_keys::NETWORK_BITCOIN, true);
             log::warn!("demo btc account: result {} {} {}", w.result, w.text, w.descriptor);
             let w = keys.btc_address(maki_keys::NETWORK_BITCOIN, false, 0, true);
             log::warn!("demo btc address: result {} {}", w.result, w.text);

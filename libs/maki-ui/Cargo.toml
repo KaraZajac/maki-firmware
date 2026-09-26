@@ -1,0 +1,17 @@
+[package]
+name = "maki-ui"
+version = "0.1.0"
+edition = "2021"
+description = "maki's screen: the three buttons, and the drawing every maki screen shares"
+
+[dependencies]
+ux-api = { path = "../ux-api" }
+blitstr2 = { path = "../blitstr2" }
+bao1x-api = { path = "../bao1x-api" }
+xous-names = { package = "xous-api-names", version = "0.9.67" }
+qrcode = { version = "0.12", default-features = false }
+
+[features]
+board-baosec = ["ux-api/board-baosec", "blitstr2/board-baosec"]
+hosted-baosec = ["ux-api/hosted-baosec"]
+default = []

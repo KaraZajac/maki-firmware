@@ -22,6 +22,7 @@ ux-api = { path = "../../libs/ux-api" }
 blitstr2 = { path = "../../libs/blitstr2" }
 maki-proto = { path = "../../libs/maki-proto" }
 maki-icons = { path = "../../libs/maki-icons" }
+maki-ui = { path = "../../libs/maki-ui" }
 bao1x-api = { path = "../../libs/bao1x-api" }
 maki-keys = { package = "maki-keys-api", path = "../../libs/maki-keys-api" }
 maki-seed = { path = "../../libs/maki-seed" }
@@ -29,6 +30,6 @@ getrandom = "0.2"
 bao1x-hal-service = { path = "../../services/bao1x-hal-service", optional = true }
 
 [features]
-board-baosec = ["ux-api/board-baosec", "blitstr2/board-baosec", "bao1x-hal-service"]
-hosted-baosec = ["ux-api/hosted-baosec"]
+board-baosec = ["ux-api/board-baosec", "blitstr2/board-baosec", "maki-ui/board-baosec", "bao1x-hal-service"]
+hosted-baosec = ["ux-api/hosted-baosec", "maki-ui/hosted-baosec"]
 default = []
