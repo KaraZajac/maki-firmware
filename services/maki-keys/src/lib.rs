@@ -27,6 +27,21 @@ pub enum KeysOp {
     Unlock = 2,
     /// Blocking scalar: close the secret basis until the PIN is entered again.
     Lock = 3,
+    /// Blocking scalar: the first process to call this is the screen (the launcher), and only it
+    /// may set or enter the PIN, lock, or see and restore the recovery phrase. Returns 1 to it.
+    Claim = 4,
+    /// Memory message (mutable lend) with a `PhraseRequest`: make the recovery phrase, once, and
+    /// hand its words back to be shown.
+    NewPhrase = 5,
+    /// Memory message (mutable lend) with a `PhraseRequest`: keep these words as the phrase.
+    RestorePhrase = 6,
+}
+
+/// A recovery phrase, one way or the other, and what became of it (`RESULT_*`).
+#[derive(Debug, Default, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
+pub struct PhraseRequest {
+    pub words: Vec<String>,
+    pub result: u32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, num_derive::FromPrimitive, num_derive::ToPrimitive)]
@@ -68,6 +83,11 @@ pub const RESULT_WIPED: u32 = 2;
 pub const RESULT_NOT_NOW: u32 = 3;
 pub const RESULT_BAD_PIN: u32 = 4;
 pub const RESULT_FAILED: u32 = 5;
+/// Words that aren't a recovery phrase: a word not on the list, or a checksum that fails.
+pub const RESULT_BAD_PHRASE: u32 = 6;
+
+/// Set in the second word of `Status`'s answer when a recovery phrase exists.
+pub const HAS_PHRASE: usize = 1 << 16;
 
 /// Six to twelve digits.
 pub fn pin_is_valid(pin: &str) -> bool {
@@ -84,16 +104,59 @@ impl Keys {
         Ok(Keys { conn: xns.request_connection_blocking(SERVER_NAME_KEYS)? })
     }
 
-    pub fn status(&self) -> (State, u32) {
+    fn status_raw(&self) -> (State, usize) {
         match xous::send_message(
             self.conn,
             xous::Message::new_blocking_scalar(KeysOp::Status.to_usize().unwrap(), 0, 0, 0, 0),
         ) {
-            Ok(xous::Result::Scalar2(state, tries)) => {
-                (num_traits::FromPrimitive::from_usize(state).unwrap_or(State::Locked), tries as u32)
+            Ok(xous::Result::Scalar2(state, rest)) => {
+                (num_traits::FromPrimitive::from_usize(state).unwrap_or(State::Locked), rest)
             }
             _ => (State::Locked, 0),
         }
+    }
+
+    /// The state, and how many wrong PINs are left before the wipe.
+    pub fn status(&self) -> (State, u32) {
+        let (state, rest) = self.status_raw();
+        (state, (rest & 0xffff) as u32)
+    }
+
+    /// Whether a recovery phrase has been made (or restored). Known only while unlocked.
+    pub fn has_phrase(&self) -> bool { self.status_raw().1 & HAS_PHRASE != 0 }
+
+    /// Take the screen's role (the launcher, at boot). See `KeysOp::Claim`.
+    pub fn claim(&self) -> bool {
+        matches!(
+            xous::send_message(self.conn, xous::Message::new_blocking_scalar(KeysOp::Claim.to_usize().unwrap(), 0, 0, 0, 0)),
+            Ok(xous::Result::Scalar1(1))
+        )
+    }
+
+    fn phrase_call(&self, op: KeysOp, words: Vec<String>) -> (u32, Vec<String>) {
+        let Ok(mut buf) = Buffer::into_buf(PhraseRequest { words, result: RESULT_FAILED }) else {
+            return (RESULT_FAILED, Vec::new());
+        };
+        if buf.lend_mut(self.conn, op.to_u32().unwrap()).is_err() {
+            return (RESULT_FAILED, Vec::new());
+        }
+        match buf.to_original::<PhraseRequest, _>() {
+            Ok(r) => (r.result, r.words),
+            Err(_) => (RESULT_FAILED, Vec::new()),
+        }
+    }
+
+    /// Make the recovery phrase and get its words, to show. Only once: None if there is one.
+    pub fn new_phrase(&self) -> Option<Vec<String>> {
+        match self.phrase_call(KeysOp::NewPhrase, Vec::new()) {
+            (RESULT_OK, words) if !words.is_empty() => Some(words),
+            _ => None,
+        }
+    }
+
+    /// Keep these words as the recovery phrase (a restore). A `RESULT_*` code.
+    pub fn restore_phrase(&self, words: &[&str]) -> u32 {
+        self.phrase_call(KeysOp::RestorePhrase, words.iter().map(|w| w.to_string()).collect()).0
     }
 
     /// Returns once the secrets are open. For processes that mustn't touch storage before then.

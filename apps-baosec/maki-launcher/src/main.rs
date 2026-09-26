@@ -14,6 +14,7 @@ mod api;
 mod ask;
 mod menu;
 mod pin;
+mod setup;
 mod splash;
 mod ui;
 
@@ -24,6 +25,7 @@ use maki_keys::{Keys, PinResult, State};
 use menu::Menu;
 use num_traits::{FromPrimitive, ToPrimitive};
 use pin::PinPad;
+use setup::{CheckStep, EntryStep, Phrase, PhraseCheck, PhraseStep, WordEntry};
 use ui::{Key, LINE, Screen, W};
 use xous_ipc::Buffer;
 
@@ -114,6 +116,14 @@ enum PinFor {
 enum Next {
     Home,
     ChoosePin,
+    /// choose a PIN, then type in a recovery phrase instead of making one
+    Restore,
+    /// make the recovery phrase and show it
+    ShowPhrase,
+    /// back to the phrase's first word, after a wrong answer in the check
+    ReviewPhrase,
+    /// type in a phrase of this many words
+    Words(usize),
 }
 
 /// What's on screen. Asks go over any of these, once maki is unlocked.
@@ -121,9 +131,14 @@ enum View {
     Splash,
     Home,
     Menu(Menu, MenuFor),
-    /// a page of text with one thing to do: `action`, which goes to `next`
-    Info { title: String, lines: Vec<String>, action: &'static str, next: Next },
+    /// a page of text, and what the centre can do from it (left and right choose, if more than one)
+    Info { title: String, lines: Vec<String>, actions: Vec<(&'static str, Next)>, selected: usize },
     Pin(PinPad, PinFor),
+    /// the recovery phrase's words, to write down
+    Phrase(Phrase),
+    PhraseCheck(PhraseCheck),
+    /// typing a recovery phrase in, to restore
+    WordEntry(WordEntry),
     /// an app is in front and draws for itself
     App(usize),
 }
@@ -148,6 +163,10 @@ struct System {
     keys: Option<Keys>,
     /// the PIN has been entered: apps and asks may have the screen
     unlocked: bool,
+    /// setting up to restore a phrase rather than make one
+    restoring: bool,
+    /// the phrase being shown and checked, at setup
+    phrase: Option<Vec<String>>,
 }
 
 impl System {
@@ -175,7 +194,7 @@ impl System {
         s.end();
     }
 
-    fn draw_info(&self, title: &str, lines: &[String], action: &str) {
+    fn draw_info(&self, title: &str, lines: &[String], action: &str, arrows: bool) {
         let s = &self.screen;
         s.begin();
         s.status_bar(&self.clock, self.linked);
@@ -185,23 +204,56 @@ impl System {
             s.text(top + LINE + 6 + i as isize * 13, 13, GlyphStyle::Small, false, true, line);
         }
         if !action.is_empty() {
-            s.action_bar(action, false);
+            s.action_bar(action, arrows);
         }
         s.end();
     }
 
     fn info(&mut self, title: &str, lines: &[&str], action: &'static str, next: Next) {
-        self.view = View::Info {
-            title: title.into(),
-            lines: lines.iter().map(|l| l.to_string()).collect(),
-            action,
-            next,
-        };
+        self.choose(title, lines, vec![(action, next)]);
+    }
+
+    /// A page of text offering more than one thing: left and right go between them.
+    fn choose(&mut self, title: &str, lines: &[&str], actions: Vec<(&'static str, Next)>) {
+        let actions = actions.into_iter().filter(|(a, _)| !a.is_empty()).collect();
+        self.view = View::Info { title: title.into(), lines: lines.iter().map(|l| l.to_string()).collect(), actions, selected: 0 };
         self.redraw();
     }
 
+    fn forget_phrase(&mut self) {
+        if let Some(words) = self.phrase.take() {
+            for w in words {
+                forget(w);
+            }
+        }
+    }
+
+    /// The phrase comes after the PIN: made and shown, or typed in to restore.
+    fn phrase_step(&mut self) {
+        if self.restoring {
+            self.choose(
+                "Restore",
+                &["How many words is", "your recovery phrase?"],
+                vec![("24 words", Next::Words(24)), ("12 words", Next::Words(12))],
+            );
+        } else {
+            self.info(
+                "Recovery phrase",
+                &["24 words that bring back", "your wallet and backups if", "maki is lost or wiped.", "Have paper and a pen."],
+                "show my words",
+                Next::ShowPhrase,
+            );
+        }
+    }
+
+    fn setup_done(&mut self) {
+        self.forget_phrase();
+        self.restoring = false;
+        self.info("maki is ready", &["Enter your PIN after", "plugging maki in."], "continue", Next::Home);
+    }
+
     /// Something slow is happening (the PIN's key derivation): say so first.
-    fn busy(&self, title: &str) { self.draw_info(title, &[], ""); }
+    fn busy(&self, title: &str) { self.draw_info(title, &[], "", false); }
 
     fn pin_pad(&mut self, title: &str, note: &str, purpose: PinFor) {
         self.view = View::Pin(PinPad::new(title, note), purpose);
@@ -212,11 +264,10 @@ impl System {
     fn first_screen(&mut self) {
         let status = self.keys.as_ref().map(|k| k.status()).unwrap_or((State::Unlocked, 0));
         match status {
-            (State::Unset, _) => self.info(
+            (State::Unset, _) => self.choose(
                 "Welcome to maki",
                 &["Choose a PIN to start.", "You'll enter it each time", "maki is plugged in."],
-                "start",
-                Next::ChoosePin,
+                vec![("set up maki", Next::ChoosePin), ("restore from phrase", Next::Restore)],
             ),
             (State::Locked, left) if left < maki_keys::MAX_TRIES => {
                 self.pin_pad("Enter your PIN", &format!("{} tries left", left), PinFor::Enter)
@@ -228,6 +279,14 @@ impl System {
 
     fn now_unlocked(&mut self) {
         self.unlocked = true;
+        // a setup cut short before its phrase: finish it first
+        if !self.keys.as_ref().map(|k| k.has_phrase()).unwrap_or(true) {
+            return self.choose(
+                "No phrase yet",
+                &["Setup stopped before the", "recovery phrase was made."],
+                vec![("make one now", Next::ShowPhrase), ("restore mine", Next::Words(24))],
+            );
+        }
         self.go_home();
         self.start_asking();
     }
@@ -247,12 +306,12 @@ impl System {
                         self.pin_pad("Enter your PIN", &note, PinFor::Enter)
                     }
                     PinResult::Wiped => self.info(
-                        "Too many wrong PINs",
+                        "Too many tries",
                         &["maki's secrets were wiped.", "Choose a new PIN, then", "restore from your backup."],
                         "continue",
                         Next::ChoosePin,
                     ),
-                    _ => self.info("Couldn't check the PIN", &["Unplug maki and try again."], "", Next::Home),
+                    _ => self.info("Couldn't check it", &["Unplug maki and try again."], "", Next::Home),
                 }
             }
             PinFor::Choose => self.pin_pad("Enter it again", "to be sure of it", PinFor::Confirm(pin)),
@@ -261,7 +320,7 @@ impl System {
                 forget(first);
                 if !same {
                     forget(pin);
-                    return self.info("The PINs didn't match", &["Choose one again."], "try again", Next::ChoosePin);
+                    return self.info("PINs didn't match", &["Choose one again."], "try again", Next::ChoosePin);
                 }
                 self.busy("Setting up…");
                 let result = keys.set_pin(&pin);
@@ -269,12 +328,7 @@ impl System {
                 match result {
                     PinResult::Ok => {
                         self.unlocked = true;
-                        self.info(
-                            "maki is ready",
-                            &["Enter this PIN after", "plugging maki in."],
-                            "continue",
-                            Next::Home,
-                        )
+                        self.phrase_step()
                     }
                     _ => self.info("Couldn't set the PIN", &["Try again."], "try again", Next::ChoosePin),
                 }
@@ -291,8 +345,14 @@ impl System {
             View::Splash | View::App(_) => {}
             View::Home => self.draw_home(),
             View::Menu(menu, _) => menu.draw(&self.screen, &self.clock, self.linked),
-            View::Info { title, lines, action, .. } => self.draw_info(title, lines, action),
+            View::Info { title, lines, actions, selected } => {
+                let action = actions.get(*selected).map(|a| a.0).unwrap_or("");
+                self.draw_info(title, lines, action, actions.len() > 1)
+            }
             View::Pin(pad, _) => pad.draw(&self.screen, &self.clock, self.linked),
+            View::Phrase(p) => p.draw(&self.screen, &self.clock, self.linked),
+            View::PhraseCheck(c) => c.draw(&self.screen, &self.clock, self.linked),
+            View::WordEntry(e) => e.draw(&self.screen, &self.clock, self.linked),
         }
     }
 
@@ -345,6 +405,44 @@ impl System {
         self.redraw();
     }
 
+    /// Go where a page's action leads.
+    fn follow(&mut self, next: Next) {
+        match next {
+            Next::Home if self.unlocked => {
+                self.go_home();
+                self.start_asking();
+            }
+            Next::Home => self.first_screen(),
+            Next::ChoosePin => self.pin_pad("Choose a PIN", "6 to 12 digits", PinFor::Choose),
+            Next::Restore => {
+                self.restoring = true;
+                self.pin_pad("Choose a PIN", "6 to 12 digits", PinFor::Choose)
+            }
+            Next::ShowPhrase => {
+                self.busy("One moment…");
+                match self.keys.as_ref().and_then(|k| k.new_phrase()) {
+                    Some(words) => {
+                        self.phrase = Some(words.clone());
+                        self.view = View::Phrase(Phrase { words, index: 0 });
+                        self.redraw();
+                    }
+                    None => self.info("Couldn't make it", &["Unplug maki and try again."], "", Next::Home),
+                }
+            }
+            Next::ReviewPhrase => match self.phrase.clone() {
+                Some(words) => {
+                    self.view = View::Phrase(Phrase { words, index: 0 });
+                    self.redraw();
+                }
+                None => self.first_screen(),
+            },
+            Next::Words(n) => {
+                self.view = View::WordEntry(WordEntry::new(n));
+                self.redraw();
+            }
+        }
+    }
+
     fn key(&mut self, key: Key) {
         match &mut self.view {
             View::Splash | View::App(_) => {}
@@ -363,20 +461,69 @@ impl System {
                 }
                 _ => {}
             },
-            View::Info { action, next, .. } => {
-                if key == Key::Confirm && !action.is_empty() {
-                    match *next {
-                        Next::Home if self.unlocked => {
-                            self.go_home();
-                            self.start_asking();
-                        }
-                        Next::Home => self.first_screen(),
-                        Next::ChoosePin => {
-                            self.pin_pad("Choose a PIN", "6 to 12 digits", PinFor::Choose)
-                        }
+            View::Info { actions, selected, .. } => {
+                let n = actions.len();
+                match key {
+                    Key::Left | Key::Right if n > 1 => {
+                        *selected = if key == Key::Left { (*selected + n - 1) % n } else { (*selected + 1) % n };
+                        self.redraw();
                     }
+                    Key::Confirm if n > 0 => {
+                        let next = actions[*selected].1;
+                        self.follow(next);
+                    }
+                    _ => {}
                 }
             }
+            View::Phrase(p) => match p.key(key) {
+                PhraseStep::Stay => self.redraw(),
+                PhraseStep::Check => {
+                    if let Some(words) = &self.phrase {
+                        self.view = View::PhraseCheck(PhraseCheck::new(words));
+                        self.redraw();
+                    }
+                }
+            },
+            View::PhraseCheck(c) => {
+                let Some(words) = self.phrase.clone() else { return };
+                match c.key(key, &words) {
+                    CheckStep::Stay => self.redraw(),
+                    CheckStep::Passed => self.setup_done(),
+                    CheckStep::Wrong(n) => {
+                        let title = format!("That's not word {}", n);
+                        self.info(&title, &["Look at what you wrote,", "then check again."], "see the words", Next::ReviewPhrase)
+                    }
+                }
+                for w in words {
+                    forget(w);
+                }
+            }
+            View::WordEntry(e) => match e.key(key) {
+                EntryStep::Stay => self.redraw(),
+                EntryStep::Done(words) => {
+                    self.busy("Checking…");
+                    let count = words.len();
+                    let result = self.keys.as_ref().map(|k| k.restore_phrase(&words)).unwrap_or(maki_keys::RESULT_FAILED);
+                    match result {
+                        maki_keys::RESULT_OK => {
+                            self.restoring = false;
+                            self.info(
+                                "Phrase restored",
+                                &["Your wallet keys are back.", "Restore logins and codes", "from maki desktop."],
+                                "continue",
+                                Next::Home,
+                            )
+                        }
+                        maki_keys::RESULT_BAD_PHRASE => self.info(
+                            "Words don't check out",
+                            &["A word is wrong, or two", "are swapped."],
+                            "enter them again",
+                            Next::Words(count),
+                        ),
+                        _ => self.info("Couldn't save it", &["Unplug maki and try again."], "", Next::Home),
+                    }
+                }
+            },
             View::Pin(pad, _) => {
                 if let Some(pin) = pad.key(key) {
                     let View::Pin(_, purpose) = std::mem::replace(&mut self.view, View::Splash) else { return };
@@ -493,6 +640,8 @@ fn main() -> ! {
         time_conn,
         keys: None,
         unlocked: false,
+        restoring: false,
+        phrase: None,
     };
 
     loop {
@@ -529,6 +678,10 @@ fn main() -> ! {
                 sys.ready = true;
                 sys.clock = clock_text(time_conn, sys.time_verified);
                 sys.keys = Keys::new(&xns).ok();
+                // the screen's role: only the launcher may enter the PIN or see the phrase
+                if !sys.keys.as_ref().map(|k| k.claim()).unwrap_or(false) {
+                    log::error!("another process claimed maki-keys' screen role first");
+                }
                 sys.first_screen();
             }
             Some(LauncherOp::Tick) => {

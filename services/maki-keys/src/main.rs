@@ -21,6 +21,9 @@ use zeroize::Zeroize;
 const DICT: &str = "maki.keys";
 const KEY_LOCK: &str = "lock";
 const KEY_TRIES: &str = "tries";
+/// In the secret basis: the recovery phrase's entropy.
+const SEED_DICT: &str = "maki.seed";
+const KEY_ENTROPY: &str = "entropy";
 /// PBKDF2-HMAC-SHA256 rounds for the PIN. Around a second on the badge is the aim: slow for
 /// guessing, tolerable at boot. To be measured on hardware; it's stored, so it can change.
 const ROUNDS: u32 = 20_000;
@@ -104,6 +107,22 @@ impl Store {
     }
 
     fn lock(&self) -> Option<Lock> { self.read(KEY_LOCK).and_then(|b| Lock::from_bytes(&b)) }
+
+    /// The recovery phrase's entropy, from the secret basis (open only while unlocked).
+    fn entropy(&self, basis: &str) -> Option<Vec<u8>> {
+        let mut k = self.pddb.get(SEED_DICT, KEY_ENTROPY, Some(basis), false, false, None, None::<fn()>).ok()?;
+        let mut v = Vec::new();
+        k.read_to_end(&mut v).ok()?;
+        (!v.is_empty()).then_some(v)
+    }
+
+    fn set_entropy(&self, basis: &str, entropy: &[u8]) -> std::io::Result<()> {
+        self.pddb.delete_key(SEED_DICT, KEY_ENTROPY, Some(basis)).ok();
+        let mut k = self.pddb.get(SEED_DICT, KEY_ENTROPY, Some(basis), true, true, Some(entropy.len()), None::<fn()>)?;
+        k.write_all(entropy)?;
+        drop(k);
+        self.pddb.sync()
+    }
 
     fn tries(&self) -> u32 {
         self.read(KEY_TRIES).and_then(|b| b.get(..4).map(|s| u32::from_le_bytes(s.try_into().unwrap()))).unwrap_or(0)
@@ -204,13 +223,89 @@ fn main() -> ! {
 
     let mut state = if store.lock().is_some() { State::Locked } else { State::Unset };
     log::info!("starting {:?}", state);
+    // the screen (the launcher), which alone may use the PIN and the phrase
+    let mut screen: Option<xous::PID> = None;
 
     loop {
         let mut msg = xous::receive_message(sid).unwrap();
+        let from_screen = screen.is_some() && msg.sender.pid() == screen;
         match FromPrimitive::from_usize(msg.body.id()) {
             Some(KeysOp::Status) => {
                 let tries_left = if state == State::Locked { MAX_TRIES.saturating_sub(store.tries()) } else { MAX_TRIES };
-                xous::return_scalar2(msg.sender, state as usize, tries_left as usize).ok();
+                let has_phrase = state == State::Unlocked
+                    && store.lock().map(|l| store.entropy(&l.basis).is_some()).unwrap_or(false);
+                let rest = tries_left as usize | if has_phrase { HAS_PHRASE } else { 0 };
+                xous::return_scalar2(msg.sender, state as usize, rest).ok();
+            }
+            Some(KeysOp::Claim) => {
+                if screen.is_none() {
+                    screen = msg.sender.pid();
+                    log::info!("the screen is PID {:?}", screen);
+                }
+                xous::return_scalar(msg.sender, (msg.sender.pid() == screen) as usize).ok();
+            }
+            Some(op @ (KeysOp::NewPhrase | KeysOp::RestorePhrase)) => {
+                let Some(mem) = msg.body.memory_message_mut() else { continue };
+                let mut buffer = unsafe { Buffer::from_memory_message_mut(mem) };
+                let Ok(mut req) = buffer.to_original::<PhraseRequest, _>() else { continue };
+                let lock = store.lock();
+                let (result, words) = match (op, lock) {
+                    _ if !from_screen || state != State::Unlocked => (RESULT_NOT_NOW, Vec::new()),
+                    (_, None) => (RESULT_NOT_NOW, Vec::new()),
+                    (KeysOp::NewPhrase, Some(lock)) => {
+                        if store.entropy(&lock.basis).is_some() {
+                            (RESULT_NOT_NOW, Vec::new())
+                        } else {
+                            let mut entropy: [u8; 32] = random();
+                            let words: Vec<String> = maki_seed::to_words(&entropy).iter().map(|w| w.to_string()).collect();
+                            let stored = store.set_entropy(&lock.basis, &entropy);
+                            entropy.zeroize();
+                            match stored {
+                                Ok(()) => {
+                                    log::info!("recovery phrase made");
+                                    (RESULT_OK, words)
+                                }
+                                Err(_) => (RESULT_FAILED, Vec::new()),
+                            }
+                        }
+                    }
+                    (_, Some(lock)) => {
+                        let words: Vec<&str> = req.words.iter().map(|w| w.as_str()).collect();
+                        match maki_seed::to_entropy(&words) {
+                            Ok(mut entropy) => {
+                                let stored = store.set_entropy(&lock.basis, &entropy);
+                                entropy.zeroize();
+                                match stored {
+                                    Ok(()) => {
+                                        log::info!("recovery phrase restored");
+                                        (RESULT_OK, Vec::new())
+                                    }
+                                    Err(_) => (RESULT_FAILED, Vec::new()),
+                                }
+                            }
+                            Err(_) => (RESULT_BAD_PHRASE, Vec::new()),
+                        }
+                    }
+                };
+                for w in req.words.iter_mut() {
+                    w.zeroize();
+                }
+                req.words = words;
+                req.result = result;
+                buffer.replace(req).ok();
+            }
+            Some(KeysOp::SetPin | KeysOp::Unlock | KeysOp::Lock) if !from_screen => {
+                log::warn!("PIN request from {:?}, which isn't the screen", msg.sender.pid());
+                if let Some(mem) = msg.body.memory_message_mut() {
+                    let mut buffer = unsafe { Buffer::from_memory_message_mut(mem) };
+                    if let Ok(mut req) = buffer.to_original::<PinRequest, _>() {
+                        req.pin.zeroize();
+                        req.result = RESULT_NOT_NOW;
+                        buffer.replace(req).ok();
+                    }
+                } else {
+                    xous::return_scalar(msg.sender, 0).ok();
+                }
             }
             Some(op @ (KeysOp::SetPin | KeysOp::Unlock)) => {
                 let Some(mem) = msg.body.memory_message_mut() else { continue };

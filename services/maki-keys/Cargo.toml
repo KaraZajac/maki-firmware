@@ -24,6 +24,7 @@ hmac = "0.12.1"
 pbkdf2 = { version = "0.12.2", default-features = false, features = ["hmac"] }
 aes-gcm-siv = { version = "0.11.1", default-features = false, features = ["alloc", "aes"] }
 zeroize = "1.8.1"
+maki-seed = { path = "../../libs/maki-seed" }
 
 [features]
 board-baosec = ["pddb/board-baosec"]

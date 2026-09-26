@@ -24,6 +24,7 @@ maki-proto = { path = "../../libs/maki-proto" }
 maki-icons = { path = "../../libs/maki-icons" }
 bao1x-api = { path = "../../libs/bao1x-api" }
 maki-keys = { path = "../../services/maki-keys" }
+maki-seed = { path = "../../libs/maki-seed" }
 getrandom = "0.2"
 bao1x-hal-service = { path = "../../services/bao1x-hal-service", optional = true }
 
