@@ -52,6 +52,9 @@ pub enum KeysOp {
     BtcSign = 11,
     /// Memory message (mutable lend) with a `Chunk`: a piece of the PSBT last signed.
     BtcSigned = 12,
+    /// Memory message (mutable lend) with a `PinRequest` (`pin` the current one, `new_pin`),
+    /// from the screen, while unlocked. A wrong current PIN counts toward the wipe.
+    ChangePin = 13,
 }
 
 /// Backups and PSBTs travel in pieces this big, here and over USB.
@@ -123,6 +126,8 @@ pub enum State {
 #[derive(Debug, Default, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
 pub struct PinRequest {
     pub pin: String,
+    /// `ChangePin`: the one to change to
+    pub new_pin: String,
     pub result: u32,
     pub tries_left: u32,
 }
@@ -298,8 +303,10 @@ impl Keys {
         }
     }
 
-    fn call(&self, op: KeysOp, pin: &str) -> PinResult {
-        let request = PinRequest { pin: pin.into(), result: RESULT_FAILED, tries_left: 0 };
+    fn call(&self, op: KeysOp, pin: &str) -> PinResult { self.call_with(op, pin, "") }
+
+    fn call_with(&self, op: KeysOp, pin: &str, new_pin: &str) -> PinResult {
+        let request = PinRequest { pin: pin.into(), new_pin: new_pin.into(), result: RESULT_FAILED, tries_left: 0 };
         let Ok(mut buf) = Buffer::into_buf(request) else { return PinResult::Failed };
         if buf.lend_mut(self.conn, op.to_u32().unwrap()).is_err() {
             return PinResult::Failed;
@@ -320,6 +327,10 @@ impl Keys {
 
     /// Try a PIN. Slow on purpose: the key derivation takes about a second.
     pub fn unlock(&self, pin: &str) -> PinResult { self.call(KeysOp::Unlock, pin) }
+
+    /// Change the PIN: the current one, checked like an unlock (a wrong one counts toward the
+    /// wipe), then the new one. Twice as slow as an unlock.
+    pub fn change_pin(&self, current: &str, new: &str) -> PinResult { self.call_with(KeysOp::ChangePin, current, new) }
 
     /// Close the secrets until the PIN is entered again. Returns whether they were open.
     pub fn lock(&self) -> bool {

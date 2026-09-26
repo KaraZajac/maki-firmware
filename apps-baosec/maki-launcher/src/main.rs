@@ -109,6 +109,12 @@ enum PinFor {
     Choose,
     /// the same again, to be sure of it
     Confirm(String),
+    /// changing it, from maki's menu: the new one
+    NewPin,
+    /// the new one again
+    NewAgain(String),
+    /// the current one, which authorizes the change (holding the new one)
+    Current(String),
 }
 
 /// Where a page of text goes when the owner confirms it.
@@ -143,8 +149,8 @@ enum View {
     App(usize),
 }
 
-/// maki's own menu. Change PIN and backup join it with the recovery phrase.
-const MAKI_MENU: [&str; 3] = ["Lock", "About", "Close"];
+/// maki's own menu.
+const MAKI_MENU: [&str; 4] = ["Lock", "Change PIN", "About", "Close"];
 
 struct System {
     screen: Screen,
@@ -336,6 +342,37 @@ impl System {
                     _ => self.info("Couldn't set the PIN", &["Try again."], "try again", Next::ChoosePin),
                 }
             }
+            PinFor::NewPin => self.pin_pad("New PIN again", "to be sure of it", PinFor::NewAgain(pin)),
+            PinFor::NewAgain(first) => {
+                let same = first == pin;
+                forget(first);
+                if !same {
+                    forget(pin);
+                    return self.info("PINs didn't match", &["Nothing changed."], "continue", Next::Home);
+                }
+                let left = keys.status().1;
+                let note = if left < maki_keys::MAX_TRIES { format!("{} tries left", left) } else { "to change it".into() };
+                self.pin_pad("Current PIN", &note, PinFor::Current(pin))
+            }
+            PinFor::Current(new) => {
+                self.busy("Changing…");
+                let result = keys.change_pin(&pin, &new);
+                forget(pin);
+                forget(new);
+                match result {
+                    PinResult::Ok => self.info("PIN changed", &["Enter the new one each", "time maki is plugged in."], "continue", Next::Home),
+                    PinResult::Wrong(left) => {
+                        let tries = if left == 1 { "1 try left before".to_string() } else { format!("{} tries left before", left) };
+                        self.info("Wrong PIN", &["Nothing changed.", &tries, "maki wipes its secrets."], "continue", Next::Home)
+                    }
+                    PinResult::Wiped => {
+                        self.unlocked = false;
+                        self.asks_open = false;
+                        self.info("Too many tries", &["maki's secrets were wiped.", "Unplug maki, then set it", "up again from your phrase."], "", Next::Home)
+                    }
+                    _ => self.info("Couldn't change it", &["Nothing changed."], "continue", Next::Home),
+                }
+            }
         }
     }
 
@@ -359,10 +396,23 @@ impl System {
         }
     }
 
+    /// The owner is entering a PIN or a phrase: presses are meant for that.
+    fn entering(&self) -> bool {
+        matches!(self.view, View::Pin(..) | View::Phrase(_) | View::PhraseCheck(_) | View::WordEntry(_))
+    }
+
     /// Take the screen for the next ask waiting, if any. Not before the PIN, nothing being asked
-    /// of a maki that hasn't been unlocked, and not during setup: once Home is reached.
+    /// of a maki that hasn't been unlocked; not during setup (once Home is reached); and not
+    /// while a PIN is being entered, where a press meant for a digit could answer it. The tick
+    /// tries again every second.
     fn start_asking(&mut self) {
-        if !self.ready || !self.unlocked || !self.asks_open || self.asking.active() || self.asking.queue.is_empty() {
+        if !self.ready
+            || !self.unlocked
+            || !self.asks_open
+            || self.entering()
+            || self.asking.active()
+            || self.asking.queue.is_empty()
+        {
             return;
         }
         if let View::App(i) = self.view {
@@ -562,6 +612,7 @@ impl System {
 
     fn maki_menu(&mut self, picked: usize) {
         match MAKI_MENU.get(picked) {
+            Some(&"Change PIN") => self.pin_pad("New PIN", "6 to 12 digits", PinFor::NewPin),
             Some(&"Lock") => {
                 if self.keys.as_ref().map(|k| k.lock()).unwrap_or(false) {
                     self.unlocked = false;
@@ -722,6 +773,8 @@ fn main() -> ! {
                         sys.clock = now;
                         sys.redraw();
                     }
+                    // an ask held back while a PIN was being entered
+                    sys.start_asking();
                 }
             }
             Some(LauncherOp::Ask) => {

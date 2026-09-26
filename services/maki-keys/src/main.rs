@@ -22,6 +22,9 @@ use zeroize::Zeroize;
 
 const DICT: &str = "maki.keys";
 const KEY_LOCK: &str = "lock";
+/// A PIN change writes its record here first, then over `lock`: cut the power between the two
+/// and either PIN still opens maki (whichever does becomes the only record).
+const KEY_LOCK_NEXT: &str = "lock.next";
 const KEY_TRIES: &str = "tries";
 /// In the secret basis: the recovery phrase's entropy.
 const SEED_DICT: &str = "maki.seed";
@@ -226,7 +229,19 @@ impl Store {
         self.pddb.sync()
     }
 
-    fn lock(&self) -> Option<Lock> { self.read(KEY_LOCK).and_then(|b| Lock::from_bytes(&b)) }
+    /// maki's lock record: `lock`, or a PIN change's if that's all there is.
+    fn lock(&self) -> Option<Lock> { self.primary_lock().or_else(|| self.next_lock()) }
+
+    fn primary_lock(&self) -> Option<Lock> { self.read(KEY_LOCK).and_then(|b| Lock::from_bytes(&b)) }
+
+    fn next_lock(&self) -> Option<Lock> { self.read(KEY_LOCK_NEXT).and_then(|b| Lock::from_bytes(&b)) }
+
+    /// Make `lock` the only record.
+    fn keep_lock(&self, lock: &Lock) -> std::io::Result<()> {
+        self.write(KEY_LOCK, &lock.to_bytes())?;
+        self.pddb.delete_key(DICT, KEY_LOCK_NEXT, Some(PDDB_DEFAULT_SYSTEM_BASIS)).ok();
+        self.pddb.sync()
+    }
 
     /// The recovery phrase's entropy, from the secret basis (open only while unlocked).
     fn entropy(&self, basis: &str) -> Option<Vec<u8>> {
@@ -254,9 +269,36 @@ impl Store {
     /// this firmware. (Its pages stay allocated; the PDDB can only delete a basis that's open.)
     fn wipe(&self) {
         self.pddb.delete_key(DICT, KEY_LOCK, Some(PDDB_DEFAULT_SYSTEM_BASIS)).ok();
+        self.pddb.delete_key(DICT, KEY_LOCK_NEXT, Some(PDDB_DEFAULT_SYSTEM_BASIS)).ok();
         self.pddb.delete_key(DICT, KEY_TRIES, Some(PDDB_DEFAULT_SYSTEM_BASIS)).ok();
         self.pddb.sync().ok();
     }
+}
+
+/// The basis key, if `pin` opens `lock`.
+fn open_lock(lock: &Lock, pin: &str) -> Option<[u8; 32]> {
+    let mut kek = derive(pin, &lock.salt, lock.rounds);
+    let opened = Aes256GcmSiv::new_from_slice(&kek).ok().and_then(|c| {
+        c.decrypt(Nonce::from_slice(&lock.nonce), Payload { msg: &lock.wrapped, aad: lock.basis.as_bytes() }).ok()
+    });
+    kek.zeroize();
+    let mut opened = opened?;
+    let key = (opened.len() == 32).then(|| <[u8; 32]>::try_from(&opened[..]).unwrap());
+    opened.zeroize();
+    key
+}
+
+/// A lock record: the basis key wrapped under a key from `pin`, with a fresh salt and nonce.
+fn seal_lock(basis: &str, basis_key: &[u8; 32], pin: &str) -> Result<Lock, u32> {
+    let salt: [u8; 16] = random();
+    let nonce: [u8; 12] = random();
+    let mut kek = derive(pin, &salt, ROUNDS);
+    let cipher = Aes256GcmSiv::new_from_slice(&kek).map_err(|_| RESULT_FAILED)?;
+    kek.zeroize();
+    let wrapped = cipher
+        .encrypt(Nonce::from_slice(&nonce), Payload { msg: basis_key, aad: basis.as_bytes() })
+        .map_err(|_| RESULT_FAILED)?;
+    Ok(Lock { basis: basis.to_string(), rounds: ROUNDS, salt, nonce, wrapped })
 }
 
 fn set_pin(store: &Store, pin: &str) -> Result<(), u32> {
@@ -264,72 +306,86 @@ fn set_pin(store: &Store, pin: &str) -> Result<(), u32> {
         return Err(RESULT_BAD_PIN);
     }
     let mut basis_key: [u8; 32] = random();
-    let salt: [u8; 16] = random();
-    let nonce: [u8; 12] = random();
     let suffix: [u8; 4] = random();
     let basis = format!("maki-{:02x}{:02x}{:02x}{:02x}", suffix[0], suffix[1], suffix[2], suffix[3]);
-    let mut kek = derive(pin, &salt, ROUNDS);
-    let cipher = Aes256GcmSiv::new_from_slice(&kek).map_err(|_| RESULT_FAILED)?;
-    kek.zeroize();
-    let wrapped = cipher
-        .encrypt(Nonce::from_slice(&nonce), Payload { msg: &basis_key, aad: basis.as_bytes() })
-        .map_err(|_| RESULT_FAILED)?;
+    let lock = seal_lock(&basis, &basis_key, pin);
     let made = store.pddb.create_basis(&basis, &basis_key).and_then(|_| {
         store.pddb.unlock_basis(&basis, &basis_key, Some(BasisRetentionPolicy::Persist))
     });
     basis_key.zeroize();
+    let lock = lock?;
     if let Err(e) = made {
         log::error!("couldn't make the secret basis: {:?}", e);
         return Err(RESULT_FAILED);
     }
-    let lock = Lock { basis, rounds: ROUNDS, salt, nonce, wrapped };
-    store.write(KEY_LOCK, &lock.to_bytes()).map_err(|_| RESULT_FAILED)?;
+    store.keep_lock(&lock).map_err(|_| RESULT_FAILED)?;
     store.set_tries(0).ok();
     log::info!("PIN set; secret basis {} made and open", lock.basis);
     Ok(())
 }
 
-/// Ok(()) unlocked; Err((result, tries left)).
-fn unlock(store: &Store, pin: &str) -> Result<(), (u32, u32)> {
-    let Some(lock) = store.lock() else { return Err((RESULT_NOT_NOW, 0)) };
+/// Count a try, then see whether `pin` opens maki: the basis key, and the record it opened.
+/// Err((result, tries left)): wrong, or wiped on the last try.
+fn try_pin(store: &Store, pin: &str) -> Result<([u8; 32], Lock), (u32, u32)> {
+    let records: Vec<Lock> = [store.primary_lock(), store.next_lock()].into_iter().flatten().collect();
+    if records.is_empty() {
+        return Err((RESULT_NOT_NOW, 0));
+    }
     // counted before it's checked
     let tries = store.tries() + 1;
     if store.set_tries(tries).is_err() {
         return Err((RESULT_FAILED, 0));
     }
-    let mut kek = derive(pin, &lock.salt, lock.rounds);
-    let opened = Aes256GcmSiv::new_from_slice(&kek).ok().and_then(|c| {
-        c.decrypt(Nonce::from_slice(&lock.nonce), Payload { msg: &lock.wrapped, aad: lock.basis.as_bytes() }).ok()
-    });
-    kek.zeroize();
-    match opened {
-        Some(mut basis_key) if basis_key.len() == 32 => {
-            let key: [u8; 32] = basis_key[..].try_into().unwrap();
-            basis_key.zeroize();
-            let mut key = key;
-            let result = store.pddb.unlock_basis(&lock.basis, &key, Some(BasisRetentionPolicy::Persist));
-            key.zeroize();
-            match result {
-                Ok(()) => {
-                    store.set_tries(0).ok();
-                    log::info!("unlocked");
-                    Ok(())
-                }
-                Err(e) => {
-                    log::error!("the PIN was right but the basis wouldn't open: {:?}", e);
-                    Err((RESULT_FAILED, MAX_TRIES.saturating_sub(tries)))
-                }
+    for lock in records {
+        if let Some(key) = open_lock(&lock, pin) {
+            store.set_tries(0).ok();
+            return Ok((key, lock));
+        }
+    }
+    if tries >= MAX_TRIES {
+        log::warn!("{} wrong PINs: wiping", tries);
+        store.wipe();
+        return Err((RESULT_WIPED, 0));
+    }
+    Err((RESULT_WRONG, MAX_TRIES - tries))
+}
+
+/// Ok(()) unlocked; Err((result, tries left)).
+fn unlock(store: &Store, pin: &str) -> Result<(), (u32, u32)> {
+    let (mut key, lock) = try_pin(store, pin)?;
+    let result = store.pddb.unlock_basis(&lock.basis, &key, Some(BasisRetentionPolicy::Persist));
+    key.zeroize();
+    match result {
+        Ok(()) => {
+            // after a PIN change cut short, the record this PIN opened becomes the only one
+            if store.next_lock().is_some() {
+                store.keep_lock(&lock).ok();
             }
+            log::info!("unlocked");
+            Ok(())
         }
-        _ if tries >= MAX_TRIES => {
-            log::warn!("{} wrong PINs: wiping", tries);
-            store.wipe();
-            Err((RESULT_WIPED, 0))
+        Err(e) => {
+            log::error!("the PIN was right but the basis wouldn't open: {:?}", e);
+            Err((RESULT_FAILED, MAX_TRIES))
         }
-        _ => Err((RESULT_WRONG, MAX_TRIES - tries)),
     }
 }
 
+/// Ok(()) changed; Err((result, tries left)).
+fn change_pin(store: &Store, current: &str, new: &str) -> Result<(), (u32, u32)> {
+    if !pin_is_valid(new) {
+        return Err((RESULT_BAD_PIN, MAX_TRIES.saturating_sub(store.tries())));
+    }
+    let (mut key, lock) = try_pin(store, current)?;
+    let next = seal_lock(&lock.basis, &key, new);
+    key.zeroize();
+    let next = next.map_err(|code| (code, MAX_TRIES))?;
+    // the new record goes beside the old before it replaces it
+    store.write(KEY_LOCK_NEXT, &next.to_bytes()).map_err(|_| (RESULT_FAILED, MAX_TRIES))?;
+    store.keep_lock(&next).map_err(|_| (RESULT_FAILED, MAX_TRIES))?;
+    log::info!("PIN changed");
+    Ok(())
+}
 
 fn main() -> ! {
     log_server::init_wait().unwrap();
@@ -361,7 +417,8 @@ fn main() -> ! {
         let from_screen = screen.is_some() && msg.sender.pid() == screen;
         match FromPrimitive::from_usize(msg.body.id()) {
             Some(KeysOp::Status) => {
-                let tries_left = if state == State::Locked { MAX_TRIES.saturating_sub(store.tries()) } else { MAX_TRIES };
+                // wrong PINs count while unlocked too: changing the PIN checks the current one
+                let tries_left = if state == State::Unset { MAX_TRIES } else { MAX_TRIES.saturating_sub(store.tries()) };
                 let has_phrase = state == State::Unlocked
                     && store.lock().map(|l| store.entropy(&l.basis).is_some()).unwrap_or(false);
                 let rest = tries_left as usize | if has_phrase { HAS_PHRASE } else { 0 };
@@ -614,6 +671,37 @@ fn main() -> ! {
                     _ => (RESULT_NOT_NOW, 0),
                 };
                 req.pin.zeroize();
+                req.result = result;
+                req.tries_left = tries_left;
+                buffer.replace(req).ok();
+            }
+            Some(KeysOp::ChangePin) => {
+                let Some(mem) = msg.body.memory_message_mut() else { continue };
+                let mut buffer = unsafe { Buffer::from_memory_message_mut(mem) };
+                let Ok(mut req) = buffer.to_original::<PinRequest, _>() else { continue };
+                let (result, tries_left) = if !from_screen || state != State::Unlocked {
+                    (RESULT_NOT_NOW, 0)
+                } else {
+                    let basis = store.lock().map(|l| l.basis);
+                    match change_pin(&store, &req.pin, &req.new_pin) {
+                        Ok(()) => (RESULT_OK, MAX_TRIES),
+                        Err((RESULT_WIPED, _)) => {
+                            // the key is gone: close what's open, and start over
+                            if let Some(basis) = basis {
+                                store.pddb.lock_basis(&basis).ok();
+                            }
+                            if let Some(mut b) = sealed.take() {
+                                b.zeroize();
+                            }
+                            btc.forget();
+                            state = State::Unset;
+                            (RESULT_WIPED, 0)
+                        }
+                        Err(e) => e,
+                    }
+                };
+                req.pin.zeroize();
+                req.new_pin.zeroize();
                 req.result = result;
                 req.tries_left = tries_left;
                 buffer.replace(req).ok();

@@ -18,6 +18,9 @@ use crate::ui::{H, Key, LINE, SMALL_LINE, Screen};
 /// on three lines, or two when there's a list to pick from.
 const SITE_WIDTH: usize = 15;
 const SITE_LINES: usize = 3;
+/// Presses this soon after an ask appears are ignored: one already on its way, meant for what
+/// was on screen before, mustn't answer it.
+const SETTLE_MS: u64 = 700;
 
 /// One thing an ask offers: the centre does it.
 enum Stop {
@@ -86,6 +89,8 @@ pub(crate) struct Prompt {
     /// ticktimer milliseconds when it gives up. A deadline rather than a count of ticks: ticks
     /// queue up while the launcher is starved, and a burst of them would eat the owner's time.
     deadline_ms: u64,
+    /// and when it appeared
+    shown_ms: u64,
 }
 
 impl Prompt {
@@ -165,8 +170,14 @@ impl Asking {
             if let Some((msg, req)) = self.queue.pop_front() {
                 let now = self.tt.elapsed_ms();
                 let stops = Stop::of(&req, screen);
-                let prompt =
-                    Prompt { msg, deadline_ms: now + req.timeout_s.max(1) as u64 * 1000, req, stops, selected: 0 };
+                let prompt = Prompt {
+                    msg,
+                    deadline_ms: now + req.timeout_s.max(1) as u64 * 1000,
+                    shown_ms: now,
+                    req,
+                    stops,
+                    selected: 0,
+                };
                 prompt.draw(screen, now, linked);
                 self.current = Some(prompt);
             }
@@ -195,6 +206,9 @@ impl Asking {
     pub(crate) fn key(&mut self, key: Key, screen: &Screen, linked: bool) -> Option<u32> {
         let now = self.tt.elapsed_ms();
         let p = self.current.as_mut()?;
+        if now < p.shown_ms + SETTLE_MS {
+            return None;
+        }
         let stops = p.stops.len();
         match key {
             Key::Left => p.selected = (p.selected + stops - 1) % stops,
