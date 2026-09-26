@@ -28,6 +28,16 @@ pub struct Xpriv {
     pub child_number: u32,
     pub chain_code: [u8; 32],
     key: SecretKey,
+    /// the public key, compressed: made once, since a curve multiplication is what costs on
+    /// maki's core
+    public: [u8; 33],
+}
+
+fn public_of(key: &SecretKey) -> [u8; 33] {
+    let point = key.public_key().to_encoded_point(true);
+    let mut out = [0u8; 33];
+    out.copy_from_slice(point.as_bytes());
+    out
 }
 
 type HmacSha512 = Hmac<Sha512>;
@@ -48,15 +58,11 @@ impl Xpriv {
         let mut chain_code = [0u8; 32];
         chain_code.copy_from_slice(&i[32..]);
         i.zeroize();
-        Ok(Xpriv { depth: 0, parent_fingerprint: [0; 4], child_number: 0, chain_code, key })
+        let public = public_of(&key);
+        Ok(Xpriv { depth: 0, parent_fingerprint: [0; 4], child_number: 0, chain_code, key, public })
     }
 
-    pub fn public_key(&self) -> [u8; 33] {
-        let point = self.key.public_key().to_encoded_point(true);
-        let mut out = [0u8; 33];
-        out.copy_from_slice(point.as_bytes());
-        out
-    }
+    pub fn public_key(&self) -> [u8; 33] { self.public }
 
     pub fn fingerprint(&self) -> [u8; 4] {
         let h = hash160(&self.public_key());
@@ -69,7 +75,7 @@ impl Xpriv {
         let i = if index >= HARDENED {
             hmac512(&self.chain_code, &[&[0u8], &secret, &index.to_be_bytes()])
         } else {
-            hmac512(&self.chain_code, &[&self.public_key(), &index.to_be_bytes()])
+            hmac512(&self.chain_code, &[&self.public, &index.to_be_bytes()])
         };
         secret.zeroize();
         let mut il = [0u8; 32];
@@ -81,12 +87,14 @@ impl Xpriv {
         let key = SecretKey::from_bytes(&child_scalar.to_bytes()).map_err(|_| Error::InvalidKey)?;
         let mut chain_code = [0u8; 32];
         chain_code.copy_from_slice(&i[32..]);
+        let public = public_of(&key);
         Ok(Xpriv {
             depth: self.depth.checked_add(1).ok_or(Error::InvalidKey)?,
             parent_fingerprint: self.fingerprint(),
             child_number: index,
             chain_code,
             key,
+            public,
         })
     }
 

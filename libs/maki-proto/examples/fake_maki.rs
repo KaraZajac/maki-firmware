@@ -1,9 +1,11 @@
 //! A host stand-in for maki: the real protocol logic behind a TCP socket.
 //!
 //!     cargo run -p maki-proto --features fake --example fake_maki -- \
-//!         [ADDR] [--deny | --ask] [--totp SITE=BASE32]... [--clock-verified]
+//!         [ADDR] [--deny | --ask] [--totp SITE=BASE32]... [--clock-verified] [--phrase "WORDS"]
 //!
 //! ADDR defaults to 127.0.0.1:7878. Logins and TOTP secrets live in memory; SAVE_LOGIN adds to them.
+//! The Bitcoin wallet comes from `--phrase`, or else the BIP39 test phrase ("abandon" eleven times,
+//! then "about"), which everyone knows: never send real coins to either.
 //! Approvals are automatic unless `--deny` (refuse everything) or `--ask` (ask on this terminal).
 //! Codes need a verified clock, as on the badge: sync through Roughtime first, or start with
 //! `--clock-verified` to take this computer's clock as verified (tests, offline work).
@@ -16,7 +18,11 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use hmac::{Hmac, Mac};
-use maki_proto::device::{reply, Approval, Ask, Backup, Device, Handled, Platform, TimeState, BACKUP_PIECE};
+use maki_btc::psbt::Psbt;
+use maki_btc::{display, wallet, Account, Network};
+use maki_proto::device::{
+    reply, Approval, Ask, Backup, Bitcoin, Device, Handled, Platform, TimeState, BACKUP_PIECE, PSBT_PIECE,
+};
 use maki_proto::frame::{self, Deframer};
 use maki_proto::site;
 
@@ -59,6 +65,54 @@ struct Store {
     /// the backup being read out, and one coming in
     sealed: Vec<u8>,
     incoming: Vec<u8>,
+}
+
+/// The fake's wallet, and the PSBT coming in and the one it last signed.
+struct Wallet {
+    accounts: [Account; 2],
+    incoming: Vec<u8>,
+    signed: Vec<u8>,
+}
+
+const TEST_PHRASE: &str = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
+
+impl Wallet {
+    fn new(phrase: &str) -> Wallet {
+        let words: Vec<&str> = phrase.split_whitespace().collect();
+        maki_seed::to_entropy(&words).expect("--phrase isn't a BIP39 phrase");
+        let seed = maki_seed::seed(&words, "");
+        let account = |n| Account::from_seed(&seed, n).expect("keys");
+        Wallet { accounts: [account(Network::Bitcoin), account(Network::Testnet)], incoming: Vec::new(), signed: Vec::new() }
+    }
+}
+
+/// Everything maki-keys does with a finished PSBT, minus the screen: check it, show it, sign it.
+fn finish_signing(psbt: Vec<u8>, account: &Account, wallet: &Mutex<Wallet>, policy: Policy) -> (u8, Vec<u8>) {
+    let mut psbt = match Psbt::parse(&psbt) {
+        Ok(p) => p,
+        Err(e) => return reply::btc_sign(true, Approval::Refused, 0, &format!("not a PSBT maki can read: {e}")),
+    };
+    let review = match wallet::review(&psbt, account) {
+        Ok(r) => r,
+        Err(e) => {
+            println!("  refused: {e}");
+            return reply::btc_sign(true, Approval::Refused, 0, &e.to_string());
+        }
+    };
+    for p in review.pages() {
+        println!("  maki shows: {:12} {:18} {}", p.heading, p.value, p.mono);
+    }
+    let a = approve(policy, &format!("sign the transaction? {}", review.summary()));
+    if a != Approval::Approved {
+        return reply::btc_sign(true, a, 0, "");
+    }
+    if let Err(e) = wallet::sign(&mut psbt, account) {
+        return reply::btc_sign(true, Approval::Refused, 0, &e.to_string());
+    }
+    let signed = psbt.serialize();
+    let total = signed.len() as u32;
+    wallet.lock().unwrap().signed = signed;
+    reply::btc_sign(true, Approval::Approved, total, "")
 }
 
 /// The fake's backup: its store as lines of text, not encrypted (the badge's is; the desktop
@@ -212,6 +266,8 @@ fn main() {
         Policy::Approve
     };
     let store = Arc::new(Mutex::new(Store::default()));
+    let phrase = args.windows(2).find(|w| w[0] == "--phrase").map(|w| w[1].clone()).unwrap_or(TEST_PHRASE.into());
+    let wallet = Arc::new(Mutex::new(Wallet::new(&phrase)));
     for pair in args.windows(2).filter(|w| w[0] == "--totp").map(|w| &w[1]) {
         let (s, secret) = pair.split_once('=').expect("--totp SITE=BASE32");
         store.lock().unwrap().totp.push((s.to_string(), base32(secret).expect("bad base32")));
@@ -297,6 +353,73 @@ fn main() {
                                     writer.lock().unwrap().write_all(&frame::encode(kind, id, &body)).ok();
                                 });
                             }
+                        }
+                    }
+                    Handled::Bitcoin(request) => {
+                        println!("  0x{:02x}#{} -> bitcoin", packet.kind, packet.id);
+                        let id = packet.id;
+                        let account = |network: u8| wallet.lock().unwrap().accounts[network.min(1) as usize].clone();
+                        let immediate = match request {
+                            // these wait for the owner: answered from another thread
+                            Bitcoin::Account { network } => {
+                                let (account, writer) = (account(network), writer.clone());
+                                std::thread::spawn(move || {
+                                    let a = approve(policy, "share the bitcoin account with this computer?");
+                                    let (kind, body) = reply::btc_account(a, &account.zpub(), &account.descriptor());
+                                    writer.lock().unwrap().write_all(&frame::encode(kind, id, &body)).ok();
+                                });
+                                None
+                            }
+                            Bitcoin::Address { network, change, index } => {
+                                let (account, writer) = (account(network), writer.clone());
+                                std::thread::spawn(move || {
+                                    let address = account.address(change, index).unwrap_or_default();
+                                    let page = display::address_page(&address, change, index, account.network);
+                                    println!("  maki shows: {:12} {:18} {}", page.heading, page.value, page.mono);
+                                    let a = approve(policy, "does it match the computer's?");
+                                    let (kind, body) = reply::btc_address(a, &address);
+                                    writer.lock().unwrap().write_all(&frame::encode(kind, id, &body)).ok();
+                                });
+                                None
+                            }
+                            Bitcoin::Sign { network, total, offset, data } => {
+                                let mut w = wallet.lock().unwrap();
+                                if offset == 0 {
+                                    w.incoming.clear();
+                                }
+                                if offset as usize != w.incoming.len() {
+                                    w.incoming.clear();
+                                    Some(reply::btc_sign(true, Approval::Unavailable, 0, ""))
+                                } else {
+                                    w.incoming.extend_from_slice(&data);
+                                    if (w.incoming.len() as u32) < total {
+                                        Some(reply::btc_sign(false, Approval::Approved, 0, ""))
+                                    } else {
+                                        let psbt = std::mem::take(&mut w.incoming);
+                                        let account = w.accounts[network.min(1) as usize].clone();
+                                        drop(w);
+                                        let (writer, wallet) = (writer.clone(), wallet.clone());
+                                        std::thread::spawn(move || {
+                                            let (kind, body) = finish_signing(psbt, &account, &wallet, policy);
+                                            writer.lock().unwrap().write_all(&frame::encode(kind, id, &body)).ok();
+                                        });
+                                        None
+                                    }
+                                }
+                            }
+                            Bitcoin::Signed { offset } => {
+                                let w = wallet.lock().unwrap();
+                                if w.signed.is_empty() {
+                                    Some(reply::btc_signed(Approval::Unavailable, 0, offset, &[]))
+                                } else {
+                                    let start = (offset as usize).min(w.signed.len());
+                                    let end = (start + PSBT_PIECE).min(w.signed.len());
+                                    Some(reply::btc_signed(Approval::Approved, w.signed.len() as u32, offset, &w.signed[start..end]))
+                                }
+                            }
+                        };
+                        if let Some((kind, body)) = immediate {
+                            writer.lock().unwrap().write_all(&frame::encode(kind, packet.id, &body)).ok();
                         }
                     }
                     // answered from another thread, like the vault on the badge: the link keeps

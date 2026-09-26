@@ -34,6 +34,25 @@ pub enum Error {
     Amount,
 }
 
+impl core::fmt::Display for Error {
+    /// Why maki won't sign, for the computer to show.
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Error::Key => write!(f, "couldn't derive this wallet's keys"),
+            Error::Psbt(why) => write!(f, "not a PSBT maki can read: {}", why),
+            Error::NotOurs(i) => write!(f, "input {} isn't this wallet's (maki signs for its BIP84 account 0, native SegWit)", i),
+            Error::NoPreviousTx(i) => {
+                write!(f, "input {} doesn't come with the transaction it spends (the PSBT needs non_witness_utxo)", i)
+            }
+            Error::PreviousTxMismatch(i) => write!(f, "input {}'s previous transaction isn't the one it spends", i),
+            Error::Sighash(i) => write!(f, "input {} asks for a signature other than SIGHASH_ALL", i),
+            Error::Taproot(i) => write!(f, "input {} is taproot, which maki doesn't sign yet", i),
+            Error::NegativeFee => write!(f, "the outputs pay more than the inputs hold"),
+            Error::Amount => write!(f, "an amount is beyond 21 million bitcoin"),
+        }
+    }
+}
+
 /// Satoshis in 21 million bitcoin: no amount can be larger.
 pub const MAX_MONEY: u64 = 21_000_000 * 100_000_000;
 
@@ -42,6 +61,7 @@ fn total(mut amounts: impl Iterator<Item = u64>) -> Result<u64, Error> {
 }
 
 /// BIP84, account 0: `m/84'/coin'/0'`.
+#[derive(Clone)]
 pub struct Account {
     pub network: Network,
     pub master_fingerprint: [u8; 4],

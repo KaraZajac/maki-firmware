@@ -31,6 +31,10 @@ pub struct Tx {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ParseError(pub &'static str);
 
+impl core::fmt::Display for ParseError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result { f.write_str(self.0) }
+}
+
 /// Bounds on what maki will read: generous for any real transaction, and far from anything that
 /// could exhaust its memory.
 const MAX_COUNT: u64 = 10_000;

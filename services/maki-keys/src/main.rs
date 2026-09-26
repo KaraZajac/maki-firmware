@@ -8,6 +8,8 @@
 //! The secret basis gets a fresh random name at each setup: after a wipe, the old one can't be
 //! opened (its key is gone), and its name mustn't collide with the new one.
 
+mod bitcoin;
+
 use std::io::{Read, Write};
 
 use aes_gcm_siv::aead::{Aead, KeyInit, Payload};
@@ -62,7 +64,7 @@ fn gather(store: &Store, basis: &str) -> Vec<u8> {
 fn parse(plain: &[u8]) -> Option<Vec<Entry>> {
     let mut rest = plain.strip_prefix(BACKUP_HEADER)?;
     let mut entries = Vec::new();
-    let mut take = |n: usize, rest: &mut &[u8]| -> Option<Vec<u8>> {
+    let take = |n: usize, rest: &mut &[u8]| -> Option<Vec<u8>> {
         let (a, b) = (rest.get(..n)?, rest.get(n..)?);
         *rest = b;
         Some(a.to_vec())
@@ -347,6 +349,12 @@ fn main() -> ! {
     let mut sealed: Option<Vec<u8>> = None;
     let mut incoming: Vec<u8> = Vec::new();
     let mut incoming_total: u32 = 0;
+    let mut btc = bitcoin::Btc::new();
+    // the phrase's entropy, while unlocked
+    let entropy = |store: &Store, state: State| match (state, store.lock()) {
+        (State::Unlocked, Some(lock)) => store.entropy(&lock.basis),
+        _ => None,
+    };
 
     loop {
         let mut msg = xous::receive_message(sid).unwrap();
@@ -480,6 +488,35 @@ fn main() -> ! {
                     }
                 });
             }
+            // nothing of the wallet's before the PIN
+            Some(KeysOp::BtcAccount | KeysOp::BtcAddress) if state != State::Unlocked => {
+                let Some(mem) = msg.body.memory_message_mut() else { continue };
+                let mut buffer = unsafe { Buffer::from_memory_message_mut(mem) };
+                if let Ok(mut req) = buffer.to_original::<Wallet, _>() {
+                    req.result = RESULT_NOT_NOW;
+                    buffer.replace(req).ok();
+                }
+            }
+            Some(KeysOp::BtcSign) if state != State::Unlocked => {
+                let Some(mem) = msg.body.memory_message_mut() else { continue };
+                let mut buffer = unsafe { Buffer::from_memory_message_mut(mem) };
+                if let Ok(mut req) = buffer.to_original::<Chunk, _>() {
+                    req.data.clear();
+                    req.result = RESULT_NOT_NOW;
+                    req.done = true;
+                    buffer.replace(req).ok();
+                }
+            }
+            Some(KeysOp::BtcAccount) => {
+                let e = entropy(&store, state);
+                btc.share_account(msg, e)
+            }
+            Some(KeysOp::BtcAddress) => {
+                let e = entropy(&store, state);
+                btc.address(msg, e)
+            }
+            Some(KeysOp::BtcSign) => btc.sign_piece(msg, || entropy(&store, state)),
+            Some(KeysOp::BtcSigned) => btc.signed_piece(&mut msg),
             Some(KeysOp::Claim) => {
                 if screen.is_none() {
                     screen = msg.sender.pid();
@@ -589,6 +626,7 @@ fn main() -> ! {
                             if let Some(mut b) = sealed.take() {
                                 b.zeroize();
                             }
+                            btc.forget();
                             log::info!("locked");
                             true
                         }

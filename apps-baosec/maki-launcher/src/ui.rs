@@ -87,7 +87,10 @@ impl Screen {
 
     /// The bar across the top: the name on the left, `right` (the clock, or a countdown) on the
     /// right, and a dot between while the desktop app is linked.
-    pub(crate) fn status_bar(&self, right: &str, linked: bool) {
+    pub(crate) fn status_bar(&self, right: &str, linked: bool) { self.titled_bar(NAME, right, linked) }
+
+    /// The bar across the top with a title in place of the name: the heading of a page.
+    pub(crate) fn titled_bar(&self, title: &str, right: &str, linked: bool) {
         let mut name = TextView::new(
             Gid::dummy(),
             TextBounds::BoundingBox(Rectangle::new(Point::new(0, 0), Point::new(W - CLOCK_WIDTH, self.bar))),
@@ -95,8 +98,9 @@ impl Screen {
         name.style = GlyphStyle::Bold;
         name.invert = true;
         name.draw_border = false;
+        name.ellipsis = true;
         name.margin = Point::new(2, 0);
-        write!(name, "{}", NAME).ok();
+        write!(name, "{}", title).ok();
         self.gfx.draw_textview(&mut name).ok();
 
         let mut clock = TextView::new(

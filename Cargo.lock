@@ -4354,6 +4354,7 @@ dependencies = [
  "getrandom 0.2.12",
  "hmac 0.12.1",
  "log",
+ "maki-btc",
  "maki-keys-api",
  "maki-launcher",
  "maki-seed",
@@ -4432,6 +4433,8 @@ name = "maki-proto"
 version = "0.1.0"
 dependencies = [
  "hmac 0.12.1",
+ "maki-btc",
+ "maki-seed",
  "roughtime",
  "sha1",
 ]

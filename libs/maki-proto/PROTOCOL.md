@@ -58,6 +58,10 @@ bytes. Bodies must be consumed exactly: trailing bytes are an error.
 | `0x12` SAVE_LOGIN | `site:str8` `username:str8` `password:str8` | `approval:u8` |
 | `0x20` BACKUP_GET | `offset:u32` | `status:u8` `total:u32` `offset:u32` `piece:bytes16` |
 | `0x21` BACKUP_PUT | `total:u32` `offset:u32` `piece:bytes16` | `done:u8` `approval:u8` `logins:u16` `codes:u16` |
+| `0x30` BTC_ACCOUNT | `network:u8` | `approval:u8` `zpub:str8` `descriptor:str8` |
+| `0x31` BTC_ADDRESS | `network:u8` `change:u8` `index:u32` | `approval:u8` `address:str8` |
+| `0x32` BTC_SIGN | `network:u8` `total:u32` `offset:u32` `piece:bytes16` | `done:u8` `approval:u8` `signed:u32` `reason:str8` |
+| `0x33` BTC_SIGNED | `offset:u32` | `status:u8` `total:u32` `offset:u32` `piece:bytes16` |
 | `0x7f` ERROR (reply only) | | `code:u8` `detail:str8` |
 
 `time_state`: 0 unset, 1 unverified, 2 verified.
@@ -67,8 +71,10 @@ ERROR `code`: 1 malformed, 2 unknown kind, 3 no challenge, 4 challenge expired, 
 `approval`: 0 approved, 1 denied, 2 nothing saved for the site (the owner wasn't asked), 3 timed
 out, 4 vault unavailable (or busy: at most three requests wait for the owner at once), 5 clock
 not verified (GET_TOTP only), 6 locked (maki is waiting for its PIN), 7 not yours (a backup
-this maki's recovery phrase can't open), 8 no phrase (no recovery phrase yet). Only an approved
-reply carries a username, password, code or backup piece.
+this maki's recovery phrase can't open), 8 no phrase (no recovery phrase yet), 9 refused (a PSBT
+maki won't sign; the reply says why). Only an approved reply carries a username, password, code,
+backup piece, account or signed PSBT.
+`network`: 0 bitcoin, 1 the test networks (testnet and signet share keys and addresses).
 
 ## Setting the time
 
@@ -102,10 +108,10 @@ The timezone offset is always the host's word: it only affects what the clock di
 
 GET_LOGIN, GET_TOTP and SAVE_LOGIN go to the vault, which asks the owner on maki's screen: the
 launcher shows the site and the question over whatever is in front, and gives the screen back
-after. **Press** (select, or the centre of the pad) allows; nothing else does, so a bumped
-key can't. **Left** (or down, on a plain question) refuses, and the question gives up after
-30 s. When there's more than one answer (two logins for a site), **up** and **down** go
-through them and pressing picks one.
+after. The screen offers one answer at a time and the **centre** button gives it: "allow" comes
+first, and **left** or **right** moves to "deny". Nothing but the centre answers, so a bumped
+side button can't. The question gives up after 30 s. When there's more than one answer (two
+logins for a site), left and right go through them, then "cancel", and the centre picks.
 
 - **`site` is what maki displays**, so it must be a lowercase ASCII hostname: letters, digits,
   dots, hyphens. Anything else is refused with `bad argument`. International domains travel as
@@ -148,3 +154,47 @@ them, and a maki restored from the phrase can open them.
   3 codes"): `done` = 1, then the approval and what was added. maki only adds records it doesn't
   have; what it has, it keeps. A backup maki can't open is `7` not yours, and nothing is asked.
   If there's nothing new, nothing is asked either: approved, with nothing added.
+
+## Bitcoin
+
+maki keeps one Bitcoin account, the standard native SegWit one (BIP84, `m/84'/0'/0'`, or
+`m/84'/1'/0'` on the test networks), derived from its recovery phrase, so the same phrase works in
+Sparrow, Electrum and the rest. Wallet software keeps track of coins and builds transactions;
+maki only ever shows and signs.
+
+- **BTC_ACCOUNT** hands out the account's public key, once the owner agrees on maki ("Share
+  account? view only"): `zpub` (`vpub` on the test networks) and an output descriptor with the
+  master key's fingerprint and both chains, e.g.
+  `wpkh([73c5da0a/84h/0h/0h]xpub…/<0;1>/*)#qf45pmyh`, which Sparrow and Bitcoin Core import
+  as a watch-only wallet that knows maki signs for it. It reveals every address, so it is asked
+  for, but it can't spend.
+- **BTC_ADDRESS** puts an address on maki's screen, the whole of it, for the owner to compare
+  with what the computer shows: `approval` is 0 if they said it matches and 1 if it doesn't
+  (then the computer's copy isn't to be trusted). `address` is maki's, either way.
+- **BTC_SIGN** sends a PSBT (BIP174, version 0) in pieces of up to 4096 bytes, in order, with
+  the same `total` each time (at most 512 KiB). A piece before the last is answered `done` = 0
+  at once. The last is answered once the owner decides: `done` = 1, `approval` 0 with the
+  signed PSBT's size in `signed`, 1 rejected, 3 timed out, or 9 refused with `reason`.
+- **BTC_SIGNED** hands the signed PSBT out in pieces: everything that came in, plus a partial
+  signature for each input. Finalizing and broadcasting are the wallet software's.
+
+What maki checks before it asks, refusing (`9`, with the reason) rather than asking about a
+transaction it can't vouch for:
+
+- **Every input is this wallet's**: its BIP32 derivation names this maki's fingerprint and a
+  path on the account's receiving or change chain, the key derived there is the one named, and
+  the coin it spends pays to that key.
+- **Every input comes with the whole transaction it spends** (`non_witness_utxo`), which must
+  hash to the input's outpoint. Amounts are taken from there, never from the computer's word
+  alone: with SegWit, the computer could otherwise lie about one input's amount per signing
+  and have the difference paid out as fee (the 2020 fee attack).
+- **Only SIGHASH_ALL** is signed, and no taproot inputs yet.
+- **The fee is what the inputs hold minus what the outputs pay**, never negative, and no
+  amount is beyond 21 million bitcoin.
+- At most 64 outputs, each of which the owner sees.
+
+The owner then goes through the transaction with left and right, the centre moving on: every
+payment with its amount and full address, the change coming back (an output counts as change
+only if it derives from this wallet's change chain; anything else is shown as a payment), and
+the fee with its rate (called out when over a tenth of what's sent). Last come "sign" and
+"reject". Signatures are deterministic (RFC 6979) and low-S.

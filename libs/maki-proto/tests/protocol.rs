@@ -415,3 +415,77 @@ fn backup_replies_carry_nothing_unless_approved() {
     let mut r = Reader::new(&body);
     assert_eq!((r.u8().unwrap(), r.u8().unwrap(), r.u16().unwrap(), r.u16().unwrap()), (1, Approval::Denied as u8, 0, 0));
 }
+
+#[test]
+fn bitcoin_requests_go_to_the_wallet() {
+    let mut d = device();
+    assert_eq!(
+        handled(&mut d, kind::BTC_ACCOUNT, Writer::new().u8(NETWORK_TESTNET).finish()),
+        Handled::Bitcoin(Bitcoin::Account { network: NETWORK_TESTNET })
+    );
+    assert_eq!(
+        handled(&mut d, kind::BTC_ADDRESS, Writer::new().u8(NETWORK_BITCOIN).u8(1).u32(42).finish()),
+        Handled::Bitcoin(Bitcoin::Address { network: NETWORK_BITCOIN, change: true, index: 42 })
+    );
+    let piece = vec![0x70u8; 64];
+    assert_eq!(
+        handled(&mut d, kind::BTC_SIGN, Writer::new().u8(0).u32(100).u32(36).bytes16(&piece).finish()),
+        Handled::Bitcoin(Bitcoin::Sign { network: 0, total: 100, offset: 36, data: piece })
+    );
+    assert_eq!(
+        handled(&mut d, kind::BTC_SIGNED, Writer::new().u32(8192).finish()),
+        Handled::Bitcoin(Bitcoin::Signed { offset: 8192 })
+    );
+}
+
+#[test]
+fn bitcoin_requests_out_of_range_are_refused() {
+    let mut d = device();
+    let bad = [
+        (kind::BTC_ACCOUNT, Writer::new().u8(2).finish()),
+        (kind::BTC_ADDRESS, Writer::new().u8(0).u8(2).u32(0).finish()),
+        (kind::BTC_ADDRESS, Writer::new().u8(0).u8(0).u32(0x8000_0000).finish()),
+        (kind::BTC_SIGN, Writer::new().u8(0).u32(0).u32(0).bytes16(&[]).finish()),
+        (kind::BTC_SIGN, Writer::new().u8(0).u32(MAX_PSBT + 1).u32(0).bytes16(&[1]).finish()),
+        (kind::BTC_SIGN, Writer::new().u8(0).u32(100).u32(90).bytes16(&[0; 20]).finish()),
+        (kind::BTC_SIGN, Writer::new().u8(0).u32(10_000).u32(0).bytes16(&vec![0; PSBT_PIECE + 1]).finish()),
+    ];
+    for (k, body) in bad {
+        let reply = ask(&mut d, k, body.clone());
+        assert_eq!(error_code(&reply), ErrorCode::BadArgument as u8, "0x{k:02x} {body:?}");
+    }
+    let reply = ask(&mut d, kind::BTC_ACCOUNT, Writer::new().u8(0).u8(0).finish());
+    assert_eq!(error_code(&reply), ErrorCode::Malformed as u8);
+}
+
+#[test]
+fn bitcoin_replies_carry_only_what_the_answer_allows() {
+    let (k, body) = reply::btc_account(Approval::Denied, "zpub…", "wpkh(…)");
+    assert_eq!(k, kind::BTC_ACCOUNT | kind::REPLY);
+    let mut r = Reader::new(&body);
+    assert_eq!((r.u8().unwrap(), r.str8().unwrap(), r.str8().unwrap()), (Approval::Denied as u8, "", ""));
+
+    // the address maki showed comes back whether or not it matched: it's maki's word either way
+    let (_, body) = reply::btc_address(Approval::Denied, "bc1q…");
+    let mut r = Reader::new(&body);
+    assert_eq!((r.u8().unwrap(), r.str8().unwrap()), (Approval::Denied as u8, "bc1q…"));
+    let (_, body) = reply::btc_address(Approval::Locked, "bc1q…");
+    assert_eq!(Reader::new(&body).u8().unwrap(), Approval::Locked as u8);
+    assert_eq!(body.len(), 2);
+
+    let (_, body) = reply::btc_sign(true, Approval::Refused, 500, "input 0 isn't this wallet's");
+    let mut r = Reader::new(&body);
+    assert_eq!(
+        (r.u8().unwrap(), r.u8().unwrap(), r.u32().unwrap(), r.str8().unwrap()),
+        (1, Approval::Refused as u8, 0, "input 0 isn't this wallet's")
+    );
+    let (_, body) = reply::btc_sign(true, Approval::Approved, 500, "ignored");
+    let mut r = Reader::new(&body);
+    assert_eq!((r.u8().unwrap(), r.u8().unwrap(), r.u32().unwrap(), r.str8().unwrap()), (1, 0, 500, ""));
+
+    let (k, body) = reply::btc_signed(Approval::Unavailable, 10, 0, &[1, 2]);
+    assert_eq!(k, kind::BTC_SIGNED | kind::REPLY);
+    let mut r = Reader::new(&body);
+    assert_eq!((r.u8().unwrap(), r.u32().unwrap(), r.u32().unwrap(), r.bytes16().unwrap()), (Approval::Unavailable as u8, 10, 0, &[][..]));
+    assert_eq!(Approval::from_u8(9), Some(Approval::Refused));
+}

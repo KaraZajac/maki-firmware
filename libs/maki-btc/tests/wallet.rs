@@ -459,3 +459,86 @@ fn non_minimal_lengths_are_refused() {
     padded.extend_from_slice(&tx[5..]);
     assert!(Tx::parse(&padded).is_err());
 }
+
+#[test]
+fn amounts_are_shown_exactly() {
+    use maki_btc::display::amount;
+    assert_eq!(amount(70_000, Network::Bitcoin), "0.0007 BTC");
+    assert_eq!(amount(100_000_000, Network::Bitcoin), "1 BTC");
+    assert_eq!(amount(123_456_789, Network::Bitcoin), "1.23456789 BTC");
+    assert_eq!(amount(1, Network::Testnet), "0.00000001 tBTC");
+    assert_eq!(amount(0, Network::Bitcoin), "0 BTC");
+    assert_eq!(amount(wallet::MAX_MONEY, Network::Bitcoin), "21000000 BTC");
+}
+
+#[test]
+fn the_review_shows_each_payment_then_change_then_the_fee() {
+    use maki_btc::display::Page;
+    let f = Fixture::new();
+    let r = f.review().unwrap();
+    let payee = Address::from_script(&f.payee, bitcoin::Network::Bitcoin).unwrap().to_string();
+    let page = |h: &str, v: &str, m: &str| Page { heading: h.into(), value: v.into(), mono: m.into() };
+    assert_eq!(
+        r.pages(),
+        vec![
+            page("Send", "0.0007 BTC", &payee),
+            page("Change", "0.00025 BTC", "back to you"),
+            page("Fee", "0.00005 BTC", &format!("{} sat/vB", r.fee_rate())),
+        ]
+    );
+    assert_eq!(r.summary(), "Total 0.00075 BTC");
+    assert!(!r.fee_is_high());
+
+    // two payments are numbered; a fee over a tenth of them is called out
+    let mut f = Fixture::new();
+    f.psbt.unsigned_tx.output[1].script_pubkey = f.payee.clone();
+    f.psbt.outputs[1].bip32_derivation.clear();
+    f.psbt.unsigned_tx.output[0].value = Amount::from_sat(45_000);
+    f.psbt.unsigned_tx.output[1].value = Amount::from_sat(50_000);
+    let r = f.review().unwrap();
+    let headings: Vec<String> = r.pages().into_iter().map(|p| p.heading).collect();
+    assert_eq!(headings, ["Send 1/2", "Send 2/2", "Fee"]);
+    f.psbt.unsigned_tx.output[1].value = Amount::from_sat(10_000);
+    let r = f.review().unwrap();
+    assert!(r.fee_is_high());
+    assert_eq!(r.pages().last().unwrap().heading, "High fee!");
+}
+
+#[test]
+fn refusals_say_why() {
+    assert_eq!(
+        Error::NoPreviousTx(1).to_string(),
+        "input 1 doesn't come with the transaction it spends (the PSBT needs non_witness_utxo)"
+    );
+    assert!(Error::NotOurs(0).to_string().starts_with("input 0 isn't this wallet's"));
+}
+
+const FIXTURES: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures");
+
+/// Writes tests/fixtures: the fixture's PSBT, unsigned and as maki signs it, for the emulator's
+/// demo and the desktop app's tests. Regenerate (only if the fixture changes) with
+///     cargo test -p maki-btc -- --ignored write_fixtures
+#[test]
+#[ignore]
+fn write_fixtures() {
+    let f = Fixture::new();
+    std::fs::create_dir_all(FIXTURES).unwrap();
+    std::fs::write(format!("{FIXTURES}/abandon-unsigned.psbt"), f.psbt.serialize()).unwrap();
+    let mut psbt = f.ours();
+    wallet::sign(&mut psbt, &f.account).unwrap();
+    std::fs::write(format!("{FIXTURES}/abandon-signed.psbt"), psbt.serialize()).unwrap();
+}
+
+#[test]
+fn the_fixtures_are_current_and_rust_bitcoin_agrees() {
+    let f = Fixture::new();
+    let unsigned = std::fs::read(format!("{FIXTURES}/abandon-unsigned.psbt")).unwrap();
+    let signed = std::fs::read(format!("{FIXTURES}/abandon-signed.psbt")).unwrap();
+    assert_eq!(unsigned, f.psbt.serialize());
+    let mut psbt = Psbt::parse(&unsigned).unwrap();
+    wallet::sign(&mut psbt, &f.account).unwrap();
+    assert_eq!(psbt.serialize(), signed);
+    let mut theirs = f.psbt.clone();
+    theirs.sign(&f.master, &f.secp).unwrap();
+    assert_eq!(BPsbt::deserialize(&signed).unwrap(), theirs);
+}

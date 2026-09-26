@@ -18,6 +18,7 @@ extern crate alloc;
 
 pub mod address;
 pub mod bip32;
+pub mod display;
 mod hash;
 pub mod psbt;
 pub mod tx;

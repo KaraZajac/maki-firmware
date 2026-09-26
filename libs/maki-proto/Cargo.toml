@@ -8,9 +8,11 @@ description = "maki's serial protocol: framing, messages, and the device-side lo
 roughtime = { path = "../roughtime" }
 
 [dev-dependencies]
-# fake_maki computes real TOTP codes, the way the vault does
+# fake_maki computes real TOTP codes, the way the vault does, and signs with maki's wallet code
 hmac = "0.12.1"
 sha1 = "0.10.6"
+maki-btc = { path = "../maki-btc" }
+maki-seed = { path = "../maki-seed" }
 
 [features]
 # the fake maki's shortcut past Roughtime (Device::trust_platform_clock); never for the badge

@@ -76,16 +76,54 @@ impl Launcher {
         choices: &[String],
         timeout_s: u32,
     ) -> Result<Answer, xous::Error> {
-        let request = AskRequest {
+        self.send_ask(AskRequest {
             subject: subject.into(),
             question: question.into(),
             detail: detail.into(),
             choices: choices.to_vec(),
+            pages: Vec::new(),
+            yes: String::new(),
+            no: String::new(),
             timeout_s,
             answer: ANSWER_TIMED_OUT,
             choice: 0,
-        };
-        let mut buf = Buffer::into_buf(request).or(Err(xous::Error::InternalError))?;
+        })
+    }
+
+    /// Ask with something to check first: the owner goes through `pages` with left and right
+    /// (the centre moves on), then answers `yes` or `no` ("sign", "reject"). `subject`,
+    /// `question` and `detail` show with the answers, as a plain ask shows them.
+    pub fn review(
+        &self,
+        subject: &str,
+        question: &str,
+        detail: &str,
+        pages: Vec<Page>,
+        yes: &str,
+        no: &str,
+        timeout_s: u32,
+    ) -> Result<Answer, xous::Error> {
+        self.send_ask(AskRequest {
+            subject: subject.into(),
+            question: question.into(),
+            detail: detail.into(),
+            choices: Vec::new(),
+            pages,
+            yes: yes.into(),
+            no: no.into(),
+            timeout_s,
+            answer: ANSWER_TIMED_OUT,
+            choice: 0,
+        })
+    }
+
+    fn send_ask(&self, request: AskRequest) -> Result<Answer, xous::Error> {
+        // `into_buf` would size the buffer by the struct, one page, which a review with many
+        // pages outgrows: room for the text, plus its bookkeeping
+        let text: usize = request.pages.iter().map(|p| p.heading.len() + p.value.len() + p.mono.len() + 64).sum::<usize>()
+            + request.choices.iter().map(|c| c.len() + 16).sum::<usize>();
+        let mut buf = Buffer::new((4096 + text).next_multiple_of(4096));
+        buf.replace(request).or(Err(xous::Error::InternalError))?;
         buf.lend_mut(self.conn, LauncherOp::Ask.to_u32().unwrap())?;
         let answered = buf.to_original::<AskRequest, _>().or(Err(xous::Error::InternalError))?;
         Ok(match answered.answer {

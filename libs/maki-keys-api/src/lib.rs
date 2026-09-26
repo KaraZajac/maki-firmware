@@ -41,25 +41,64 @@ pub enum KeysOp {
     /// Memory message (mutable lend) with a `Chunk`: a piece of a backup to restore. The last
     /// piece opens it, asks the owner on screen, and adds what maki doesn't have.
     RestoreChunk = 8,
+    /// Memory message (mutable lend) with a `Wallet`: the Bitcoin account for wallet software
+    /// (its zpub and descriptor), once the owner agrees on screen.
+    BtcAccount = 9,
+    /// Memory message (mutable lend) with a `Wallet`: an address. With `show`, it's put on screen
+    /// for the owner to compare with the computer's, and the answer says whether it matched;
+    /// without (the screen's own use), it's just handed back.
+    BtcAddress = 10,
+    /// Memory message (mutable lend) with a `Chunk`: a piece of a PSBT to sign. The last piece
+    /// checks it, shows the owner what it does, and signs it if they say so.
+    BtcSign = 11,
+    /// Memory message (mutable lend) with a `Chunk`: a piece of the PSBT last signed.
+    BtcSigned = 12,
 }
 
-/// Backups travel in pieces this big, here and over USB.
+/// Backups and PSBTs travel in pieces this big, here and over USB.
 pub const CHUNK: usize = 4096;
 /// Bigger than any vault maki could hold, and a bound on what a restore will take in.
 pub const MAX_BACKUP: usize = 512 * 1024;
+/// The biggest PSBT maki takes in.
+pub const MAX_PSBT: usize = 512 * 1024;
 
-/// A piece of a backup, either way. On the way back: `result` (`RESULT_*`), `total`, and for a
-/// finished restore, what it added.
+/// A piece of a backup or a PSBT, either way. On the way back: `result` (`RESULT_*`), `total`,
+/// and for a finished restore, what it added; for a finished signing, the signed PSBT's size.
 #[derive(Debug, Default, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
 pub struct Chunk {
     pub offset: u32,
     pub total: u32,
     pub data: Vec<u8>,
     pub result: u32,
-    /// a restore: whether that was the last piece, and what it added
+    /// a restore or a signing: whether that was the last piece
     pub done: bool,
     pub logins: u32,
     pub codes: u32,
+    /// a PSBT: `NETWORK_*`
+    pub network: u8,
+    /// a PSBT refused (`RESULT_REFUSED`): why, for the computer to show
+    pub reason: String,
+}
+
+/// Bitcoin itself, and its test networks (testnet, signet), which share addresses.
+pub const NETWORK_BITCOIN: u8 = 0;
+pub const NETWORK_TESTNET: u8 = 1;
+
+/// A question about the Bitcoin account, and its answer.
+#[derive(Debug, Default, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
+pub struct Wallet {
+    /// `NETWORK_*`
+    pub network: u8,
+    /// an address: on the change chain or the receiving one, at this index
+    pub change: bool,
+    pub index: u32,
+    /// an address: put it on screen for the owner to compare
+    pub show: bool,
+    pub result: u32,
+    /// the account's zpub, or the address
+    pub text: String,
+    /// the account's output descriptor
+    pub descriptor: String,
 }
 
 /// A recovery phrase, one way or the other, and what became of it (`RESULT_*`).
@@ -117,6 +156,9 @@ pub const RESULT_TIMED_OUT: u32 = 8;
 pub const RESULT_NOT_YOURS: u32 = 9;
 /// No recovery phrase yet, so nothing to back up with.
 pub const RESULT_NO_PHRASE: u32 = 10;
+/// A PSBT maki won't sign (not this wallet's, or missing what it needs to check it): `reason`
+/// says why. The owner wasn't asked.
+pub const RESULT_REFUSED: u32 = 11;
 
 /// Set in the second word of `Status`'s answer when a recovery phrase exists.
 pub const HAS_PHRASE: usize = 1 << 16;
@@ -213,6 +255,38 @@ impl Keys {
     /// A piece of a backup to restore. The last one blocks while the owner decides.
     pub fn restore_chunk(&self, total: u32, offset: u32, data: Vec<u8>) -> Chunk {
         self.chunk_call(KeysOp::RestoreChunk, Chunk { offset, total, data, ..Default::default() })
+    }
+
+    fn wallet_call(&self, op: KeysOp, request: Wallet) -> Wallet {
+        let failed = Wallet { result: RESULT_FAILED, ..Default::default() };
+        let Ok(mut buf) = Buffer::into_buf(request) else { return failed };
+        if buf.lend_mut(self.conn, op.to_u32().unwrap()).is_err() {
+            return failed;
+        }
+        buf.to_original::<Wallet, _>().unwrap_or(failed)
+    }
+
+    /// The Bitcoin account's zpub (`text`) and descriptor, once the owner agrees. Blocks while
+    /// they decide.
+    pub fn btc_account(&self, network: u8) -> Wallet {
+        self.wallet_call(KeysOp::BtcAccount, Wallet { network, ..Default::default() })
+    }
+
+    /// An address (`text`). With `show`, the owner compares it on screen first (blocking while
+    /// they do), and `result` says whether it matched.
+    pub fn btc_address(&self, network: u8, change: bool, index: u32, show: bool) -> Wallet {
+        self.wallet_call(KeysOp::BtcAddress, Wallet { network, change, index, show, ..Default::default() })
+    }
+
+    /// A piece of a PSBT to sign. The last one blocks while the owner reviews it; its answer's
+    /// `total` is the signed PSBT's size, or `reason` says why it was refused.
+    pub fn btc_sign_chunk(&self, network: u8, total: u32, offset: u32, data: Vec<u8>) -> Chunk {
+        self.chunk_call(KeysOp::BtcSign, Chunk { offset, total, data, network, ..Default::default() })
+    }
+
+    /// A piece of the PSBT last signed, from `offset`.
+    pub fn btc_signed_chunk(&self, offset: u32) -> Chunk {
+        self.chunk_call(KeysOp::BtcSigned, Chunk { offset, ..Default::default() })
     }
 
     /// Returns once the secrets are open. For processes that mustn't touch storage before then.

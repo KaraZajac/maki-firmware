@@ -44,11 +44,29 @@ pub struct AskRequest {
     pub detail: String,
     /// Alternatives to pick from; empty for a plain allow or deny.
     pub choices: Vec<String>,
+    /// What there is to check before deciding (a transaction's payments, an address), gone
+    /// through with left and right before the answers.
+    pub pages: Vec<Page>,
+    /// The answers' labels, or empty for "allow" and "deny".
+    pub yes: String,
+    pub no: String,
     pub timeout_s: u32,
     /// Set by the launcher: 0 allowed, 1 denied, 2 timed out.
     pub answer: u32,
     /// Set by the launcher: the choice picked, when allowed.
     pub choice: u32,
+}
+
+/// A page of an ask. The launcher breaks one that doesn't fit onto more screens, repeating the
+/// heading, so nothing on it is ever cut.
+#[derive(Debug, Clone, Default, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
+pub struct Page {
+    /// a few words, at the top: "Send 1 of 2"
+    pub heading: String,
+    /// the thing to check, bold: "0.0007 BTC"
+    pub value: String,
+    /// in fixed-width type across as many lines as it takes: an address
+    pub mono: String,
 }
 
 /// The owner's decision on an `AskRequest`.
