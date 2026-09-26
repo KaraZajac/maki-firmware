@@ -50,6 +50,9 @@ pub(crate) enum VaultOp {
     MenuHome,
     /// maki launcher, for the "Passwords" entry: as `FocusChange`, opening on passwords.
     FocusPasswords,
+    /// maki launcher: the app's menu (`maki_launcher::AppMenu`): fill in the items, or act on the
+    /// one picked
+    AppMenu,
 }
 
 pub fn atime_to_str(req_atime: u64) -> String {

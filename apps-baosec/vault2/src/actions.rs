@@ -85,6 +85,8 @@ pub struct ActionManager {
     rtc_conn: xous::CID,
     // used to type passwords
     usb_dev: usb_bao1x::UsbHid,
+    /// maki: confirmations are asks, answered with the three buttons
+    launcher: maki_launcher::Launcher,
 }
 impl ActionManager {
     pub fn new(
@@ -120,6 +122,7 @@ impl ActionManager {
             #[cfg(feature = "board-baosec")]
             rtc_conn,
             usb_dev: usb_bao1x::UsbHid::new(),
+            launcher: maki_launcher::Launcher::new(&xns).expect("couldn't connect to the launcher"),
         }
     }
 
@@ -690,11 +693,26 @@ impl ActionManager {
     }
 
     pub(crate) fn menu_delete(&mut self, entry: SelectedEntry) {
-        if self.yes_no_approval(&format!(
-            "{}\n{}",
-            t!("vault.delete.confirm", locales::LANG),
-            entry.description
-        )) {
+        // maki: asked on the launcher's screen, allow or deny with the three buttons; a login
+        // shows whose it is
+        let (question, detail) = match entry.mode {
+            VaultMode::Totp => ("Delete this code?", String::new()),
+            VaultMode::Password => (
+                "Delete this login?",
+                self.storage
+                    .borrow()
+                    .get_record::<storage::PasswordRecord>(&storage::ContentKind::Password, &entry.key_guid)
+                    .map(|pw| pw.username)
+                    .unwrap_or_default(),
+            ),
+        };
+        // the emulator skips ahead through idle time: a demo build gives the owner longer
+        let timeout_s = if option_env!("MAKI_DEMO_ASKS").is_some() { 600 } else { 30 };
+        let allowed = matches!(
+            self.launcher.ask(&entry.description, question, &detail, &[], timeout_s),
+            Ok(maki_launcher::Answer::Allowed(_))
+        );
+        if allowed {
             let choice = match entry.mode {
                 VaultMode::Password => Some(storage::ContentKind::Password),
                 VaultMode::Totp => Some(storage::ContentKind::TOTP),
@@ -730,9 +748,8 @@ impl ActionManager {
                 }; */
             }
             match self.storage.borrow_mut().delete(choice, guid) {
-                Ok(_) => {
-                    self.modals.show_notification(t!("vault.completed", locales::LANG), None).ok().unwrap()
-                }
+                // maki: no "completed" notice to dismiss; the list shows it's gone
+                Ok(_) => {}
                 Err(e) => self.report_err(t!("vault.error.internal_error", locales::LANG), Some(e)),
             }
             self.pddb.borrow().sync().ok();
@@ -1102,9 +1119,9 @@ impl ActionManager {
         match self.mode_cache {
             VaultMode::Password => {
                 use std::fmt::Write;
-                self.modals
-                    .dynamic_notification(Some(t!("vault.reloading_database", locales::LANG)), None)
-                    .ok();
+                // maki: no "Reloading database..." notice. It's a system modal, so it came up over
+                // whatever was in front each time the browser saved a login, and left its text
+                // behind; reloading a key's worth of logins is quick.
                 let start = self.tt.elapsed_ms();
                 let mut klen = 0;
                 match self.pddb.borrow().read_dict(VAULT_PASSWORD_DICT, None, Some(256 * 1024)) {
@@ -1212,7 +1229,7 @@ impl ActionManager {
                     }
                 }
                 log::info!("readout took {} ms for {} elements", self.tt.elapsed_ms() - start, klen);
-                self.modals.dynamic_notification_close().ok();
+                // (no notice to close: see above)
             }
             VaultMode::Totp => {
                 self.item_lists.lock().unwrap().clear(self.mode_cache);
@@ -1870,12 +1887,8 @@ fn make_pw_item_from_record(guid: &str, pw: PasswordRecord) -> ListItem {
     // create the list item from the updated entry
     let mut desc = String::with_capacity(256);
     make_pw_name(&pw.description, &pw.username, &mut desc);
-    let mut extra = String::with_capacity(256);
-    let human_time = atime_to_str(pw.atime);
-    extra.push_str(&human_time);
-    extra.push_str("; ");
-    extra.push_str(t!("vault.u2f.appinfo.authcount", locales::LANG));
-    extra.push_str(&pw.count.to_string());
+    // maki: the username, as the list is built on loading (retrieve_db); the screen shows it
+    let extra = pw.username.clone();
     ListItem::new(
         desc.to_string(), // these allocs will be slow, but we do it only once on boot
         extra.to_string(),

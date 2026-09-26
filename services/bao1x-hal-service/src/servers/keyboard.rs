@@ -16,6 +16,48 @@ use utralib::utra::irqarray2;
 use utralib::*;
 use xous::{CID, MessageSender, msg_blocking_scalar_unpack, msg_scalar_unpack};
 use xous_ipc::Buffer;
+#[cfg(feature = "board-baosec")]
+use std::sync::atomic::{AtomicBool, Ordering};
+
+/// Hands keys to whoever is listening: blocking listeners get the first two, async listeners
+/// get them all, four to a message.
+#[cfg(feature = "board-baosec")]
+fn deliver(kc: &[char], listeners: &[(CID, usize)], blocking_listener: &mut Vec<MessageSender>) {
+    if kc.is_empty() {
+        return;
+    }
+    for listener in blocking_listener.drain(..) {
+        xous::return_scalar2(listener, kc[0] as u32 as usize, if kc.len() >= 2 { kc[1] as u32 as usize } else { 0 })
+            .unwrap();
+        if kc.len() > 2 {
+            log::warn!(
+                "Extra keys in multi-hit event went unreported: only 2 of {} total keys reported out of {:?}",
+                kc.len(),
+                kc,
+            );
+        }
+    }
+    for kv in kc.chunks(4) {
+        let mut keys: [char; 4] = ['\u{0000}', '\u{0000}', '\u{0000}', '\u{0000}'];
+        for i in 0..kv.len() {
+            keys[i] = kv[i];
+        }
+        log::trace!("sending keys {:?}", keys);
+        for &(listener_conn, listener_op) in listeners.iter() {
+            xous::try_send_message(
+                listener_conn,
+                xous::Message::new_scalar(
+                    listener_op,
+                    keys[0] as u32 as usize,
+                    keys[1] as u32 as usize,
+                    keys[2] as u32 as usize,
+                    keys[3] as u32 as usize,
+                ),
+            )
+            .ok();
+        }
+    }
+}
 
 #[cfg(feature = "board-baosec")]
 const KEYUP_DELAY_MS: u64 = 80;
@@ -90,7 +132,9 @@ impl KeyTracker {
     /// we don't want to trigger on the middle menu button or the "action" button if they
     /// are held down - we jut want to repeat on the left/right/up/down keys
     pub fn is_repeating(&self, key: KeyPress) -> bool {
-        key == KeyPress::Left || key == KeyPress::Right || key == KeyPress::Up || key == KeyPress::Down
+        // maki: left and right don't repeat. Pressed together they're the menu, and a held pair
+        // mustn't go on to scroll whatever the menu is showing.
+        key == KeyPress::Up || key == KeyPress::Down
     }
 
     /// Processes the current keys pressed, at the current time stamp
@@ -317,6 +361,30 @@ fn keyboard_service() {
 
     #[cfg(feature = "board-baosec")]
     let tt = ticktimer::Ticktimer::new().unwrap();
+
+    // maki: a left or right press waiting to see whether the other side joins it (the menu
+    // chord), and a timer that checks on it every 40 ms while one is waiting
+    #[cfg(feature = "board-baosec")]
+    let mut side_waiting: Option<(KeyPress, u64)> = None;
+    #[cfg(feature = "board-baosec")]
+    let side_pending = std::sync::Arc::new(AtomicBool::new(false));
+    #[cfg(feature = "board-baosec")]
+    std::thread::spawn({
+        let side_pending = side_pending.clone();
+        move || {
+            let tt = ticktimer::Ticktimer::new().unwrap();
+            loop {
+                tt.sleep_ms(40).ok();
+                if side_pending.load(Ordering::SeqCst) {
+                    xous::try_send_message(
+                        kbd_conn,
+                        xous::Message::new_scalar(KeyboardOpcode::PollChord.to_usize().unwrap(), 0, 0, 0, 0),
+                    )
+                    .ok();
+                }
+            }
+        }
+    });
 
     let mut listeners: Vec<(CID, usize)> = Vec::new();
     let mut observer_conn: Option<CID> = None;
@@ -555,12 +623,32 @@ fn keyboard_service() {
                     }
                     last_key_event = now;
 
-                    // key downs come from this register
-                    if kpc_aoint.kpc.r(utra::dkpc::SFR_SR1) != 0 {
+                    // key downs come from this register. maki: take every event waiting, not
+                    // just one: two keys pressed together can arrive on a single interrupt, and
+                    // the menu chord needs to see both at once.
+                    let mut drained = 0;
+                    while kpc_aoint.kpc.r(utra::dkpc::SFR_SR1) != 0 && drained < 16 {
+                        drained += 1;
                         let sr1 = unsafe { kpc_aoint.kpc.base().add(8).read_volatile() };
                         let key_down = bao1x_hal::board::kpc_sr1_to_key(sr1);
                         log::debug!("{:?}", key_down);
-                        if key_down != KeyPress::Invalid && key_down != KeyPress::None {
+                        if key_down == KeyPress::Left || key_down == KeyPress::Right {
+                            // maki: wait a moment to see whether the other side joins it
+                            key_tracker.register_key_down(key_down, now);
+                            match side_waiting.take() {
+                                Some((other, at)) if other != key_down && now.saturating_sub(at) <= CHORD_MS => {
+                                    kc.push(MENU);
+                                    side_pending.store(false, Ordering::SeqCst);
+                                }
+                                earlier => {
+                                    if let Some((k, _)) = earlier {
+                                        kc.push(key_tracker.map_keypress(k));
+                                    }
+                                    side_waiting = Some((key_down, now));
+                                    side_pending.store(true, Ordering::SeqCst);
+                                }
+                            }
+                        } else if key_down != KeyPress::Invalid && key_down != KeyPress::None {
                             key_tracker.register_key_down(key_down, now);
                             kc.push(key_tracker.map_keypress(key_down))
                         }
@@ -584,50 +672,27 @@ fn keyboard_service() {
                     // strip out any null entries that were generated
                     kc.retain(|&c| c != '\u{0000}');
 
-                    // send keys, if any
-                    // handle the blocking listeners
-                    if kc.len() > 0 {
-                        for listener in blocking_listener.drain(..) {
-                            xous::return_scalar2(
-                                listener,
-                                if kc.len() >= 1 { kc[0] as u32 as usize } else { 0 },
-                                if kc.len() >= 2 { kc[1] as u32 as usize } else { 0 },
-                            )
-                            .unwrap();
-                            if kc.len() > 2 {
-                                log::warn!(
-                                    "Extra keys in multi-hit event went unreported: only 2 of {} total keys reported out of {:?}",
-                                    kc.len(),
-                                    &kc,
-                                );
-                            }
-                        }
-                    }
-                    // handle the true async listeners
-                    for kv in kc.chunks(4) {
-                        let mut keys: [char; 4] = ['\u{0000}', '\u{0000}', '\u{0000}', '\u{0000}'];
-                        for i in 0..kv.len() {
-                            keys[i] = kv[i];
-                        }
-                        log::trace!("sending keys {:?}", keys);
-                        for &(listener_conn, listener_op) in listeners.iter() {
-                            xous::try_send_message(
-                                listener_conn,
-                                xous::Message::new_scalar(
-                                    listener_op,
-                                    keys[0] as u32 as usize,
-                                    keys[1] as u32 as usize,
-                                    keys[2] as u32 as usize,
-                                    keys[3] as u32 as usize,
-                                ),
-                            )
-                            .ok();
-                        }
-                    }
+                    deliver(&kc, &listeners, &mut blocking_listener);
                 } else {
                     log::warn!("Unhandled interrupt: {:x}", pending);
                 }
             }),
+            #[cfg(feature = "board-baosec")]
+            Some(KeyboardOpcode::PollChord) => {
+                // maki: a left or right press the other side didn't join in time is just itself
+                match side_waiting {
+                    Some((k, at)) if tt.elapsed_ms().saturating_sub(at) > CHORD_MS => {
+                        side_waiting = None;
+                        side_pending.store(false, Ordering::SeqCst);
+                        let key = key_tracker.map_keypress(k);
+                        deliver(&[key], &listeners, &mut blocking_listener);
+                    }
+                    Some(_) => {}
+                    None => side_pending.store(false, Ordering::SeqCst),
+                }
+            }
+            #[cfg(not(feature = "board-baosec"))]
+            Some(KeyboardOpcode::PollChord) => {}
             Some(KeyboardOpcode::SetOrientation) => msg_scalar_unpack!(msg, _flipped, _, _, _, {
                 #[cfg(feature = "board-baosec")]
                 {

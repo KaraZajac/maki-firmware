@@ -1,0 +1,7 @@
+[package]
+name = "maki-icons"
+version = "0.1.0"
+edition = "2021"
+description = "Icons for maki's home screen"
+
+[dependencies]

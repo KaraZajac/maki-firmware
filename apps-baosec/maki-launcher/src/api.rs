@@ -76,4 +76,19 @@ pub struct AppRegistration {
     pub key_op: u32,
     /// Scalar opcode that receives a `Focus` value on every change.
     pub focus_op: u32,
+    /// Opcode for the app's menu (see `AppMenu`), or 0 for none: its menu is then just Exit.
+    pub menu_op: u32,
+    /// A 64x64 icon in `maki_icons` form, or empty for the app's initial in a square.
+    pub icon: Vec<u32>,
+}
+
+/// An app's menu, which the launcher shows when the owner presses left and right together in it.
+///
+/// The launcher lends this to the app's `menu_op` for the app to fill in, then shows the items
+/// with Exit after them. If the owner picks one of the app's items, the app gets the same
+/// `menu_op` again as a scalar, `arg1` the index, and then its focus back. Exit takes the app to
+/// the background. Fill it in promptly: the launcher waits.
+#[derive(Debug, Clone, Default, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
+pub struct AppMenu {
+    pub items: Vec<String>,
 }

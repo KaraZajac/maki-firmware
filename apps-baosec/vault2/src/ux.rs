@@ -97,6 +97,9 @@ pub struct VaultUi {
 
     /// maki launcher focus; the vault draws only while in front
     focused: bool,
+    /// maki: the entry on screen, an index into the current mode's list. One entry is shown at a
+    /// time; left and right go through them.
+    carousel: usize,
 }
 
 impl VaultUi {
@@ -137,6 +140,7 @@ impl VaultUi {
             last_key_time: now,
             start_hold_time: now,
             focused: false,
+            carousel: 0,
         }
     }
 
@@ -151,56 +155,41 @@ impl VaultUi {
         };
         let full_list = locked_lists.full_list(mode);
         self.display_list.clear();
-        for item in full_list {
+        for item in full_list.iter() {
             self.display_list.add_item(0, &item.name());
         }
+        if self.carousel >= full_list.len() {
+            self.carousel = full_list.len().saturating_sub(1);
+        }
+    }
+
+    /// How many entries the current mode has.
+    pub(crate) fn len(&self) -> usize {
+        let mode = *self.mode.lock().unwrap();
+        self.item_lists.lock().unwrap().full_list(mode).len()
     }
 
     pub(crate) fn update_selected_totp_code(&mut self) -> Option<String> {
         if *self.mode.lock().unwrap() != VaultMode::Totp {
             return None;
         }
-        if self.display_list.len() > 0 {
-            let selected = self.display_list.get_selected();
-            let mut locked_lists = self.item_lists.lock().unwrap();
-            let full_list = locked_lists.full_list(VaultMode::Totp);
-            if let Some(selected_item) = full_list.iter().find(|item| item.name() == selected) {
-                match crate::totp::db_str_to_code(&selected_item.extra) {
-                    Ok(s) => {
-                        self.totp_code = Some(s.clone());
-                        Some(s)
-                    }
-                    _ => {
-                        self.totp_code = None;
-                        None
-                    }
-                }
-            } else {
+        let item = self.get_selected_item()?;
+        match crate::totp::db_str_to_code(&item.extra) {
+            Ok(s) => {
+                self.totp_code = Some(s.clone());
+                Some(s)
+            }
+            _ => {
+                self.totp_code = None;
                 None
             }
-        } else {
-            None
         }
     }
 
     pub(crate) fn get_selected_item(&self) -> Option<ListItem> {
         let mode = *self.mode.lock().unwrap();
-        if self.display_list.len() > 0 {
-            let selected = self.display_list.get_selected();
-            let (_, row) = self.display_list.get_selected_index();
-            let mut locked_lists = self.item_lists.lock().unwrap();
-            let full_list = locked_lists.full_list(mode);
-            // by position first: names repeat (two logins for one site), and a lookup by name
-            // would hand back the first of them whichever row was selected. The display list is
-            // built from this list in order (`refresh_draw_list`); the name check covers the two
-            // drifting apart.
-            match full_list.get(row) {
-                Some(item) if item.name() == selected => Some(item.clone()),
-                _ => full_list.iter().find(|&item| item.name() == selected).cloned(),
-            }
-        } else {
-            None
-        }
+        let mut locked_lists = self.item_lists.lock().unwrap();
+        locked_lists.full_list(mode).get(self.carousel).cloned()
     }
 
     pub(crate) fn selected_entry(&self) -> Option<SelectedEntry> {
@@ -285,146 +274,144 @@ impl VaultUi {
 
     pub fn set_focus(&mut self, focused: bool) { self.focused = focused; }
 
-    /// Redraw the text view onto the screen.
+    /// Redraw the screen: one entry at a time (maki's three-button model). Authenticator shows a
+    /// code, big, with the time it has left; Passwords a site and its username. Left and right go
+    /// through them, the centre types the code or the password into the computer, and left and
+    /// right together open the menu (the launcher's).
     pub fn redraw(&mut self) {
         if !self.focused {
             return;
         }
-        // to reduce locking thrash, we cache a copy of the current mode at the top of redraw.
         let mode_at_entry = (*self.mode.lock().unwrap()).clone();
-
         self.clear_area();
-
+        let n = self.len();
+        if n == 0 {
+            let (title, hint) = match mode_at_entry {
+                VaultMode::Totp => ("No codes yet", "add one from a QR code"),
+                VaultMode::Password => ("No logins yet", "the browser saves them here"),
+            };
+            self.band(28, 18, GlyphStyle::Bold, false, title);
+            self.band(50, 14, GlyphStyle::Small, false, hint);
+            self.band(86, 14, GlyphStyle::Small, false, "left + right: menu");
+            if mode_at_entry == VaultMode::Totp {
+                self.action_bar("scan a QR code", false);
+            }
+            self.gfx.flush().ok();
+            return;
+        }
+        let Some(item) = self.get_selected_item() else {
+            self.gfx.flush().ok();
+            return;
+        };
         match mode_at_entry {
             VaultMode::Totp => {
-                // decorative box around code
-                let mut totp_box = TotpLayout::totp_box();
-                totp_box.border.style = DrawStyle::new(PixelColor::Dark, PixelColor::Light, 1);
-                self.gfx.draw_rounded_rectangle(totp_box).ok();
-
-                // the TOTP code
-                let mut tv = TextView::new(
-                    Gid::dummy(),
-                    TextBounds::CenteredTop(
-                        TotpLayout::totp_box().border.translate_chain(TotpLayout::totp_font_vmargin()),
-                    ),
-                );
-                tv.invert = true;
-                tv.margin = Point::new(0, 0);
-                tv.style = TotpLayout::totp_font();
-                tv.draw_border = false;
-
-                if self.totp_code.is_none() && self.display_list.len() > 0 {
-                    // this handles initial population of the field
+                self.band(2, 16, GlyphStyle::Bold, false, item.name());
+                if self.totp_code.is_none() {
                     self.update_selected_totp_code();
                 }
-
-                match &self.totp_code {
-                    Some(code) => {
-                        write!(tv, "{}", code).ok();
+                let code = match &self.totp_code {
+                    // in two halves, easier to read off
+                    Some(c) if c.len() >= 6 => {
+                        let (a, b) = c.split_at(c.len() / 2);
+                        format!("{} {}", a, b)
                     }
-                    _ => {
-                        write!(tv, "******").ok();
-                    }
-                }
-                self.gfx.draw_textview(&mut tv).expect("couldn't draw text");
+                    Some(c) => c.clone(),
+                    None => String::from("------"),
+                };
+                self.band(26, 34, TotpLayout::totp_font(), false, &code);
 
-                // list of codes to pick from
-                self.display_list.draw(TotpLayout::timer_box().br().y);
-
-                // draw the timer element
-                let mut object_list = ObjectList::new();
-                let mut timer_box = TotpLayout::timer_box();
-                timer_box.style = DrawStyle::new(PixelColor::Dark, PixelColor::Light, 1);
-                object_list.push(ClipObjectType::Rect(timer_box)).unwrap();
-
-                // draw the duration bar
-                let current_time = std::time::SystemTime::now()
+                // the time the code has left
+                let step = item.extra.split(':').nth(2).and_then(|s| s.parse::<u64>().ok()).filter(|&s| s > 0).unwrap_or(30);
+                let now_ms = std::time::SystemTime::now()
                     .duration_since(std::time::SystemTime::UNIX_EPOCH)
-                    .map(|duration| duration.as_millis())
-                    .expect("couldn't get time as millis");
-
-                // manage the epoch as well
-                let epoch = (current_time / (30 * 1000)) as u64;
+                    .map(|d| d.as_millis() as u64)
+                    .unwrap_or(0);
+                let epoch = now_ms / (step * 1000);
                 if self.last_epoch != epoch {
                     self.last_epoch = epoch;
                     self.update_selected_totp_code();
                 }
-
-                let mut timer_remaining = TotpLayout::timer_box();
-                let delta = (current_time - (self.last_epoch as u128 * 30 * 1000)) as isize;
-                let width = timer_remaining.width() as isize;
-                let delta_width = (delta * width * 128) / (30 * 128 * 1000);
-                timer_remaining.br = Point::new(width - delta_width, timer_remaining.br().y);
-                timer_remaining.style = DrawStyle::new(PixelColor::Light, PixelColor::Light, 1);
-                object_list.push(ClipObjectType::Rect(timer_remaining)).unwrap();
-                self.gfx.draw_object_list(object_list).unwrap();
+                let left_ms = step * 1000 - now_ms % (step * 1000);
+                let (x0, x1, y) = (14isize, 114isize, 66isize);
+                let filled = x0 + ((x1 - x0) as u64 * left_ms / (step * 1000)) as isize;
+                self.gfx
+                    .draw_rectangle(Rectangle::new_with_style(
+                        Point::new(x0, y),
+                        Point::new(x1, y + 5),
+                        DrawStyle::new(PixelColor::Dark, PixelColor::Light, 1),
+                    ))
+                    .ok();
+                self.gfx
+                    .draw_rectangle(Rectangle::new_with_style(
+                        Point::new(x0, y),
+                        Point::new(filled, y + 5),
+                        DrawStyle::new(PixelColor::Light, PixelColor::Light, 1),
+                    ))
+                    .ok();
+                self.arrows_at(40, n);
+                self.band(80, 14, GlyphStyle::Small, false, &format!("{} of {}", self.carousel + 1, n));
+                self.action_bar("type code", false);
             }
             VaultMode::Password => {
-                let screensize = self.gfx.screen_size().unwrap();
-                // handle empty database case
-                if self.item_lists.lock().unwrap().filter_len(VaultMode::Password) == 0 {
-                    log::debug!("no items");
-                    let mut box_text = TextView::new(
-                        Gid::dummy(),
-                        TextBounds::CenteredBot(Rectangle::new(
-                            Point::new(0, screensize.y / 2),
-                            Point::new(screensize.x, screensize.y / 2 + self.item_height),
-                        )),
-                    );
-                    box_text.draw_border = false;
-                    box_text.clear_area = true;
-                    box_text.invert = true;
-                    box_text.style = self.style;
-                    write!(box_text, "{}", t!("vault.no_items", locales::LANG)).ok();
-                    self.gfx.draw_textview(&mut box_text).expect("couldn't post empty notification");
-                    self.gfx.flush().ok();
-                    return;
-                }
-
-                // ---- draw the top "detail info" about the selected password ----
-                let mut insert_at = 0;
-                if let Some(entry) = self.get_selected_item() {
-                    log::debug!("rendering entry {:?}", entry);
-                    // draw more data about the selected item
-                    let mut box_text = TextView::new(
-                        Gid::dummy(),
-                        TextBounds::CenteredTop(Rectangle::new(
-                            Point::new(0, insert_at),
-                            Point::new(screensize.x, insert_at + self.item_height * 3),
-                        )),
-                    );
-                    box_text.draw_border = false;
-                    box_text.clear_area = false;
-                    box_text.ellipsis = true;
-                    box_text.style = self.style;
-                    box_text.invert = true;
-                    // line 1
-                    write!(box_text, "{}/{} [{}]", &entry.name(), &entry.extra, entry.count).ok();
-                    self.gfx.draw_textview(&mut box_text).unwrap();
-                    insert_at += box_text.bounds_computed.unwrap().height() as isize;
-                } else {
-                    // draw just the empty rectangle around the top area if nothing is selected
-                    self.gfx
-                        .draw_rectangle(Rectangle::new_coords_with_style(
-                            0,
-                            0,
-                            screensize.x,
-                            self.item_height * 2,
-                            DrawStyle {
-                                fill_color: Some(PixelColor::Dark),
-                                stroke_color: Some(PixelColor::Light),
-                                stroke_width: 2,
-                            },
-                        ))
-                        .ok();
-                    log::error!("Couldn't retrieve password info to render top area");
-                    insert_at = self.item_height * 2;
+                // the list item is "site", and its extra the username (see actions.rs)
+                self.band(18, 18, GlyphStyle::Bold, false, item.name());
+                self.band(40, 16, GlyphStyle::Regular, false, &item.extra);
+                let used = match item.count {
+                    0 => String::from("never used"),
+                    1 => String::from("used once"),
+                    c => format!("used {} times", c),
                 };
-                self.display_list.draw(insert_at);
+                self.band(60, 14, GlyphStyle::Small, false, &used);
+                self.arrows_at(36, n);
+                self.band(80, 14, GlyphStyle::Small, false, &format!("{} of {}", self.carousel + 1, n));
+                self.action_bar("type password", false);
             }
         }
         self.gfx.flush().ok();
+    }
+
+    /// Text centred in a band across the screen, light on dark (`highlight`: dark on light).
+    fn band(&self, top: isize, height: isize, style: GlyphStyle, highlight: bool, s: &str) {
+        let mut tv = TextView::new(
+            Gid::dummy(),
+            TextBounds::CenteredTop(Rectangle::new(Point::new(0, top), Point::new(128, top + height))),
+        );
+        tv.style = style;
+        tv.invert = !highlight;
+        tv.draw_border = false;
+        tv.ellipsis = true;
+        tv.margin = Point::new(2, 0);
+        write!(tv, "{}", s).ok();
+        self.gfx.draw_textview(&mut tv).ok();
+    }
+
+    /// Arrows at the sides, at height `y`, when there's more than one entry to go through.
+    fn arrows_at(&self, y: isize, n: usize) {
+        if n < 2 {
+            return;
+        }
+        for i in 0..6 {
+            let style = DrawStyle::new(PixelColor::Light, PixelColor::Light, 1);
+            self.gfx.draw_line(Line::new_with_style(Point::new(3 + i, y - i), Point::new(3 + i, y + i), style)).ok();
+            self.gfx
+                .draw_line(Line::new_with_style(Point::new(124 - i, y - i), Point::new(124 - i, y + i), style))
+                .ok();
+        }
+    }
+
+    /// The bottom line: what the centre does, boxed, as the launcher's screens show it.
+    fn action_bar(&self, action: &str, _arrows: bool) {
+        let mut tv = TextView::new(
+            Gid::dummy(),
+            TextBounds::CenteredTop(Rectangle::new(Point::new(12, 116), Point::new(116, 128))),
+        );
+        tv.style = GlyphStyle::Small;
+        tv.invert = false;
+        tv.draw_border = false;
+        tv.ellipsis = true;
+        tv.margin = Point::new(3, 0);
+        write!(tv, "{}", action).ok();
+        self.gfx.draw_textview(&mut tv).ok();
     }
 
     /// Returns `true` if in longpress state. Only call this once per key hit input.
@@ -437,46 +424,39 @@ impl VaultUi {
         now - self.start_hold_time > FAST_SCROLL_DELAY_MS
     }
 
+    /// Left (`Up`) and right (`Down`) go through the entries, round and round; `Autotype` types
+    /// the code or the password on screen into the computer.
     pub(crate) fn nav(&mut self, dir: NavDir) {
         let mode_at_entry = (*self.mode.lock().unwrap()).clone();
-        match mode_at_entry {
-            VaultMode::Password => {
-                let increment = if self.manage_longpress() { PAGE_INCREMENT } else { 1 };
-                match dir {
-                    NavDir::Up => {
-                        for _ in 0..increment {
-                            self.display_list.key_action('↑');
-                        }
-                    }
-                    NavDir::Down => {
-                        for _ in 0..increment {
-                            self.display_list.key_action('↓');
-                        }
-                    }
-                    NavDir::Autotype => {
-                        if let Some(item) = self.get_selected_item() {
-                            // print any errors within this function as a panic at this line
-                            self.handle_autotype(item.guid, false).unwrap();
+        let n = self.len();
+        match dir {
+            NavDir::Up if n > 0 => self.carousel = (self.carousel + n - 1) % n,
+            NavDir::Down if n > 0 => self.carousel = (self.carousel + 1) % n,
+            NavDir::Autotype => match mode_at_entry {
+                VaultMode::Password => {
+                    if let Some(item) = self.get_selected_item() {
+                        if let Err(e) = self.handle_autotype(item.guid, false) {
+                            log::warn!("couldn't type the password: {}", e);
                         }
                     }
                 }
-            }
-            VaultMode::Totp => {
-                match dir {
-                    NavDir::Up => {
-                        self.display_list.key_action('↑');
-                    }
-                    NavDir::Down => {
-                        self.display_list.key_action('↓');
-                    }
-                    NavDir::Autotype => {
-                        if let Some(code) = self.update_selected_totp_code() {
-                            // ignore USB errors while sending code
-                            self.usb_dev.send_str(&code).ok();
-                        }
+                VaultMode::Totp => {
+                    if let Some(code) = self.update_selected_totp_code() {
+                        // ignore USB errors while sending code
+                        self.usb_dev.send_str(&code).ok();
                     }
                 }
-                self.totp_code = None;
+            },
+            _ => {}
+        }
+        self.totp_code = None;
+    }
+
+    /// Type the username of the login on screen into the computer.
+    pub(crate) fn type_username(&mut self) {
+        if let Some(item) = self.get_selected_item() {
+            if let Err(e) = self.handle_autotype(item.guid, true) {
+                log::warn!("couldn't type the username: {}", e);
             }
         }
     }

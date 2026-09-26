@@ -85,6 +85,32 @@ pub struct SelectedEntry {
     pub mode: VaultMode,
 }
 
+/// Add a TOTP entry from a QR code, through the camera, and show the codes again.
+fn scan_qr(
+    actions_conn: xous::CID,
+    allow_totp_rendering: &AtomicBool,
+    tt: &ticktimer_server::Ticktimer,
+    vault_ui: &mut VaultUi,
+) {
+    allow_totp_rendering.store(false, Ordering::SeqCst);
+    xous::send_message(
+        actions_conn,
+        xous::Message::new_blocking_scalar(ActionOp::AcquireQr.to_usize().unwrap(), 0, 0, 0, 0),
+    )
+    .ok();
+    // wait a moment for the last frame to clear before redrawing the UI
+    tt.sleep_ms(100).ok();
+    allow_totp_rendering.store(true, Ordering::SeqCst);
+    // reload DB to pickup the new data
+    xous::send_message(
+        actions_conn,
+        xous::Message::new_blocking_scalar(ActionOp::ReloadDb.to_usize().unwrap(), 0, 0, 0, 0),
+    )
+    .ok();
+    vault_ui.refresh_draw_list();
+    vault_ui.redraw();
+}
+
 /// Show one kind of record: TOTP codes, which tick, or passwords.
 fn switch_mode(
     to: VaultMode,
@@ -148,9 +174,19 @@ fn main() -> ! {
     // Two ways in from the home screen, one per kind of record: same keys, and each entry's own
     // focus message says which to open on.
     let launcher = maki_launcher::Launcher::new(&xns).expect("couldn't connect to the launcher");
-    for (name, focus_op) in [("Authenticator", VaultOp::FocusChange), ("Passwords", VaultOp::FocusPasswords)] {
+    for (name, focus_op, icon) in [
+        ("Authenticator", VaultOp::FocusChange, &maki_icons::AUTHENTICATOR),
+        ("Passwords", VaultOp::FocusPasswords, &maki_icons::PASSWORDS),
+    ] {
         launcher
-            .register(name, SERVER_NAME_VAULT2, VaultOp::KeyPress.to_u32().unwrap(), focus_op.to_u32().unwrap())
+            .register(
+                name,
+                SERVER_NAME_VAULT2,
+                VaultOp::KeyPress.to_u32().unwrap(),
+                focus_op.to_u32().unwrap(),
+                VaultOp::AppMenu.to_u32().unwrap(),
+                Some(icon),
+            )
             .expect("couldn't register with the launcher");
     }
 
@@ -436,7 +472,7 @@ fn main() -> ! {
         .expect("couldn't start the pumper");
     let mut menu_active = false;
     loop {
-        let msg = xous::receive_message(sid).unwrap();
+        let mut msg = xous::receive_message(sid).unwrap();
         log::trace!("Got message: {:?}", msg.body.id());
         match FromPrimitive::from_usize(msg.body.id()) {
             Some(VaultOp::Redraw) => {
@@ -481,74 +517,60 @@ fn main() -> ! {
                 vault_ui.redraw();
             }
             Some(VaultOp::KeyPress) => xous::msg_scalar_unpack!(msg, k1, _k2, _k3, _k4, {
+                // maki's three buttons: left and right go through the entries, the centre types the
+                // code or the password on screen. The jog dial does the same, for anyone who likes it.
                 let k = char::from_u32(k1 as u32).unwrap_or('\u{0000}');
                 log::debug!("key {:x}", k1);
-                if menu_active {
-                    menu_mgr.key_press(k);
-                } else {
-                    match k {
-                        '∴' => {
-                            allow_totp_rendering.store(false, Ordering::SeqCst);
-                            menu_mgr.redraw();
-                            menu_active = true;
-                        }
-                        '↓' => {
-                            vault_ui.nav(NavDir::Down);
-                            vault_ui.redraw();
-                        }
-                        '↑' => {
-                            vault_ui.nav(NavDir::Up);
-                            vault_ui.redraw();
-                        }
-                        '←' => {
+                match k {
+                    '←' | '↑' => {
+                        vault_ui.nav(NavDir::Up);
+                        vault_ui.redraw();
+                    }
+                    '→' | '↓' => {
+                        vault_ui.nav(NavDir::Down);
+                        vault_ui.redraw();
+                    }
+                    '🔥' | '∴' => {
+                        if vault_ui.len() > 0 {
                             vault_ui.nav(NavDir::Autotype);
                             vault_ui.redraw();
+                        } else if *mode.lock().unwrap() == VaultMode::Totp {
+                            scan_qr(actions_conn, &allow_totp_rendering, &tt, &mut vault_ui);
                         }
-                        '→' => {
-                            let current = *mode.lock().unwrap();
-                            let to = if current == VaultMode::Password { VaultMode::Totp } else { VaultMode::Password };
-                            switch_mode(to, &mode, actions_conn, pump_conn, &allow_totp_rendering, &mut vault_ui);
-                        }
-                        '🔥' => {
+                    }
+                    _ => log::trace!("unhandled key {}", k),
+                }
+            }),
+            Some(VaultOp::AppMenu) => {
+                let current = *mode.lock().unwrap();
+                let empty = vault_ui.len() == 0;
+                let items: &[&str] = match (current, empty) {
+                    (VaultMode::Totp, true) => &["Add from QR code"],
+                    (VaultMode::Totp, false) => &["Add from QR code", "Delete this code"],
+                    (VaultMode::Password, true) => &[],
+                    (VaultMode::Password, false) => &["Type username", "Delete this login"],
+                };
+                match maki_launcher::MenuMessage::of(&msg) {
+                    Some(maki_launcher::MenuMessage::Fill) => maki_launcher::MenuMessage::fill(&mut msg, items),
+                    Some(maki_launcher::MenuMessage::Picked(i)) => match items.get(i) {
+                        Some(&"Add from QR code") => scan_qr(actions_conn, &allow_totp_rendering, &tt, &mut vault_ui),
+                        Some(&"Type username") => vault_ui.type_username(),
+                        Some(&"Delete this code") | Some(&"Delete this login") => {
                             allow_totp_rendering.store(false, Ordering::SeqCst);
-                            xous::send_message(
-                                actions_conn,
-                                xous::Message::new_blocking_scalar(
-                                    ActionOp::AcquireQr.to_usize().unwrap(),
-                                    0,
-                                    0,
-                                    0,
-                                    0,
-                                ),
-                            )
-                            .ok();
-                            // wait a moment for the last frame to clear before redrawing the UI
-                            tt.sleep_ms(100).ok();
-                            allow_totp_rendering.store(true, Ordering::SeqCst);
-                            // reload DB to pickup the new data
-                            xous::send_message(
-                                actions_conn,
-                                xous::Message::new_blocking_scalar(
-                                    ActionOp::ReloadDb.to_usize().unwrap(),
-                                    0,
-                                    0,
-                                    0,
-                                    0,
-                                ),
-                            )
-                            .ok();
+                            if let Some(entry) = vault_ui.selected_entry() {
+                                let buf = Buffer::into_buf(entry).expect("IPC error");
+                                buf.lend(actions_conn, ActionOp::MenuDeleteStage2.to_u32().unwrap())
+                                    .expect("messaging error");
+                            }
+                            allow_totp_rendering.store(current == VaultMode::Totp, Ordering::SeqCst);
                             vault_ui.refresh_draw_list();
                             vault_ui.redraw();
                         }
-                        '⏯' => {
-                            log::info!("accel event");
-                        }
-                        _ => {
-                            log::trace!("unhandled key {}", k);
-                        }
-                    }
+                        _ => {}
+                    },
+                    None => {}
                 }
-            }),
+            }
             Some(VaultOp::MenuEditStage1) => {
                 // stage 1 happens here because the filtered list and selection entry are in the responsive UX
                 // section.

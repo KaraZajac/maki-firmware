@@ -95,7 +95,16 @@ pub enum KeyboardOpcode {
     /// change orientation, and thus key mapping of directional keys. Behavior
     /// depends on the hardware type selected.
     SetOrientation = 128,
+
+    /// maki: the keyboard service's own timer, while a left or right press waits to see whether
+    /// the other side joins it (`MENU`)
+    PollChord = 13,
 }
+
+/// maki: left and right pressed together, within `CHORD_MS` of each other: the menu. Left and
+/// right on their own are sent once that window has passed, so a chord never also moves.
+pub const MENU: char = '☰';
+pub const CHORD_MS: u64 = 150;
 
 // this structure is used to register a keyboard listener.
 #[cfg(feature = "std")]

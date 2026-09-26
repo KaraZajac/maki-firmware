@@ -4163,12 +4163,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "maki-icons"
+version = "0.1.0"
+
+[[package]]
 name = "maki-launcher"
 version = "0.1.0"
 dependencies = [
+ "bao1x-api 0.1.4",
  "bao1x-hal-service",
  "blitstr2",
  "log",
+ "maki-icons",
  "maki-proto",
  "num-derive 0.4.2",
  "num-traits",
@@ -7696,6 +7702,7 @@ dependencies = [
  "keystore",
  "locales",
  "log",
+ "maki-icons",
  "maki-launcher",
  "maki-proto",
  "maki-vault-api",

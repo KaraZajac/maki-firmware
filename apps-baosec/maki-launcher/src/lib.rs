@@ -3,6 +3,10 @@
 //! An app registers once at startup and starts in the background. From then on it receives
 //! key presses only while it is in front, plus a `Focus` scalar on every change. An app in the
 //! background must not draw. Nothing enforces that yet; it belongs with the app-isolation work.
+//!
+//! Apps follow the three-button model (ARCHITECTURE.md): left and right move, the centre (`🔥`)
+//! confirms what the screen offers. Left and right pressed together never reach an app: the
+//! launcher shows the app's menu (`AppMenu`) instead, with Exit, which is how every app is left.
 
 pub mod api;
 pub use api::*;
@@ -20,9 +24,25 @@ impl Launcher {
         Ok(Launcher { conn })
     }
 
-    /// Put this app on the home screen.
-    pub fn register(&self, name: &str, server_name: &str, key_op: u32, focus_op: u32) -> Result<(), xous::Error> {
-        let reg = AppRegistration { name: name.into(), server_name: server_name.into(), key_op, focus_op };
+    /// Put this app on the home screen. `menu_op` is 0 for an app with no menu of its own; the
+    /// icon is 64x64 in `maki_icons` form.
+    pub fn register(
+        &self,
+        name: &str,
+        server_name: &str,
+        key_op: u32,
+        focus_op: u32,
+        menu_op: u32,
+        icon: Option<&[u32; 128]>,
+    ) -> Result<(), xous::Error> {
+        let reg = AppRegistration {
+            name: name.into(),
+            server_name: server_name.into(),
+            key_op,
+            focus_op,
+            menu_op,
+            icon: icon.map(|i| i.to_vec()).unwrap_or_default(),
+        };
         let buf = Buffer::into_buf(reg).or(Err(xous::Error::InternalError))?;
         buf.lend(self.conn, LauncherOp::Register.to_u32().unwrap()).map(|_| ())
     }
@@ -83,5 +103,30 @@ impl Launcher {
             xous::Message::new_scalar(LauncherOp::Home.to_usize().unwrap(), 0, 0, 0, 0),
         )
         .map(|_| ())
+    }
+}
+
+/// For an app's `menu_op` handler: the launcher is either asking for the menu's items (fill them
+/// in with `items`) or saying which one the owner picked.
+pub enum MenuMessage {
+    Fill,
+    Picked(usize),
+}
+
+impl MenuMessage {
+    pub fn of(msg: &xous::MessageEnvelope) -> Option<MenuMessage> {
+        if msg.body.memory_message().is_some() {
+            Some(MenuMessage::Fill)
+        } else {
+            msg.body.scalar_message().map(|s| MenuMessage::Picked(s.arg1))
+        }
+    }
+
+    /// Answer a `Fill` with the app's items. The launcher adds Exit after them.
+    pub fn fill(msg: &mut xous::MessageEnvelope, items: &[&str]) {
+        if let Some(mem) = msg.body.memory_message_mut() {
+            let mut buffer = unsafe { Buffer::from_memory_message_mut(mem) };
+            buffer.replace(AppMenu { items: items.iter().map(|s| s.to_string()).collect() }).ok();
+        }
     }
 }

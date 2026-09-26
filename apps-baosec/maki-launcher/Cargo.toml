@@ -21,6 +21,8 @@ pddb = { path = "../../services/pddb" }
 ux-api = { path = "../../libs/ux-api" }
 blitstr2 = { path = "../../libs/blitstr2" }
 maki-proto = { path = "../../libs/maki-proto" }
+maki-icons = { path = "../../libs/maki-icons" }
+bao1x-api = { path = "../../libs/bao1x-api" }
 bao1x-hal-service = { path = "../../services/bao1x-hal-service", optional = true }
 
 [features]
