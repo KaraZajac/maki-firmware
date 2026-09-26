@@ -14,5 +14,5 @@ zeroize = "1.8.1"
 
 [dev-dependencies]
 maki-seed = { path = "../maki-seed" }
-bitcoin = "0.32"
+bitcoin = { version = "0.32", features = ["bitcoinconsensus"] }
 miniscript = "12"

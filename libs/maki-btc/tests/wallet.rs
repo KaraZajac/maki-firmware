@@ -542,3 +542,25 @@ fn the_fixtures_are_current_and_rust_bitcoin_agrees() {
     theirs.sign(&f.master, &f.secp).unwrap();
     assert_eq!(BPsbt::deserialize(&signed).unwrap(), theirs);
 }
+
+#[test]
+fn bitcoin_cores_script_interpreter_accepts_what_maki_signs() {
+    // libbitcoinconsensus: Bitcoin Core's own consensus code, built from source
+    let f = Fixture::new();
+    let mut psbt = f.ours();
+    wallet::sign(&mut psbt, &f.account).unwrap();
+    let mut signed = BPsbt::deserialize(&psbt.serialize()).unwrap();
+    for input in signed.inputs.iter_mut() {
+        let (pk, sig) = input.partial_sigs.pop_first().unwrap();
+        input.final_script_witness = Some(Witness::p2wpkh(&sig, &pk.inner));
+    }
+    let spent: Vec<TxOut> = signed.inputs.iter().map(|i| i.witness_utxo.clone().unwrap()).collect();
+    let prevouts: Vec<OutPoint> = signed.unsigned_tx.input.iter().map(|i| i.previous_output).collect();
+    let tx = signed.extract_tx().unwrap();
+    tx.verify(|outpoint| prevouts.iter().position(|p| p == outpoint).map(|i| spent[i].clone())).unwrap();
+
+    // and a signature over anything else is refused: the check is real
+    let mut tampered = tx.clone();
+    tampered.output[0].value = Amount::from_sat(69_999);
+    assert!(tampered.verify(|outpoint| prevouts.iter().position(|p| p == outpoint).map(|i| spent[i].clone())).is_err());
+}
