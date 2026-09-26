@@ -10,7 +10,7 @@ use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 
-use maki_proto::device::{reply, Approval, Ask, Device, Handled, Platform, TimeState};
+use maki_proto::device::{reply, Approval, Ask, Backup, Device, Handled, Platform, TimeState};
 use maki_proto::frame::{self, Deframer};
 use num_traits::ToPrimitive;
 
@@ -53,13 +53,45 @@ fn unavailable(ask: &Ask) -> (u8, Vec<u8>) { refused(ask, Approval::Unavailable)
 
 fn locked(ask: &Ask) -> (u8, Vec<u8>) { refused(ask, Approval::Locked) }
 
-/// Takes requests for the owner to the vault, one at a time, and sends each answer back with
-/// its request's id. Connects to the vault at boot: the vault accepts one connection only.
-fn vault_worker(asks: mpsc::Receiver<(u16, Ask)>, waiting: Arc<AtomicU32>, send_lock: Arc<Mutex<()>>) {
+/// What the worker does: a request for the owner, or the last piece of a restore (which asks
+/// the owner too).
+enum Work {
+    Ask(u16, Ask),
+    Restore { id: u16, total: u32, offset: u32, data: Vec<u8> },
+}
+
+/// maki-keys' answers, as the protocol's.
+fn approval(result: u32) -> Approval {
+    match result {
+        maki_keys::RESULT_OK => Approval::Approved,
+        maki_keys::RESULT_DENIED => Approval::Denied,
+        maki_keys::RESULT_TIMED_OUT => Approval::TimedOut,
+        maki_keys::RESULT_NOT_NOW => Approval::Locked,
+        maki_keys::RESULT_NOT_YOURS => Approval::NotYours,
+        maki_keys::RESULT_NO_PHRASE => Approval::NoPhrase,
+        _ => Approval::Unavailable,
+    }
+}
+
+/// Takes requests for the owner to the vault (and restores to maki-keys), one at a time, and
+/// sends each answer back with its request's id. Connects to the vault at boot: the vault
+/// accepts one connection only.
+fn vault_worker(work: mpsc::Receiver<Work>, waiting: Arc<AtomicU32>, send_lock: Arc<Mutex<()>>) {
     let xns = xous_names::XousNames::new().unwrap();
     let vault = maki_vault_api::VaultLink::new(&xns).expect("couldn't connect to the vault");
+    let keys = maki_keys::Keys::new(&xns).expect("couldn't connect to maki-keys");
     let usb = usb_bao1x::UsbHid::new();
-    for (id, ask) in asks {
+    for item in work {
+        let (id, ask) = match item {
+            Work::Ask(id, ask) => (id, ask),
+            Work::Restore { id, total, offset, data } => {
+                let c = keys.restore_chunk(total, offset, data);
+                let (kind, body) = reply::restore_piece(true, approval(c.result), c.logins as u16, c.codes as u16);
+                waiting.fetch_sub(1, Ordering::SeqCst);
+                send(&usb, &send_lock, &frame::encode(kind, id, &body));
+                continue;
+            }
+        };
         let (kind, body) = match &ask {
             Ask::Login { site } => {
                 let (approval, username, password) = vault.login(site);
@@ -168,7 +200,7 @@ fn main() -> ! {
     let keys = maki_keys::Keys::new(&xns).expect("couldn't connect to maki-keys");
     let send_lock = Arc::new(Mutex::new(()));
     let waiting = Arc::new(AtomicU32::new(0));
-    let (to_vault, asks) = mpsc::channel::<(u16, Ask)>();
+    let (to_vault, asks) = mpsc::channel::<Work>();
     std::thread::spawn({
         let (waiting, send_lock) = (waiting.clone(), send_lock.clone());
         move || vault_worker(asks, waiting, send_lock)
@@ -191,7 +223,7 @@ fn main() -> ! {
         ];
         for (i, ask) in demo.into_iter().enumerate() {
             waiting.fetch_add(1, Ordering::SeqCst);
-            to_vault.send((0xd000 + i as u16, ask)).ok();
+            to_vault.send(Work::Ask(0xd000 + i as u16, ask)).ok();
         }
     }
 
@@ -210,6 +242,29 @@ fn main() -> ! {
                     }
                     let (kind, body) = match device.handle(&packet) {
                         Handled::Reply(kind, body) => (kind, body),
+                        // the backup: maki-keys seals it, and says if maki is locked or has no phrase
+                        Handled::Backup(Backup::Get { offset }) => {
+                            let c = keys.backup_chunk(offset);
+                            reply::backup_piece(approval(c.result), c.total, offset, &c.data)
+                        }
+                        Handled::Backup(Backup::Put { total, offset, data }) => {
+                            if offset as usize + data.len() < total as usize {
+                                let c = keys.restore_chunk(total, offset, data);
+                                reply::restore_piece(c.done, approval(c.result), 0, 0)
+                            } else if waiting.fetch_add(1, Ordering::SeqCst) >= MAX_WAITING_ASKS {
+                                waiting.fetch_sub(1, Ordering::SeqCst);
+                                reply::restore_piece(true, Approval::Unavailable, 0, 0)
+                            } else {
+                                // the last piece asks the owner: the worker answers
+                                match to_vault.send(Work::Restore { id: packet.id, total, offset, data }) {
+                                    Ok(()) => continue,
+                                    Err(_) => {
+                                        waiting.fetch_sub(1, Ordering::SeqCst);
+                                        reply::restore_piece(true, Approval::Unavailable, 0, 0)
+                                    }
+                                }
+                            }
+                        }
                         // nothing is asked of a maki that hasn't had its PIN
                         Handled::Ask(ask) if keys.status().0 != maki_keys::State::Unlocked => locked(&ask),
                         Handled::Ask(ask) => {
@@ -218,14 +273,15 @@ fn main() -> ! {
                                 log::warn!("too many requests waiting on the owner");
                                 unavailable(&ask)
                             } else {
-                                match to_vault.send((packet.id, ask)) {
+                                match to_vault.send(Work::Ask(packet.id, ask)) {
                                     // the worker answers, once the owner decides
                                     Ok(()) => continue,
-                                    Err(mpsc::SendError((_, ask))) => {
+                                    Err(mpsc::SendError(Work::Ask(_, ask))) => {
                                         log::error!("the vault worker is gone");
                                         waiting.fetch_sub(1, Ordering::SeqCst);
                                         unavailable(&ask)
                                     }
+                                    Err(_) => unreachable!(),
                                 }
                             }
                         }

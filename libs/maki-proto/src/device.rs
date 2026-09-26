@@ -107,7 +107,21 @@ pub enum Handled {
     /// Needs the owner. The glue asks the vault, which shows the request on maki's screen, and
     /// answers later with the matching builder in [`reply`], echoing the request's id.
     Ask(Ask),
+    /// A piece of the backup, either way: the glue passes it to maki-keys and answers with
+    /// [`reply::backup_piece`] or [`reply::restore_piece`].
+    Backup(Backup),
 }
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Backup {
+    Get { offset: u32 },
+    Put { total: u32, offset: u32, data: Vec<u8> },
+}
+
+/// Pieces of a backup are at most this big.
+pub const BACKUP_PIECE: usize = 4096;
+/// The biggest backup a restore takes in.
+pub const MAX_BACKUP: u32 = 512 * 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Ask {
@@ -133,6 +147,10 @@ pub enum Approval {
     ClockNotVerified = 5,
     /// maki is waiting for its PIN; nothing is asked before then.
     Locked = 6,
+    /// A backup this maki's recovery phrase can't open: another maki's, or damaged.
+    NotYours = 7,
+    /// No recovery phrase yet: nothing to back up with, or open a backup with.
+    NoPhrase = 8,
 }
 
 impl Approval {
@@ -145,6 +163,8 @@ impl Approval {
             4 => Approval::Unavailable,
             5 => Approval::ClockNotVerified,
             6 => Approval::Locked,
+            7 => Approval::NotYours,
+            8 => Approval::NoPhrase,
             _ => return None,
         })
     }
@@ -168,6 +188,20 @@ pub mod reply {
 
     pub fn save(approval: Approval) -> (u8, Vec<u8>) {
         (kind::SAVE_LOGIN | kind::REPLY, Writer::new().u8(approval as u8).finish())
+    }
+
+    /// A piece of the backup: `status` is `Approved` with the piece, or why not (`Locked`,
+    /// `NoPhrase`, `Unavailable`) with nothing.
+    pub fn backup_piece(status: Approval, total: u32, offset: u32, data: &[u8]) -> (u8, Vec<u8>) {
+        let data = if status == Approval::Approved { data } else { &[] };
+        (kind::BACKUP_GET | kind::REPLY, Writer::new().u8(status as u8).u32(total).u32(offset).bytes16(data).finish())
+    }
+
+    /// A restore piece taken in (`done` false), or the restore's outcome (`done` true): the
+    /// approval, and what it added.
+    pub fn restore_piece(done: bool, status: Approval, logins: u16, codes: u16) -> (u8, Vec<u8>) {
+        let (logins, codes) = if status == Approval::Approved { (logins, codes) } else { (0, 0) };
+        (kind::BACKUP_PUT | kind::REPLY, Writer::new().u8(done as u8).u8(status as u8).u16(logins).u16(codes).finish())
     }
 }
 
@@ -233,6 +267,7 @@ impl<P: Platform> Device<P> {
             kind::TIME_PROOF => self.time_proof(body),
             kind::TIME_UNVERIFIED => self.time_unverified(body),
             kind::GET_LOGIN | kind::GET_TOTP | kind::SAVE_LOGIN => return self.ask(packet.kind, body),
+            kind::BACKUP_GET | kind::BACKUP_PUT => return Self::backup(packet.kind, body),
             _ => Ok(error(ErrorCode::UnknownKind, "unknown message kind")),
         };
         let (kind, body) = result.unwrap_or_else(malformed);
@@ -277,6 +312,32 @@ impl<P: Platform> Device<P> {
                 Handled::Reply(k, b)
             }
             Ok((_, ask)) => Handled::Ask(ask),
+        }
+    }
+
+    fn backup(kind: u8, body: &[u8]) -> Handled {
+        let parsed = (|| {
+            let mut r = Reader::new(body);
+            let request = if kind == kind::BACKUP_GET {
+                Backup::Get { offset: r.u32()? }
+            } else {
+                Backup::Put { total: r.u32()?, offset: r.u32()?, data: r.bytes16()?.to_vec() }
+            };
+            r.end()?;
+            Ok::<_, Truncated>(request)
+        })();
+        match parsed {
+            Err(t) => {
+                let (k, b) = malformed(t);
+                Handled::Reply(k, b)
+            }
+            Ok(Backup::Put { total, offset, ref data })
+                if total > MAX_BACKUP || data.len() > BACKUP_PIECE || offset as u64 + data.len() as u64 > total as u64 =>
+            {
+                let (k, b) = error(ErrorCode::BadArgument, "restore piece out of range");
+                Handled::Reply(k, b)
+            }
+            Ok(request) => Handled::Backup(request),
         }
     }
 

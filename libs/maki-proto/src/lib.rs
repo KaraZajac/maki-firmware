@@ -20,6 +20,10 @@ pub mod kind {
     pub const GET_LOGIN: u8 = 0x10;
     pub const GET_TOTP: u8 = 0x11;
     pub const SAVE_LOGIN: u8 = 0x12;
+    /// A piece of maki's backup (encrypted with a key from the recovery phrase).
+    pub const BACKUP_GET: u8 = 0x20;
+    /// A piece of a backup to restore; the last is answered once the owner decides.
+    pub const BACKUP_PUT: u8 = 0x21;
     pub const REPLY: u8 = 0x80;
     pub const ERROR: u8 = 0x7f;
 }

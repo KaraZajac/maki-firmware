@@ -127,6 +127,7 @@ members = [
   "libs/maki-vault-api",
   "libs/maki-icons",
   "services/maki-keys",
+  "libs/maki-keys-api",
   "libs/maki-seed",
   "services/maki-link",
   # Defcon 34 badge

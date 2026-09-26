@@ -12,7 +12,7 @@ use std::io::{Read, Write};
 
 use aes_gcm_siv::aead::{Aead, KeyInit, Payload};
 use aes_gcm_siv::{Aes256GcmSiv, Nonce};
-use maki_keys::*;
+use maki_keys_api::*;
 use num_traits::FromPrimitive;
 use pddb::{BasisRetentionPolicy, Pddb, PDDB_DEFAULT_SYSTEM_BASIS};
 use xous_ipc::Buffer;
@@ -24,6 +24,120 @@ const KEY_TRIES: &str = "tries";
 /// In the secret basis: the recovery phrase's entropy.
 const SEED_DICT: &str = "maki.seed";
 const KEY_ENTROPY: &str = "entropy";
+
+/// What a backup holds: the vault's dictionaries, record by record, as the vault stores them.
+/// (Passkeys will join when they come from the phrase.)
+const BACKUP_DICTS: [&str; 2] = ["vault.passwords", "vault.totp"];
+const BACKUP_MAGIC: &[u8; 8] = b"MAKIBAK1";
+const BACKUP_HEADER: &[u8] = b"maki backup 1\n";
+
+/// A backup's plaintext: each record with the dictionary it came from.
+struct Entry {
+    dict: u8,
+    key: String,
+    value: Vec<u8>,
+}
+
+fn gather(store: &Store, basis: &str) -> Vec<u8> {
+    let mut out = BACKUP_HEADER.to_vec();
+    for (id, dict) in BACKUP_DICTS.iter().enumerate() {
+        let Ok(keys) = store.pddb.list_keys(dict, Some(basis)) else { continue };
+        for key in keys {
+            let Ok(mut k) = store.pddb.get(dict, &key, Some(basis), false, false, None, None::<fn()>) else { continue };
+            let mut value = Vec::new();
+            if k.read_to_end(&mut value).is_err() {
+                continue;
+            }
+            out.push(id as u8);
+            out.extend_from_slice(&(key.len() as u16).to_le_bytes());
+            out.extend_from_slice(key.as_bytes());
+            out.extend_from_slice(&(value.len() as u32).to_le_bytes());
+            out.extend_from_slice(&value);
+            value.zeroize();
+        }
+    }
+    out
+}
+
+fn parse(plain: &[u8]) -> Option<Vec<Entry>> {
+    let mut rest = plain.strip_prefix(BACKUP_HEADER)?;
+    let mut entries = Vec::new();
+    let mut take = |n: usize, rest: &mut &[u8]| -> Option<Vec<u8>> {
+        let (a, b) = (rest.get(..n)?, rest.get(n..)?);
+        *rest = b;
+        Some(a.to_vec())
+    };
+    while !rest.is_empty() {
+        let dict = take(1, &mut rest)?[0];
+        let klen = u16::from_le_bytes(take(2, &mut rest)?.try_into().ok()?) as usize;
+        let key = String::from_utf8(take(klen, &mut rest)?).ok()?;
+        let vlen = u32::from_le_bytes(take(4, &mut rest)?.try_into().ok()?) as usize;
+        let value = take(vlen, &mut rest)?;
+        if (dict as usize) < BACKUP_DICTS.len() {
+            entries.push(Entry { dict, key, value });
+        }
+    }
+    Some(entries)
+}
+
+fn seal(key: &[u8; 32], plain: &[u8]) -> Option<Vec<u8>> {
+    let nonce: [u8; 12] = random();
+    let cipher = Aes256GcmSiv::new_from_slice(key).ok()?;
+    let sealed = cipher.encrypt(Nonce::from_slice(&nonce), Payload { msg: plain, aad: BACKUP_MAGIC }).ok()?;
+    let mut out = BACKUP_MAGIC.to_vec();
+    out.extend_from_slice(&nonce);
+    out.extend_from_slice(&sealed);
+    Some(out)
+}
+
+fn open(key: &[u8; 32], blob: &[u8]) -> Option<Vec<u8>> {
+    let rest = blob.strip_prefix(BACKUP_MAGIC)?;
+    let (nonce, sealed) = (rest.get(..12)?, rest.get(12..)?);
+    let cipher = Aes256GcmSiv::new_from_slice(key).ok()?;
+    cipher.decrypt(Nonce::from_slice(nonce), Payload { msg: sealed, aad: BACKUP_MAGIC }).ok()
+}
+
+/// The backup key, from the phrase: words, seed, then HKDF (maki_seed::backup_key).
+fn backup_key(store: &Store, basis: &str) -> Option<[u8; 32]> {
+    let mut entropy = store.entropy(basis)?;
+    let words = maki_seed::to_words(&entropy);
+    entropy.zeroize();
+    let mut seed = maki_seed::seed(&words, "");
+    let key = maki_seed::backup_key(&seed);
+    seed.zeroize();
+    Some(key)
+}
+
+/// Add the records maki doesn't have; returns (logins, codes) added.
+fn restore(store: &Store, basis: &str, entries: &[Entry]) -> (u32, u32) {
+    let (mut logins, mut codes) = (0, 0);
+    for e in entries {
+        let dict = BACKUP_DICTS[e.dict as usize];
+        if store.pddb.get(dict, &e.key, Some(basis), false, false, None, None::<fn()>).is_ok() {
+            continue; // maki has it already: keep maki's
+        }
+        let Ok(mut k) = store.pddb.get(dict, &e.key, Some(basis), true, true, Some(e.value.len()), None::<fn()>) else {
+            continue;
+        };
+        if k.write_all(&e.value).is_ok() {
+            if e.dict == 0 {
+                logins += 1;
+            } else {
+                codes += 1;
+            }
+        }
+    }
+    store.pddb.sync().ok();
+    (logins, codes)
+}
+
+/// What a restore would add, before asking.
+fn missing(store: &Store, basis: &str, entries: &[Entry]) -> (u32, u32) {
+    entries
+        .iter()
+        .filter(|e| store.pddb.get(BACKUP_DICTS[e.dict as usize], &e.key, Some(basis), false, false, None, None::<fn()>).is_err())
+        .fold((0, 0), |(l, c), e| if e.dict == 0 { (l + 1, c) } else { (l, c + 1) })
+}
 /// PBKDF2-HMAC-SHA256 rounds for the PIN. Around a second on the badge is the aim: slow for
 /// guessing, tolerable at boot. To be measured on hardware; it's stored, so it can change.
 const ROUNDS: u32 = 20_000;
@@ -225,6 +339,10 @@ fn main() -> ! {
     log::info!("starting {:?}", state);
     // the screen (the launcher), which alone may use the PIN and the phrase
     let mut screen: Option<xous::PID> = None;
+    // the backup being read out, and one being restored
+    let mut sealed: Option<Vec<u8>> = None;
+    let mut incoming: Vec<u8> = Vec::new();
+    let mut incoming_total: u32 = 0;
 
     loop {
         let mut msg = xous::receive_message(sid).unwrap();
@@ -236,6 +354,126 @@ fn main() -> ! {
                     && store.lock().map(|l| store.entropy(&l.basis).is_some()).unwrap_or(false);
                 let rest = tries_left as usize | if has_phrase { HAS_PHRASE } else { 0 };
                 xous::return_scalar2(msg.sender, state as usize, rest).ok();
+            }
+            Some(KeysOp::BackupChunk) => {
+                let Some(mem) = msg.body.memory_message_mut() else { continue };
+                let mut buffer = unsafe { Buffer::from_memory_message_mut(mem) };
+                let Ok(mut req) = buffer.to_original::<Chunk, _>() else { continue };
+                req.data.clear();
+                req.result = match (state, store.lock()) {
+                    (State::Unlocked, Some(lock)) => {
+                        if req.offset == 0 || sealed.is_none() {
+                            sealed = backup_key(&store, &lock.basis).and_then(|mut key| {
+                                let mut plain = gather(&store, &lock.basis);
+                                let blob = seal(&key, &plain);
+                                plain.zeroize();
+                                key.zeroize();
+                                blob
+                            });
+                        }
+                        match &sealed {
+                            None if store.entropy(&lock.basis).is_none() => RESULT_NO_PHRASE,
+                            None => RESULT_FAILED,
+                            Some(blob) => {
+                                let start = (req.offset as usize).min(blob.len());
+                                let end = (start + CHUNK).min(blob.len());
+                                req.total = blob.len() as u32;
+                                req.data.extend_from_slice(&blob[start..end]);
+                                RESULT_OK
+                            }
+                        }
+                    }
+                    _ => RESULT_NOT_NOW,
+                };
+                buffer.replace(req).ok();
+            }
+            Some(KeysOp::RestoreChunk) => {
+                let lock = store.lock();
+                let (ok_state, basis) = match (state, lock) {
+                    (State::Unlocked, Some(l)) => (true, l.basis),
+                    _ => (false, String::new()),
+                };
+                let Some(mem) = msg.body.memory_message_mut() else { continue };
+                let mut buffer = unsafe { Buffer::from_memory_message_mut(mem) };
+                let Ok(mut req) = buffer.to_original::<Chunk, _>() else { continue };
+                if req.offset == 0 {
+                    incoming.zeroize();
+                    incoming.clear();
+                    incoming_total = req.total;
+                }
+                let in_order = req.offset as usize == incoming.len()
+                    && req.total == incoming_total
+                    && req.total as usize <= MAX_BACKUP
+                    && incoming.len() + req.data.len() <= req.total as usize;
+                if !ok_state || !in_order {
+                    incoming.zeroize();
+                    incoming.clear();
+                    req.result = if ok_state { RESULT_FAILED } else { RESULT_NOT_NOW };
+                    req.done = true;
+                    req.data.clear();
+                    buffer.replace(req).ok();
+                    continue;
+                }
+                incoming.extend_from_slice(&req.data);
+                req.data.clear();
+                if incoming.len() < incoming_total as usize {
+                    req.result = RESULT_OK;
+                    req.done = false;
+                    buffer.replace(req).ok();
+                    continue;
+                }
+                // the last piece: open it, then ask on a thread, so status keeps being answered
+                let blob = std::mem::take(&mut incoming);
+                let opened = backup_key(&store, &basis).and_then(|mut key| {
+                    let plain = open(&key, &blob);
+                    key.zeroize();
+                    plain
+                });
+                let Some(mut plain) = opened else {
+                    req.result = if store.entropy(&basis).is_none() { RESULT_NO_PHRASE } else { RESULT_NOT_YOURS };
+                    req.done = true;
+                    buffer.replace(req).ok();
+                    continue;
+                };
+                let entries = parse(&plain);
+                plain.zeroize();
+                let Some(entries) = entries else {
+                    req.result = RESULT_NOT_YOURS;
+                    req.done = true;
+                    buffer.replace(req).ok();
+                    continue;
+                };
+                drop(buffer);
+                std::thread::spawn(move || {
+                    let mut msg = msg;
+                    let store = Store { pddb: Pddb::new() };
+                    let (logins, codes) = missing(&store, &basis, &entries);
+                    let (result, added) = if logins + codes == 0 {
+                        (RESULT_OK, (0, 0))
+                    } else {
+                        let xns = xous_names::XousNames::new().unwrap();
+                        let detail = format!("{} logins, {} codes", logins, codes);
+                        match maki_launcher::Launcher::new(&xns)
+                            .map(|l| l.ask("maki desktop", "Restore backup?", &detail, &[], 30))
+                        {
+                            Ok(Ok(maki_launcher::Answer::Allowed(_))) => (RESULT_OK, restore(&store, &basis, &entries)),
+                            Ok(Ok(maki_launcher::Answer::Denied)) => (RESULT_DENIED, (0, 0)),
+                            Ok(Ok(maki_launcher::Answer::TimedOut)) => (RESULT_TIMED_OUT, (0, 0)),
+                            _ => (RESULT_FAILED, (0, 0)),
+                        }
+                    };
+                    log::info!("restore: {} ({} logins, {} codes added)", result, added.0, added.1);
+                    if let Some(mem) = msg.body.memory_message_mut() {
+                        let mut buffer = unsafe { Buffer::from_memory_message_mut(mem) };
+                        if let Ok(mut req) = buffer.to_original::<Chunk, _>() {
+                            req.result = result;
+                            req.done = true;
+                            req.logins = added.0;
+                            req.codes = added.1;
+                            buffer.replace(req).ok();
+                        }
+                    }
+                });
             }
             Some(KeysOp::Claim) => {
                 if screen.is_none() {
@@ -343,6 +581,9 @@ fn main() -> ! {
                     (State::Unlocked, Some(lock)) => match store.pddb.lock_basis(&lock.basis) {
                         Ok(()) => {
                             state = State::Locked;
+                            if let Some(mut b) = sealed.take() {
+                                b.zeroize();
+                            }
                             log::info!("locked");
                             true
                         }

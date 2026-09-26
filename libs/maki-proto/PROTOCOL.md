@@ -56,6 +56,8 @@ bytes. Bodies must be consumed exactly: trailing bytes are an error.
 | `0x10` GET_LOGIN | `site:str8` | `approval:u8` `username:str8` `password:str8` |
 | `0x11` GET_TOTP | `site:str8` | `approval:u8` `code:str8` `valid_for_s:u8` |
 | `0x12` SAVE_LOGIN | `site:str8` `username:str8` `password:str8` | `approval:u8` |
+| `0x20` BACKUP_GET | `offset:u32` | `status:u8` `total:u32` `offset:u32` `piece:bytes16` |
+| `0x21` BACKUP_PUT | `total:u32` `offset:u32` `piece:bytes16` | `done:u8` `approval:u8` `logins:u16` `codes:u16` |
 | `0x7f` ERROR (reply only) | | `code:u8` `detail:str8` |
 
 `time_state`: 0 unset, 1 unverified, 2 verified.
@@ -64,8 +66,9 @@ TIME_PROOF `answer`: 0 verified, 1 unknown server, 2 duplicate, 3 invalid, 4 too
 ERROR `code`: 1 malformed, 2 unknown kind, 3 no challenge, 4 challenge expired, 5 bad argument.
 `approval`: 0 approved, 1 denied, 2 nothing saved for the site (the owner wasn't asked), 3 timed
 out, 4 vault unavailable (or busy: at most three requests wait for the owner at once), 5 clock
-not verified (GET_TOTP only), 6 locked (maki is waiting for its PIN). Only an approved reply
-carries a username, password or code.
+not verified (GET_TOTP only), 6 locked (maki is waiting for its PIN), 7 not yours (a backup
+this maki's recovery phrase can't open), 8 no phrase (no recovery phrase yet). Only an approved
+reply carries a username, password, code or backup piece.
 
 ## Setting the time
 
@@ -128,3 +131,20 @@ through them and pressing picks one.
   software on the computer can't quietly empty the vault. Once approved, a password or code is on
   the computer, and maki can't prove the site is the one the request claims. Passkeys, which never
   leave maki and are bound to the site by the browser, are the stronger choice where offered.
+
+## Backups
+
+maki's logins and codes, sealed by maki with AES-256-GCM-SIV under a key derived from its
+recovery phrase (HKDF over the BIP39 seed), so the host keeps them without being able to read
+them, and a maki restored from the phrase can open them.
+
+- **BACKUP_GET** hands the backup out in pieces of up to 4096 bytes. Offset 0 seals a fresh one
+  (reading the vault and deriving the key takes maki a moment); the host asks for further
+  offsets until it has `total` bytes. `status` is `0` with a piece, or `6` locked or `8` no
+  phrase with none.
+- **BACKUP_PUT** sends one back in pieces of up to 4096 bytes, in order, with the same `total`
+  each time (at most 512 KiB). A piece before the last is answered `done` = 0 at once. The last
+  is answered once maki has opened the backup and asked the owner ("Restore backup? 12 logins,
+  3 codes"): `done` = 1, then the approval and what was added. maki only adds records it doesn't
+  have; what it has, it keeps. A backup maki can't open is `7` not yours, and nothing is asked.
+  If there's nothing new, nothing is asked either: approved, with nothing added.

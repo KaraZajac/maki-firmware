@@ -35,6 +35,31 @@ pub enum KeysOp {
     NewPhrase = 5,
     /// Memory message (mutable lend) with a `PhraseRequest`: keep these words as the phrase.
     RestorePhrase = 6,
+    /// Memory message (mutable lend) with a `Chunk`: a piece of the backup. Offset 0 seals a
+    /// fresh one: the vault's logins and codes, encrypted with a key from the recovery phrase.
+    BackupChunk = 7,
+    /// Memory message (mutable lend) with a `Chunk`: a piece of a backup to restore. The last
+    /// piece opens it, asks the owner on screen, and adds what maki doesn't have.
+    RestoreChunk = 8,
+}
+
+/// Backups travel in pieces this big, here and over USB.
+pub const CHUNK: usize = 4096;
+/// Bigger than any vault maki could hold, and a bound on what a restore will take in.
+pub const MAX_BACKUP: usize = 512 * 1024;
+
+/// A piece of a backup, either way. On the way back: `result` (`RESULT_*`), `total`, and for a
+/// finished restore, what it added.
+#[derive(Debug, Default, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
+pub struct Chunk {
+    pub offset: u32,
+    pub total: u32,
+    pub data: Vec<u8>,
+    pub result: u32,
+    /// a restore: whether that was the last piece, and what it added
+    pub done: bool,
+    pub logins: u32,
+    pub codes: u32,
 }
 
 /// A recovery phrase, one way or the other, and what became of it (`RESULT_*`).
@@ -85,6 +110,13 @@ pub const RESULT_BAD_PIN: u32 = 4;
 pub const RESULT_FAILED: u32 = 5;
 /// Words that aren't a recovery phrase: a word not on the list, or a checksum that fails.
 pub const RESULT_BAD_PHRASE: u32 = 6;
+/// The owner said no, or didn't answer.
+pub const RESULT_DENIED: u32 = 7;
+pub const RESULT_TIMED_OUT: u32 = 8;
+/// A backup this phrase can't open: another maki's, or damaged.
+pub const RESULT_NOT_YOURS: u32 = 9;
+/// No recovery phrase yet, so nothing to back up with.
+pub const RESULT_NO_PHRASE: u32 = 10;
 
 /// Set in the second word of `Status`'s answer when a recovery phrase exists.
 pub const HAS_PHRASE: usize = 1 << 16;
@@ -157,6 +189,26 @@ impl Keys {
     /// Keep these words as the recovery phrase (a restore). A `RESULT_*` code.
     pub fn restore_phrase(&self, words: &[&str]) -> u32 {
         self.phrase_call(KeysOp::RestorePhrase, words.iter().map(|w| w.to_string()).collect()).0
+    }
+
+    fn chunk_call(&self, op: KeysOp, request: Chunk) -> Chunk {
+        let failed = Chunk { result: RESULT_FAILED, ..Default::default() };
+        let Ok(mut buf) = Buffer::into_buf(request) else { return failed };
+        if buf.lend_mut(self.conn, op.to_u32().unwrap()).is_err() {
+            return failed;
+        }
+        buf.to_original::<Chunk, _>().unwrap_or(failed)
+    }
+
+    /// A piece of the backup, starting at `offset`; 0 seals a fresh one.
+    pub fn backup_chunk(&self, offset: u32) -> Chunk {
+        // the lent buffer is sized by what's sent: send a piece's worth, to get one back
+        self.chunk_call(KeysOp::BackupChunk, Chunk { offset, data: vec![0; CHUNK], ..Default::default() })
+    }
+
+    /// A piece of a backup to restore. The last one blocks while the owner decides.
+    pub fn restore_chunk(&self, total: u32, offset: u32, data: Vec<u8>) -> Chunk {
+        self.chunk_call(KeysOp::RestoreChunk, Chunk { offset, total, data, ..Default::default() })
     }
 
     /// Returns once the secrets are open. For processes that mustn't touch storage before then.

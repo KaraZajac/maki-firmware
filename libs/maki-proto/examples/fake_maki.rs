@@ -16,7 +16,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use hmac::{Hmac, Mac};
-use maki_proto::device::{reply, Approval, Ask, Device, Handled, Platform, TimeState};
+use maki_proto::device::{reply, Approval, Ask, Backup, Device, Handled, Platform, TimeState, BACKUP_PIECE};
 use maki_proto::frame::{self, Deframer};
 use maki_proto::site;
 
@@ -56,6 +56,69 @@ enum Policy {
 struct Store {
     logins: Vec<(String, String, String)>,
     totp: Vec<(String, Vec<u8>)>,
+    /// the backup being read out, and one coming in
+    sealed: Vec<u8>,
+    incoming: Vec<u8>,
+}
+
+/// The fake's backup: its store as lines of text, not encrypted (the badge's is; the desktop
+/// can't tell the difference, which is the point).
+const FAKE_MAGIC: &[u8] = b"FAKEBAK1\n";
+
+fn hex(b: &[u8]) -> String { b.iter().map(|x| format!("{x:02x}")).collect() }
+
+fn unhex(s: &str) -> Option<Vec<u8>> {
+    (0..s.len()).step_by(2).map(|i| u8::from_str_radix(s.get(i..i + 2)?, 16).ok()).collect()
+}
+
+fn fake_backup(st: &Store) -> Vec<u8> {
+    let mut out = FAKE_MAGIC.to_vec();
+    for (site, user, pass) in &st.logins {
+        out.extend(format!("L\t{}\t{}\t{}\n", hex(site.as_bytes()), hex(user.as_bytes()), hex(pass.as_bytes())).bytes());
+    }
+    for (site, secret) in &st.totp {
+        out.extend(format!("T\t{}\t{}\n", hex(site.as_bytes()), hex(secret)).bytes());
+    }
+    out
+}
+
+/// A backup's logins and codes, if it's one of the fake's.
+fn parse_fake(blob: &[u8]) -> Option<(Vec<(String, String, String)>, Vec<(String, Vec<u8>)>)> {
+    let text = std::str::from_utf8(blob.strip_prefix(FAKE_MAGIC)?).ok()?;
+    let (mut logins, mut totp) = (Vec::new(), Vec::new());
+    let s = |h: &str| unhex(h).and_then(|b| String::from_utf8(b).ok());
+    for line in text.lines() {
+        let f: Vec<&str> = line.split('\t').collect();
+        match f.as_slice() {
+            ["L", a, b, c] => logins.push((s(a)?, s(b)?, s(c)?)),
+            ["T", a, b] => totp.push((s(a)?, unhex(b)?)),
+            _ => return None,
+        }
+    }
+    Some((logins, totp))
+}
+
+/// The last piece of a restore: open it, ask, add what's missing.
+fn finish_restore(blob: Vec<u8>, store: &Mutex<Store>, policy: Policy) -> (u8, Vec<u8>) {
+    let Some((logins, totp)) = parse_fake(&blob) else { return reply::restore_piece(true, Approval::NotYours, 0, 0) };
+    let (new_logins, new_totp): (Vec<_>, Vec<_>) = {
+        let st = store.lock().unwrap();
+        (
+            logins.into_iter().filter(|l| !st.logins.iter().any(|x| x.0 == l.0 && x.1 == l.1)).collect(),
+            totp.into_iter().filter(|t| !st.totp.iter().any(|x| x.0 == t.0)).collect(),
+        )
+    };
+    let (l, t) = (new_logins.len() as u16, new_totp.len() as u16);
+    if l + t == 0 {
+        return reply::restore_piece(true, Approval::Approved, 0, 0);
+    }
+    let a = approve(policy, &format!("restore backup? {l} logins, {t} codes"));
+    if a == Approval::Approved {
+        let mut st = store.lock().unwrap();
+        st.logins.extend(new_logins);
+        st.totp.extend(new_totp);
+    }
+    reply::restore_piece(true, a, l, t)
 }
 
 fn base32(s: &str) -> Option<Vec<u8>> {
@@ -191,6 +254,50 @@ fn main() {
                     Handled::Reply(kind, body) => {
                         println!("  0x{:02x}#{} -> 0x{:02x} ({} bytes)", packet.kind, packet.id, kind, body.len());
                         writer.lock().unwrap().write_all(&frame::encode(kind, packet.id, &body)).ok();
+                    }
+                    Handled::Backup(Backup::Get { offset }) => {
+                        let mut st = store.lock().unwrap();
+                        if offset == 0 || st.sealed.is_empty() {
+                            st.sealed = fake_backup(&st);
+                        }
+                        let start = (offset as usize).min(st.sealed.len());
+                        let end = (start + BACKUP_PIECE).min(st.sealed.len());
+                        let (kind, body) = reply::backup_piece(Approval::Approved, st.sealed.len() as u32, offset, &st.sealed[start..end]);
+                        writer.lock().unwrap().write_all(&frame::encode(kind, packet.id, &body)).ok();
+                    }
+                    Handled::Backup(Backup::Put { total, offset, data }) => {
+                        let finished = {
+                            let mut st = store.lock().unwrap();
+                            if offset == 0 {
+                                st.incoming.clear();
+                            }
+                            if offset as usize != st.incoming.len() {
+                                st.incoming.clear();
+                                None
+                            } else {
+                                st.incoming.extend_from_slice(&data);
+                                Some(st.incoming.len() as u32 == total)
+                            }
+                        };
+                        match finished {
+                            None => {
+                                let (kind, body) = reply::restore_piece(true, Approval::Unavailable, 0, 0);
+                                writer.lock().unwrap().write_all(&frame::encode(kind, packet.id, &body)).ok();
+                            }
+                            Some(false) => {
+                                let (kind, body) = reply::restore_piece(false, Approval::Approved, 0, 0);
+                                writer.lock().unwrap().write_all(&frame::encode(kind, packet.id, &body)).ok();
+                            }
+                            // like an ask: answered once the owner decides, from another thread
+                            Some(true) => {
+                                let blob = std::mem::take(&mut store.lock().unwrap().incoming);
+                                let (writer, store, id) = (writer.clone(), store.clone(), packet.id);
+                                std::thread::spawn(move || {
+                                    let (kind, body) = finish_restore(blob, &store, policy);
+                                    writer.lock().unwrap().write_all(&frame::encode(kind, id, &body)).ok();
+                                });
+                            }
+                        }
                     }
                     // answered from another thread, like the vault on the badge: the link keeps
                     // serving heartbeats while the owner decides

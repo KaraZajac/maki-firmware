@@ -384,3 +384,34 @@ fn sites_on_screen_break_at_dots_and_always_show_their_end() {
     assert!(site::lines(dotty, 17, 3).len() <= 3);
     assert_eq!(site::lines(dotty, 17, 3).concat(), dotty);
 }
+
+#[test]
+fn backup_pieces_are_asked_for_by_offset() {
+    let mut d = device();
+    assert_eq!(
+        d.handle(&Packet { kind: kind::BACKUP_GET, id: 1, body: Writer::new().u32(4096).finish() }),
+        Handled::Backup(Backup::Get { offset: 4096 })
+    );
+    let piece = vec![7u8; 100];
+    assert_eq!(
+        d.handle(&Packet { kind: kind::BACKUP_PUT, id: 2, body: Writer::new().u32(300).u32(200).bytes16(&piece).finish() }),
+        Handled::Backup(Backup::Put { total: 300, offset: 200, data: piece.clone() })
+    );
+    // pieces that can't be part of a backup maki would take
+    for (total, offset, len) in [(100, 50, 100), (MAX_BACKUP + 1, 0, 10), (10_000, 0, BACKUP_PIECE + 1)] {
+        let body = Writer::new().u32(total).u32(offset).bytes16(&vec![0; len]).finish();
+        let reply = ask(&mut d, kind::BACKUP_PUT, body);
+        assert_eq!(error_code(&reply), ErrorCode::BadArgument as u8, "{total} {offset} {len}");
+    }
+}
+
+#[test]
+fn backup_replies_carry_nothing_unless_approved() {
+    let (k, body) = reply::backup_piece(Approval::Locked, 999, 0, &[1, 2, 3]);
+    assert_eq!(k, kind::BACKUP_GET | kind::REPLY);
+    let mut r = Reader::new(&body);
+    assert_eq!((r.u8().unwrap(), r.u32().unwrap(), r.u32().unwrap(), r.bytes16().unwrap()), (Approval::Locked as u8, 999, 0, &[][..]));
+    let (_, body) = reply::restore_piece(true, Approval::Denied, 5, 6);
+    let mut r = Reader::new(&body);
+    assert_eq!((r.u8().unwrap(), r.u8().unwrap(), r.u16().unwrap(), r.u16().unwrap()), (1, Approval::Denied as u8, 0, 0));
+}

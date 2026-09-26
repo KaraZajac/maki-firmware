@@ -4174,12 +4174,13 @@ dependencies = [
  "getrandom 0.2.12",
  "hmac 0.12.1",
  "log",
+ "maki-keys-api",
+ "maki-launcher",
  "maki-seed",
  "num-derive 0.4.2",
  "num-traits",
  "pbkdf2",
  "pddb",
- "rkyv 0.8.8",
  "sha2 0.10.8",
  "xous 0.9.70 (registry+https://github.com/rust-lang/crates.io-index)",
  "xous-api-log",
@@ -4187,6 +4188,19 @@ dependencies = [
  "xous-api-ticktimer",
  "xous-ipc 0.10.10 (registry+https://github.com/rust-lang/crates.io-index)",
  "zeroize",
+]
+
+[[package]]
+name = "maki-keys-api"
+version = "0.1.0"
+dependencies = [
+ "num-derive 0.4.2",
+ "num-traits",
+ "rkyv 0.8.8",
+ "xous 0.9.70 (registry+https://github.com/rust-lang/crates.io-index)",
+ "xous-api-names",
+ "xous-api-ticktimer",
+ "xous-ipc 0.10.10 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 
 [[package]]
@@ -4199,7 +4213,7 @@ dependencies = [
  "getrandom 0.2.12",
  "log",
  "maki-icons",
- "maki-keys",
+ "maki-keys-api",
  "maki-proto",
  "maki-seed",
  "num-derive 0.4.2",
@@ -4221,7 +4235,7 @@ dependencies = [
  "bao1x-hal-service",
  "getrandom 0.2.12",
  "log",
- "maki-keys",
+ "maki-keys-api",
  "maki-launcher",
  "maki-proto",
  "maki-vault-api",
@@ -7742,7 +7756,7 @@ dependencies = [
  "locales",
  "log",
  "maki-icons",
- "maki-keys",
+ "maki-keys-api",
  "maki-launcher",
  "maki-proto",
  "maki-vault-api",
