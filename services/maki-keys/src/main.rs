@@ -99,7 +99,11 @@ fn open(key: &[u8; 32], blob: &[u8]) -> Option<Vec<u8>> {
 
 /// The backup key, from the phrase: words, seed, then HKDF (maki_seed::backup_key).
 fn backup_key(store: &Store, basis: &str) -> Option<[u8; 32]> {
-    let mut entropy = store.entropy(basis)?;
+    let Some(mut entropy) = store.entropy(basis) else {
+        log::warn!("backup key: no entropy in {}", basis);
+        return None;
+    };
+    log::debug!("backup key: {} bytes of entropy", entropy.len());
     let words = maki_seed::to_words(&entropy);
     entropy.zeroize();
     let mut seed = maki_seed::seed(&words, "");
@@ -366,6 +370,7 @@ fn main() -> ! {
                             sealed = backup_key(&store, &lock.basis).and_then(|mut key| {
                                 let mut plain = gather(&store, &lock.basis);
                                 let blob = seal(&key, &plain);
+                                log::debug!("backup: {} bytes of records, sealed {:?}", plain.len(), blob.as_ref().map(|b| b.len()));
                                 plain.zeroize();
                                 key.zeroize();
                                 blob

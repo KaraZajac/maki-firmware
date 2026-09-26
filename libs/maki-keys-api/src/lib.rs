@@ -193,7 +193,12 @@ impl Keys {
 
     fn chunk_call(&self, op: KeysOp, request: Chunk) -> Chunk {
         let failed = Chunk { result: RESULT_FAILED, ..Default::default() };
-        let Ok(mut buf) = Buffer::into_buf(request) else { return failed };
+        // `into_buf` sizes the buffer by the struct, one page, and a piece doesn't fit in one
+        // with the rest: take two, for the piece either way
+        let mut buf = Buffer::new(2 * CHUNK);
+        if buf.replace(request).is_err() {
+            return failed;
+        }
         if buf.lend_mut(self.conn, op.to_u32().unwrap()).is_err() {
             return failed;
         }
@@ -202,8 +207,7 @@ impl Keys {
 
     /// A piece of the backup, starting at `offset`; 0 seals a fresh one.
     pub fn backup_chunk(&self, offset: u32) -> Chunk {
-        // the lent buffer is sized by what's sent: send a piece's worth, to get one back
-        self.chunk_call(KeysOp::BackupChunk, Chunk { offset, data: vec![0; CHUNK], ..Default::default() })
+        self.chunk_call(KeysOp::BackupChunk, Chunk { offset, ..Default::default() })
     }
 
     /// A piece of a backup to restore. The last one blocks while the owner decides.

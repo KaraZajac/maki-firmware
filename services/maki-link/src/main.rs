@@ -227,6 +227,52 @@ fn main() -> ! {
         }
     }
 
+    // The emulator again: built with MAKI_DEMO_BACKUP, once maki is set up (PIN and phrase),
+    // take a backup through maki-keys and restore it, and log how that went. The restore has
+    // nothing new to add, so it asks nothing; it proves the sealing, the phrase's key and the
+    // pieces on real firmware.
+    if option_env!("MAKI_DEMO_BACKUP").is_some() {
+        std::thread::spawn(|| {
+            let xns = xous_names::XousNames::new().unwrap();
+            let keys = maki_keys::Keys::new(&xns).expect("maki-keys");
+            let tt = ticktimer_server::Ticktimer::new().unwrap();
+            while !(keys.status().0 == maki_keys::State::Unlocked && keys.has_phrase()) {
+                tt.sleep_ms(500).ok();
+            }
+            tt.sleep_ms(20_000).ok(); // let any demo asks be answered first
+            let mut blob = Vec::new();
+            let mut result = maki_keys::RESULT_OK;
+            loop {
+                let c = keys.backup_chunk(blob.len() as u32);
+                result = c.result;
+                if c.result != maki_keys::RESULT_OK {
+                    break;
+                }
+                blob.extend_from_slice(&c.data);
+                if blob.len() >= c.total as usize || c.data.is_empty() {
+                    break;
+                }
+            }
+            log::warn!("demo backup: {} bytes sealed (result {})", blob.len(), result);
+            let mut offset = 0usize;
+            loop {
+                let end = (offset + maki_keys::CHUNK).min(blob.len());
+                let c = keys.restore_chunk(blob.len() as u32, offset as u32, blob[offset..end].to_vec());
+                offset = end;
+                if c.done || c.result != maki_keys::RESULT_OK || offset >= blob.len() {
+                    log::warn!(
+                        "demo restore: result {} done {} ({} logins, {} codes added)",
+                        c.result,
+                        c.done,
+                        c.logins,
+                        c.codes
+                    );
+                    break;
+                }
+            }
+        });
+    }
+
     let usb = usb_bao1x::UsbHid::new();
     let mut deframer = Deframer::default();
     loop {
