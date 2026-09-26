@@ -6,6 +6,7 @@
 
 pub mod device;
 pub mod frame;
+pub mod site;
 pub mod wire;
 
 /// Message kinds. Replies set the top bit of the request they answer.
@@ -15,6 +16,10 @@ pub mod kind {
     pub const TIME_CHALLENGE: u8 = 0x03;
     pub const TIME_PROOF: u8 = 0x04;
     pub const TIME_UNVERIFIED: u8 = 0x05;
+    /// Answered only after the owner approves on maki's screen.
+    pub const GET_LOGIN: u8 = 0x10;
+    pub const GET_TOTP: u8 = 0x11;
+    pub const SAVE_LOGIN: u8 = 0x12;
     pub const REPLY: u8 = 0x80;
     pub const ERROR: u8 = 0x7f;
 }

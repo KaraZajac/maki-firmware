@@ -6,3 +6,8 @@ description = "maki's serial protocol: framing, messages, and the device-side lo
 
 [dependencies]
 roughtime = { path = "../roughtime" }
+
+[dev-dependencies]
+# fake_maki computes real TOTP codes, the way the vault does
+hmac = "0.12.1"
+sha1 = "0.10.6"

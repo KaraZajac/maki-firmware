@@ -4,6 +4,7 @@ use std::cell::Cell;
 
 use maki_proto::device::*;
 use maki_proto::frame::{self, Deframer, FrameError, Packet};
+use maki_proto::site;
 use maki_proto::kind;
 use maki_proto::wire::{Reader, Writer};
 
@@ -49,7 +50,12 @@ impl Platform for Replay {
 
 fn device() -> Device<Replay> { Device::new(Replay::new(), "maki", "0.1.0".into()) }
 
-fn ask(d: &mut Device<Replay>, kind: u8, body: Vec<u8>) -> (u8, Vec<u8>) { d.handle(&Packet { kind, body }) }
+fn ask(d: &mut Device<Replay>, kind: u8, body: Vec<u8>) -> (u8, Vec<u8>) {
+    match d.handle(&Packet { kind, id: 7, body }) {
+        Handled::Reply(k, b) => (k, b),
+        other => panic!("expected an immediate reply, got {other:?}"),
+    }
+}
 
 fn challenge(d: &mut Device<Replay>) -> Vec<(u8, Vec<u8>)> {
     let (k, body) = ask(d, kind::TIME_CHALLENGE, vec![]);
@@ -116,17 +122,17 @@ fn crc_is_the_standard_one() {
 #[test]
 fn frames_round_trip_whatever_the_payload() {
     for body in [vec![], vec![0u8; 1], vec![0u8; 1024], (0..=255u8).cycle().take(700).collect::<Vec<_>>()] {
-        let wire = frame::encode(0x42, &body);
+        let wire = frame::encode(0x42, 0xbeef, &body);
         assert_eq!(wire.iter().filter(|&&b| b == 0).count(), 1, "only the delimiter is zero");
         let got = frame::decode(&wire[..wire.len() - 1]).unwrap();
-        assert_eq!(got, Packet { kind: 0x42, body });
+        assert_eq!(got, Packet { kind: 0x42, id: 0xbeef, body });
     }
 }
 
 #[test]
 fn deframer_copes_with_dribbles_and_garbage() {
-    let a = frame::encode(1, b"first");
-    let b = frame::encode(2, &[0u8; 300]);
+    let a = frame::encode(1, 1, b"first");
+    let b = frame::encode(2, 2, &[0u8; 300]);
     let mut stream = b"\x07\x07junk".to_vec();
     stream.push(0);
     stream.extend_from_slice(&a);
@@ -144,7 +150,7 @@ fn deframer_copes_with_dribbles_and_garbage() {
 
 #[test]
 fn corrupted_frames_are_rejected() {
-    let mut wire = frame::encode(1, b"hello");
+    let mut wire = frame::encode(1, 1, b"hello");
     wire[3] ^= 0x10;
     assert_eq!(frame::decode(&wire[..wire.len() - 1]), Err(FrameError::Crc));
 }
@@ -157,7 +163,7 @@ fn hello_names_the_firmware() {
     let (k, body) = ask(&mut d, kind::HELLO, vec![]);
     assert_eq!(k, kind::HELLO | kind::REPLY);
     let mut r = Reader::new(&body);
-    assert_eq!((r.u8().unwrap(), r.str8().unwrap(), r.str8().unwrap()), (1, "maki", "0.1.0"));
+    assert_eq!((r.u8().unwrap(), r.str8().unwrap(), r.str8().unwrap()), (2, "maki", "0.1.0"));
 }
 
 #[test]
@@ -257,4 +263,58 @@ fn nonsense_arguments_and_messages_are_refused() {
     assert_eq!(error_code(&ask(&mut d, 0x55, vec![])), ErrorCode::UnknownKind as u8);
     let (k, body) = ask(&mut d, kind::STATUS, vec![]);
     assert_eq!((k, body[0]), (kind::STATUS | kind::REPLY, TimeState::Unset as u8));
+}
+
+// ---- asks: requests the owner approves on maki ----
+
+fn handled(d: &mut Device<Replay>, kind: u8, body: Vec<u8>) -> Handled { d.handle(&Packet { kind, id: 9, body }) }
+
+#[test]
+fn login_and_totp_requests_become_asks() {
+    let mut d = device();
+    assert_eq!(
+        handled(&mut d, kind::GET_LOGIN, Writer::new().str8("github.com").finish()),
+        Handled::Ask(Ask::Login { site: "github.com".into() })
+    );
+    assert_eq!(
+        handled(&mut d, kind::GET_TOTP, Writer::new().str8("xn--80ak6aa92e.com").finish()),
+        Handled::Ask(Ask::Totp { site: "xn--80ak6aa92e.com".into() }),
+        "punycode is fine: it is shown as punycode"
+    );
+    assert_eq!(
+        handled(&mut d, kind::SAVE_LOGIN, Writer::new().str8("example.org").str8("kara").str8("hunter2").finish()),
+        Handled::Ask(Ask::SaveLogin { site: "example.org".into(), username: "kara".into(), password: "hunter2".into() })
+    );
+}
+
+#[test]
+fn sites_that_could_mislead_on_screen_are_refused() {
+    let mut d = device();
+    for bad in ["", "GitHub.com", "аpple.com", "github.com/login", ".github.com", "git hub.com", "a..b"] {
+        let reply = ask(&mut d, kind::GET_LOGIN, Writer::new().str8(bad).finish());
+        assert_eq!(error_code(&reply), ErrorCode::BadArgument as u8, "{bad:?} was accepted");
+    }
+    let no_user = ask(&mut d, kind::SAVE_LOGIN, Writer::new().str8("example.org").str8("").str8("pw").finish());
+    assert_eq!(error_code(&no_user), ErrorCode::BadArgument as u8);
+}
+
+#[test]
+fn saved_entries_cover_their_own_site_and_subdomains_only() {
+    assert!(site::covers("github.com", "github.com"));
+    assert!(site::covers("https://www.github.com/login", "gist.github.com"));
+    assert!(site::covers("GitHub.com", "github.com"));
+    assert!(!site::covers("github.com", "evilgithub.com"));
+    assert!(!site::covers("github.com", "github.com.evil.net"));
+    assert!(!site::covers("", "github.com"));
+}
+
+#[test]
+fn a_refusal_never_carries_the_secret() {
+    let (k, body) = reply::login(Approval::Denied, "kara", "hunter2");
+    assert_eq!(k, kind::GET_LOGIN | kind::REPLY);
+    let mut r = Reader::new(&body);
+    assert_eq!((r.u8().unwrap(), r.str8().unwrap(), r.str8().unwrap()), (Approval::Denied as u8, "", ""));
+    let (_, body) = reply::totp(Approval::TimedOut, "123456", 20);
+    let mut r = Reader::new(&body);
+    assert_eq!((r.u8().unwrap(), r.str8().unwrap(), r.u8().unwrap()), (Approval::TimedOut as u8, "", 0));
 }

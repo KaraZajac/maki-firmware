@@ -7,7 +7,7 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
-use maki_proto::device::{Device, Platform, TimeState};
+use maki_proto::device::{reply, Approval, Ask, Device, Handled, Platform, TimeState};
 use maki_proto::frame::{self, Deframer};
 use num_traits::ToPrimitive;
 
@@ -116,8 +116,14 @@ fn main() -> ! {
                         log::info!("desktop app linked");
                         launcher.set_link_state(true).ok();
                     }
-                    let (kind, body) = device.handle(&packet);
-                    if usb.serial_send(&frame::encode(kind, &body)).is_err() {
+                    let (kind, body) = match device.handle(&packet) {
+                        Handled::Reply(kind, body) => (kind, body),
+                        // not wired to the vault yet: say so rather than hang the host
+                        Handled::Ask(Ask::Login { .. }) => reply::login(Approval::Unavailable, "", ""),
+                        Handled::Ask(Ask::Totp { .. }) => reply::totp(Approval::Unavailable, "", 0),
+                        Handled::Ask(Ask::SaveLogin { .. }) => reply::save(Approval::Unavailable),
+                    };
+                    if usb.serial_send(&frame::encode(kind, packet.id, &body)).is_err() {
                         log::warn!("couldn't send reply 0x{:02x}", kind);
                     }
                 }

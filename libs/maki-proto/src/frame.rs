@@ -1,15 +1,17 @@
-//! Frames on the wire: `COBS(version, kind, body.., crc32) 0x00`.
+//! Frames on the wire: `COBS(version, kind, id, body.., crc32) 0x00`.
 //!
 //! COBS removes every zero byte from the frame, so a zero always means "end of frame" and a
 //! reader that joins mid-stream resynchronises at the next one. The CRC catches the rest.
 
-pub const PROTOCOL_VERSION: u8 = 1;
+pub const PROTOCOL_VERSION: u8 = 2;
 /// Largest decoded frame either side will accept.
 pub const MAX_FRAME: usize = 8192;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Packet {
     pub kind: u8,
+    /// Chosen by the host; the reply carries it back, so replies can arrive in any order.
+    pub id: u16,
     pub body: Vec<u8>,
 }
 
@@ -87,10 +89,11 @@ pub fn cobs_decode(data: &[u8]) -> Option<Vec<u8>> {
 }
 
 /// Encode one packet, delimiter included.
-pub fn encode(kind: u8, body: &[u8]) -> Vec<u8> {
-    let mut raw = Vec::with_capacity(body.len() + 6);
+pub fn encode(kind: u8, id: u16, body: &[u8]) -> Vec<u8> {
+    let mut raw = Vec::with_capacity(body.len() + 8);
     raw.push(PROTOCOL_VERSION);
     raw.push(kind);
+    raw.extend_from_slice(&id.to_le_bytes());
     raw.extend_from_slice(body);
     raw.extend_from_slice(&crc32(&raw).to_le_bytes());
     let mut out = cobs_encode(&raw);
@@ -101,7 +104,7 @@ pub fn encode(kind: u8, body: &[u8]) -> Vec<u8> {
 /// Decode one frame, without its delimiter.
 pub fn decode(frame: &[u8]) -> Result<Packet, FrameError> {
     let raw = cobs_decode(frame).ok_or(FrameError::Cobs)?;
-    if raw.len() < 6 {
+    if raw.len() < 8 {
         return Err(FrameError::TooShort);
     }
     if raw.len() > MAX_FRAME {
@@ -114,7 +117,7 @@ pub fn decode(frame: &[u8]) -> Result<Packet, FrameError> {
     if data[0] != PROTOCOL_VERSION {
         return Err(FrameError::Version(data[0]));
     }
-    Ok(Packet { kind: data[1], body: data[2..].to_vec() })
+    Ok(Packet { kind: data[1], id: u16::from_le_bytes([data[2], data[3]]), body: data[4..].to_vec() })
 }
 
 /// Splits a byte stream into packets at zero delimiters, however the bytes arrive.

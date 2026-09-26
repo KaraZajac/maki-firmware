@@ -99,6 +99,58 @@ pub enum ErrorCode {
     BadArgument = 5,
 }
 
+/// What `Device::handle` decided.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Handled {
+    /// Answer now, with this kind and body.
+    Reply(u8, Vec<u8>),
+    /// Needs the owner. The glue asks the vault, which shows the request on maki's screen, and
+    /// answers later with the matching builder in [`reply`], echoing the request's id.
+    Ask(Ask),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Ask {
+    Login { site: String },
+    Totp { site: String },
+    SaveLogin { site: String, username: String, password: String },
+}
+
+/// First byte of every approval reply.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+pub enum Approval {
+    Approved = 0,
+    Denied = 1,
+    /// Nothing saved for this site; the owner was not asked.
+    NoMatch = 2,
+    /// The owner didn't answer in time.
+    TimedOut = 3,
+    /// The vault couldn't be reached or its storage isn't ready.
+    Unavailable = 4,
+}
+
+/// Reply bodies for [`Ask`] outcomes, so the device glue and the fake build them identically.
+pub mod reply {
+    use super::Approval;
+    use crate::kind;
+    use crate::wire::Writer;
+
+    pub fn login(approval: Approval, username: &str, password: &str) -> (u8, Vec<u8>) {
+        let (u, p) = if approval == Approval::Approved { (username, password) } else { ("", "") };
+        (kind::GET_LOGIN | kind::REPLY, Writer::new().u8(approval as u8).str8(u).str8(p).finish())
+    }
+
+    pub fn totp(approval: Approval, code: &str, valid_for_s: u8) -> (u8, Vec<u8>) {
+        let (c, v) = if approval == Approval::Approved { (code, valid_for_s) } else { ("", 0) };
+        (kind::GET_TOTP | kind::REPLY, Writer::new().u8(approval as u8).str8(c).u8(v).finish())
+    }
+
+    pub fn save(approval: Approval) -> (u8, Vec<u8>) {
+        (kind::SAVE_LOGIN | kind::REPLY, Writer::new().u8(approval as u8).finish())
+    }
+}
+
 pub trait Platform {
     /// Cryptographically secure random bytes (the TRNG on the badge).
     fn fill_random(&mut self, buf: &mut [u8]);
@@ -142,8 +194,8 @@ impl<P: Platform> Device<P> {
 
     pub fn platform(&self) -> &P { &self.platform }
 
-    /// Handle one packet and produce the reply's kind and body.
-    pub fn handle(&mut self, packet: &Packet) -> Reply {
+    /// Handle one packet: answer it now, or hand back what to ask the owner.
+    pub fn handle(&mut self, packet: &Packet) -> Handled {
         let body = &packet.body;
         let result = match packet.kind {
             kind::HELLO => self.hello(body),
@@ -151,9 +203,40 @@ impl<P: Platform> Device<P> {
             kind::TIME_CHALLENGE => self.time_challenge(body),
             kind::TIME_PROOF => self.time_proof(body),
             kind::TIME_UNVERIFIED => self.time_unverified(body),
+            kind::GET_LOGIN | kind::GET_TOTP | kind::SAVE_LOGIN => return Self::ask(packet.kind, body),
             _ => Ok(error(ErrorCode::UnknownKind, "unknown message kind")),
         };
-        result.unwrap_or_else(malformed)
+        let (kind, body) = result.unwrap_or_else(malformed);
+        Handled::Reply(kind, body)
+    }
+
+    fn ask(kind: u8, body: &[u8]) -> Handled {
+        let parsed = (|| {
+            let mut r = Reader::new(body);
+            let site = r.str8()?.to_string();
+            let ask = match kind {
+                kind::GET_LOGIN => Ask::Login { site: site.clone() },
+                kind::GET_TOTP => Ask::Totp { site: site.clone() },
+                _ => Ask::SaveLogin { site: site.clone(), username: r.str8()?.into(), password: r.str8()?.into() },
+            };
+            r.end()?;
+            Ok::<_, Truncated>((site, ask))
+        })();
+        match parsed {
+            Err(t) => {
+                let (k, b) = malformed(t);
+                Handled::Reply(k, b)
+            }
+            Ok((site, _)) if !crate::site::valid(&site) => {
+                let (k, b) = error(ErrorCode::BadArgument, "site must be a lowercase ASCII hostname");
+                Handled::Reply(k, b)
+            }
+            Ok((_, Ask::SaveLogin { username, .. })) if username.is_empty() => {
+                let (k, b) = error(ErrorCode::BadArgument, "username is empty");
+                Handled::Reply(k, b)
+            }
+            Ok((_, ask)) => Handled::Ask(ask),
+        }
     }
 
     fn hello(&mut self, body: &[u8]) -> Result<Reply, Truncated> {
