@@ -325,15 +325,25 @@ fn main() -> ! {
             pddb.is_mounted_blocking();
             // maki: and until the PIN has opened the secret basis, so that the FIDO store (and
             // the keys it makes on first use) lands in it, not in the system basis
-            maki_keys::Keys::new(&xous_names::XousNames::new().unwrap())
-                .expect("couldn't connect to maki-keys")
-                .wait_unlocked();
+            let keys = maki_keys::Keys::new(&xous_names::XousNames::new().unwrap())
+                .expect("couldn't connect to maki-keys");
+            keys.wait_unlocked();
 
             let env = XousEnv::new(conn);
             let mut ctap = vault2::Ctap::new(env, Instant::now());
             loop {
                 match ctap.env().main_hid_connection().u2f_wait_incoming() {
                     Ok(msg) => {
+                        // maki: nothing is answered while maki is locked. The secret basis is
+                        // closed, and the store would read the system basis instead, even make
+                        // keys there. The request is dropped (the browser tries again) until the
+                        // PIN opens the basis, and then the store re-reads what it holds.
+                        if keys.status().0 != maki_keys::State::Unlocked {
+                            log::info!("FIDO request while locked: waiting for the PIN");
+                            keys.wait_unlocked();
+                            ctap.env().store().refresh();
+                            continue;
+                        }
                         ctap.update_timeouts(Instant::now());
                         let mutex = opensk_mutex.lock().unwrap();
                         log::trace!("Received U2F packet");

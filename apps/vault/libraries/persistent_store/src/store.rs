@@ -220,6 +220,12 @@ impl<S: Storage> Store<S> {
         self.storage
     }
 
+    /// Re-reads which entries exist, for when the PDDB changed underneath the store: a basis
+    /// opened or closed (maki locking and unlocking), or keys written by another process.
+    pub fn refresh(&mut self) {
+        self.entries = self.pddb.list_keys(crate::store::OPENSK2_DICT, None).ok();
+    }
+
     /// Iterates over the entries.
     pub fn iter<'a>(&'a self) -> StoreResult<StoreIter<'a>> {
         Ok(Box::new(
