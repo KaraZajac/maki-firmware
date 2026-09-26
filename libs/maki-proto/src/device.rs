@@ -128,6 +128,23 @@ pub enum Approval {
     TimedOut = 3,
     /// The vault couldn't be reached or its storage isn't ready.
     Unavailable = 4,
+    /// A code needs a clock verified by Roughtime. The host's word isn't enough: a host that
+    /// could set the clock could collect codes for times still to come.
+    ClockNotVerified = 5,
+}
+
+impl Approval {
+    pub fn from_u8(v: u8) -> Option<Approval> {
+        Some(match v {
+            0 => Approval::Approved,
+            1 => Approval::Denied,
+            2 => Approval::NoMatch,
+            3 => Approval::TimedOut,
+            4 => Approval::Unavailable,
+            5 => Approval::ClockNotVerified,
+            _ => return None,
+        })
+    }
 }
 
 /// Reply bodies for [`Ask`] outcomes, so the device glue and the fake build them identically.
@@ -194,6 +211,15 @@ impl<P: Platform> Device<P> {
 
     pub fn platform(&self) -> &P { &self.platform }
 
+    /// For the fake maki only: take the platform's clock (the host's own) as verified, so codes
+    /// work without reaching the Roughtime servers.
+    #[cfg(feature = "fake")]
+    pub fn trust_platform_clock(&mut self, tz_offset_s: i32) {
+        self.tz_offset_s = tz_offset_s;
+        self.state = TimeState::Verified;
+        self.platform.time_state_changed(self.state);
+    }
+
     /// Handle one packet: answer it now, or hand back what to ask the owner.
     pub fn handle(&mut self, packet: &Packet) -> Handled {
         let body = &packet.body;
@@ -203,14 +229,14 @@ impl<P: Platform> Device<P> {
             kind::TIME_CHALLENGE => self.time_challenge(body),
             kind::TIME_PROOF => self.time_proof(body),
             kind::TIME_UNVERIFIED => self.time_unverified(body),
-            kind::GET_LOGIN | kind::GET_TOTP | kind::SAVE_LOGIN => return Self::ask(packet.kind, body),
+            kind::GET_LOGIN | kind::GET_TOTP | kind::SAVE_LOGIN => return self.ask(packet.kind, body),
             _ => Ok(error(ErrorCode::UnknownKind, "unknown message kind")),
         };
         let (kind, body) = result.unwrap_or_else(malformed);
         Handled::Reply(kind, body)
     }
 
-    fn ask(kind: u8, body: &[u8]) -> Handled {
+    fn ask(&self, kind: u8, body: &[u8]) -> Handled {
         let parsed = (|| {
             let mut r = Reader::new(body);
             let site = r.str8()?.to_string();
@@ -231,8 +257,20 @@ impl<P: Platform> Device<P> {
                 let (k, b) = error(ErrorCode::BadArgument, "site must be a lowercase ASCII hostname");
                 Handled::Reply(k, b)
             }
-            Ok((_, Ask::SaveLogin { username, .. })) if username.is_empty() => {
-                let (k, b) = error(ErrorCode::BadArgument, "username is empty");
+            Ok((_, Ask::SaveLogin { username, password, .. })) if username.is_empty() || password.is_empty() => {
+                let (k, b) = error(ErrorCode::BadArgument, "username or password is empty");
+                Handled::Reply(k, b)
+            }
+            // the vault keeps a record as lines of text; and nothing shown on screen should
+            // be able to move the cursor
+            Ok((_, Ask::SaveLogin { username, password, .. }))
+                if username.chars().chain(password.chars()).any(char::is_control) =>
+            {
+                let (k, b) = error(ErrorCode::BadArgument, "control characters in username or password");
+                Handled::Reply(k, b)
+            }
+            Ok((_, Ask::Totp { .. })) if self.state != TimeState::Verified => {
+                let (k, b) = reply::totp(Approval::ClockNotVerified, "", 0);
                 Handled::Reply(k, b)
             }
             Ok((_, ask)) => Handled::Ask(ask),

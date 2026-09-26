@@ -10,6 +10,7 @@ mod totp;
 pub mod vault_api;
 pub use vault_api::*;
 mod generator;
+mod link;
 mod vendor_commands;
 
 use core::sync::atomic::{AtomicBool, Ordering};
@@ -124,6 +125,9 @@ fn main() -> ! {
             VaultOp::FocusChange.to_u32().unwrap(),
         )
         .expect("couldn't register with the launcher");
+
+    // maki: logins and codes for the browser, approved on screen
+    link::start(conn);
 
     // spawn the actions server. This is responsible for grooming the UX elements. It
     // has to be in its own thread because it uses blocking modal calls that would cause

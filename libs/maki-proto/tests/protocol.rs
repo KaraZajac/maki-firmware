@@ -269,9 +269,18 @@ fn nonsense_arguments_and_messages_are_refused() {
 
 fn handled(d: &mut Device<Replay>, kind: u8, body: Vec<u8>) -> Handled { d.handle(&Packet { kind, id: 9, body }) }
 
+/// A device whose clock three pinned servers have verified.
+fn verified_device() -> Device<Replay> {
+    let mut d = device();
+    challenge(&mut d);
+    proof(&mut d, 0, &answers(&[]));
+    assert_eq!(d.state(), TimeState::Verified);
+    d
+}
+
 #[test]
 fn login_and_totp_requests_become_asks() {
-    let mut d = device();
+    let mut d = verified_device();
     assert_eq!(
         handled(&mut d, kind::GET_LOGIN, Writer::new().str8("github.com").finish()),
         Handled::Ask(Ask::Login { site: "github.com".into() })
@@ -296,6 +305,35 @@ fn sites_that_could_mislead_on_screen_are_refused() {
     }
     let no_user = ask(&mut d, kind::SAVE_LOGIN, Writer::new().str8("example.org").str8("").str8("pw").finish());
     assert_eq!(error_code(&no_user), ErrorCode::BadArgument as u8);
+    let no_password = ask(&mut d, kind::SAVE_LOGIN, Writer::new().str8("example.org").str8("kara").str8("").finish());
+    assert_eq!(error_code(&no_password), ErrorCode::BadArgument as u8);
+}
+
+#[test]
+fn a_saved_login_cannot_smuggle_lines_into_the_vault() {
+    let mut d = device();
+    for (user, pass) in [("kara\ndescription:bank.com", "pw"), ("kara", "pw\npassword:x"), ("kara\r", "pw"), ("ka\u{1b}[2Jra", "pw")] {
+        let reply = ask(&mut d, kind::SAVE_LOGIN, Writer::new().str8("example.org").str8(user).str8(pass).finish());
+        assert_eq!(error_code(&reply), ErrorCode::BadArgument as u8, "{user:?}/{pass:?} was accepted");
+    }
+}
+
+#[test]
+fn codes_wait_for_a_verified_clock() {
+    let totp = |d: &mut Device<Replay>| d.handle(&Packet { kind: kind::GET_TOTP, id: 3, body: Writer::new().str8("github.com").finish() });
+    let refused = Handled::Reply(kind::GET_TOTP | kind::REPLY, reply::totp(Approval::ClockNotVerified, "", 0).1);
+    let mut d = device();
+    assert_eq!(totp(&mut d), refused, "no clock at all");
+    // the host's word sets the clock, but a host that could choose the time could collect codes
+    // for times still to come
+    let (k, _) = ask(&mut d, kind::TIME_UNVERIFIED, Writer::new().u64(1_790_000_000_000).i32(0).finish());
+    assert_eq!(k, kind::TIME_UNVERIFIED | kind::REPLY);
+    assert_eq!(totp(&mut d), refused, "the host's clock");
+    let mut d = verified_device();
+    assert_eq!(totp(&mut d), Handled::Ask(Ask::Totp { site: "github.com".into() }));
+    // logins don't depend on the clock
+    let mut d = device();
+    assert!(matches!(d.handle(&Packet { kind: kind::GET_LOGIN, id: 4, body: Writer::new().str8("github.com").finish() }), Handled::Ask(_)));
 }
 
 #[test]
@@ -306,6 +344,10 @@ fn saved_entries_cover_their_own_site_and_subdomains_only() {
     assert!(!site::covers("github.com", "evilgithub.com"));
     assert!(!site::covers("github.com", "github.com.evil.net"));
     assert!(!site::covers("", "github.com"));
+    // entries that aren't hostnames match nothing, rather than whole top-level domains
+    assert!(!site::covers("Bank", "evil.bank"));
+    assert!(!site::covers("my bank", "bank"));
+    assert!(!site::covers("com", "github.com"));
 }
 
 #[test]
@@ -317,4 +359,28 @@ fn a_refusal_never_carries_the_secret() {
     let (_, body) = reply::totp(Approval::TimedOut, "123456", 20);
     let mut r = Reader::new(&body);
     assert_eq!((r.u8().unwrap(), r.str8().unwrap(), r.u8().unwrap()), (Approval::TimedOut as u8, "", 0));
+}
+
+#[test]
+fn sites_on_screen_break_at_dots_and_always_show_their_end() {
+    assert_eq!(site::lines("github.com", 17, 3), ["github.com"]);
+    assert_eq!(site::lines("login.accounts.example.com", 17, 3), ["login.accounts.", "example.com"]);
+    // a label too long for a line is broken where it has to be
+    assert_eq!(site::lines("averyveryverylonglabel.com", 17, 3), ["averyveryverylong", "label.com"]);
+    // too long to show whole: the start goes, the end stays
+    let long = format!("{}.github.com.evil.example", "x".repeat(80));
+    let shown = site::lines(&long, 17, 3);
+    assert_eq!(shown.len(), 3);
+    assert!(shown.iter().all(|l| l.chars().count() <= 17), "{shown:?}");
+    assert!(shown[0].starts_with('…'));
+    assert!(shown.concat().ends_with(".github.com.evil.example"), "{shown:?}");
+    // a cut that lands on a dot starts the shown part at the next label
+    assert_eq!(
+        site::lines("accounts.a-rather-long-subdomain.login.example.co.uk", 15, 3).concat(),
+        "…a-rather-long-subdomain.login.example.co.uk"
+    );
+    // never more lines than asked for, even when breaking at dots would need them
+    let dotty = "a.b.c.d.e.f.g.h.i.j.k.l.m.n.o.p.q.r.s.t.u.v.w.x.y";
+    assert!(site::lines(dotty, 17, 3).len() <= 3);
+    assert_eq!(site::lines(dotty, 17, 3).concat(), dotty);
 }

@@ -1,9 +1,12 @@
 //! A host stand-in for maki: the real protocol logic behind a TCP socket.
 //!
-//!     cargo run -p maki-proto --example fake_maki -- [ADDR] [--deny | --ask] [--totp SITE=BASE32]...
+//!     cargo run -p maki-proto --features fake --example fake_maki -- \
+//!         [ADDR] [--deny | --ask] [--totp SITE=BASE32]... [--clock-verified]
 //!
 //! ADDR defaults to 127.0.0.1:7878. Logins and TOTP secrets live in memory; SAVE_LOGIN adds to them.
 //! Approvals are automatic unless `--deny` (refuse everything) or `--ask` (ask on this terminal).
+//! Codes need a verified clock, as on the badge: sync through Roughtime first, or start with
+//! `--clock-verified` to take this computer's clock as verified (tests, offline work).
 //! Everything maki-link does on the device happens here too, except the USB hop, the Xous clock and
 //! maki's own screen. State survives reconnects, like a badge that stays plugged in.
 
@@ -154,7 +157,16 @@ fn main() {
     let listener = TcpListener::bind(&addr).expect("bind");
     // print the bound address, so a caller that asked for port 0 learns the real one
     println!("fake maki listening on {}", listener.local_addr().unwrap());
-    let device = Arc::new(Mutex::new(Device::new(Host { start: Instant::now(), clock: None }, "maki", "0.2.0-fake".into())));
+    let mut device = Device::new(Host { start: Instant::now(), clock: None }, "maki", "0.2.0-fake".into());
+    if args.iter().any(|a| a == "--clock-verified") {
+        device.handle(&frame::Packet {
+            kind: maki_proto::kind::TIME_UNVERIFIED,
+            id: 0,
+            body: maki_proto::wire::Writer::new().u64(host_utc_ms()).i32(0).finish(),
+        });
+        device.trust_platform_clock(0);
+    }
+    let device = Arc::new(Mutex::new(device));
     for stream in listener.incoming() {
         let Ok(mut stream) = stream else { continue };
         println!("connected: {:?}", stream.peer_addr());

@@ -27,6 +27,8 @@ ticktimer-server = { package = "xous-api-ticktimer", version = "0.9.65" }
 userprefs = { path = "../../libs/userprefs" }
 ux-api = { path = "../../libs/ux-api" }
 maki-launcher = { path = "../maki-launcher" }
+maki-proto = { path = "../../libs/maki-proto" }
+maki-vault-api = { path = "../../libs/maki-vault-api" }
 bao1x-api = { path = "../../libs/bao1x-api" }
 bao1x-hal = { path = "../../libs/bao1x-hal" }
 bao1x-hal-service = { path = "../../services/bao1x-hal-service", optional = true }

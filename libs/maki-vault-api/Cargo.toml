@@ -1,0 +1,17 @@
+[package]
+name = "maki-vault-api"
+version = "0.1.0"
+edition = "2021"
+description = "How maki-link asks the vault for logins and codes on the browser's behalf"
+
+[dependencies]
+num-derive = { version = "0.4.2", default-features = false }
+num-traits = { version = "0.2.14", default-features = false }
+xous = "0.9.66"
+xous-ipc = "0.10.6"
+xous-names = { package = "xous-api-names", version = "0.9.67" }
+rkyv = { version = "0.8.8", default-features = false, features = [
+    "std",
+    "alloc",
+] }
+maki-proto = { path = "../maki-proto" }

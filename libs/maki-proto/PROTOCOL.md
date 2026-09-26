@@ -63,7 +63,8 @@ TIME_PROOF `status`: 0 clock set, 1 too few verified answers, 2 answers disagree
 TIME_PROOF `answer`: 0 verified, 1 unknown server, 2 duplicate, 3 invalid, 4 too imprecise.
 ERROR `code`: 1 malformed, 2 unknown kind, 3 no challenge, 4 challenge expired, 5 bad argument.
 `approval`: 0 approved, 1 denied, 2 nothing saved for the site (the owner wasn't asked), 3 timed
-out, 4 vault unavailable. Only an approved reply carries a username, password or code.
+out, 4 vault unavailable (or busy: at most three requests wait for the owner at once), 5 clock
+not verified (GET_TOTP only). Only an approved reply carries a username, password or code.
 
 ## Setting the time
 
@@ -95,9 +96,12 @@ The timezone offset is always the host's word: it only affects what the clock di
 
 ## Logins and codes
 
-GET_LOGIN, GET_TOTP and SAVE_LOGIN go to the vault, which shows the request on maki's screen and
-waits for the owner: any key approves, **↓** refuses, and silence refuses after a timeout. The
-same interaction as approving a passkey.
+GET_LOGIN, GET_TOTP and SAVE_LOGIN go to the vault, which asks the owner on maki's screen: the
+launcher shows the site and the question over whatever is in front, and gives the screen back
+after. **Press** (select, or the centre of the pad) allows; nothing else does, so a bumped
+key can't. **Left** (or down, on a plain question) refuses, and the question gives up after
+30 s. When there's more than one answer (two logins for a site), **up** and **down** go
+through them and pressing picks one.
 
 - **`site` is what maki displays**, so it must be a lowercase ASCII hostname: letters, digits,
   dots, hyphens. Anything else is refused with `bad argument`. International domains travel as
@@ -107,7 +111,18 @@ same interaction as approving a passkey.
   `gist.github.com`, never `evilgithub.com`. Saved entries may hold a URL; maki compares the
   hostname without `www.`.
 - **Nothing saved means no prompt**: maki answers `2` at once rather than asking the owner about a
-  site it has nothing for.
+  site it has nothing for. An entry that doesn't name a host with a dot ("GitHub", "bank")
+  covers nothing, rather than whole top-level domains.
+- **Codes need a verified clock.** GET_TOTP is answered `5` at once unless Roughtime set the
+  clock: a host that could set the time with TIME_UNVERIFIED could otherwise collect codes for
+  times still to come.
+- **Which code is for which site is the owner's call.** TOTP entries (from a QR code) don't name
+  a website. The first time a site asks, maki lists the entries, the likeliest first, and the
+  one picked remembers that site; after that the site gets a plain yes-or-no.
+- **SAVE_LOGIN** needs a username and a password, with no control characters: the vault keeps
+  records as lines of text, and the owner reads them on screen. The same login already kept is
+  approved without asking. A new password for a username maki has asks "Update password?", and
+  keeps the old one in the entry's notes unless those hold something of the owner's.
 - **What this protects.** Nothing leaves maki without a press on a screen naming the site, so
   software on the computer can't quietly empty the vault. Once approved, a password or code is on
   the computer, and maki can't prove the site is the one the request claims. Passkeys, which never

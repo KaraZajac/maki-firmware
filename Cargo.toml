@@ -124,6 +124,7 @@ members = [
   "apps-baosec/maki-launcher",
   "libs/roughtime",
   "libs/maki-proto",
+  "libs/maki-vault-api",
   "services/maki-link",
   # Defcon 34 badge
   "libs/dc34-api",

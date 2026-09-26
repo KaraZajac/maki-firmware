@@ -45,6 +45,36 @@ impl Launcher {
         .map(|_| ())
     }
 
+    /// Ask the owner, over whatever is on screen, and wait for the answer: they allow (picking
+    /// one of `choices`, if there are any), deny, or let `timeout_s` run out. One ask shows at a
+    /// time; others wait their turn, and their time doesn't start until they show.
+    pub fn ask(
+        &self,
+        subject: &str,
+        question: &str,
+        detail: &str,
+        choices: &[String],
+        timeout_s: u32,
+    ) -> Result<Answer, xous::Error> {
+        let request = AskRequest {
+            subject: subject.into(),
+            question: question.into(),
+            detail: detail.into(),
+            choices: choices.to_vec(),
+            timeout_s,
+            answer: ANSWER_TIMED_OUT,
+            choice: 0,
+        };
+        let mut buf = Buffer::into_buf(request).or(Err(xous::Error::InternalError))?;
+        buf.lend_mut(self.conn, LauncherOp::Ask.to_u32().unwrap())?;
+        let answered = buf.to_original::<AskRequest, _>().or(Err(xous::Error::InternalError))?;
+        Ok(match answered.answer {
+            ANSWER_ALLOWED => Answer::Allowed(answered.choice as usize),
+            ANSWER_DENIED => Answer::Denied,
+            _ => Answer::TimedOut,
+        })
+    }
+
     /// Return to the home screen. Stop drawing *before* calling this, or the app's next frame
     /// can land on top of the home screen.
     pub fn home(&self) -> Result<(), xous::Error> {

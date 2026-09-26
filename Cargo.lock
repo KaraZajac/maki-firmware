@@ -4169,6 +4169,7 @@ dependencies = [
  "bao1x-hal-service",
  "blitstr2",
  "log",
+ "maki-proto",
  "num-derive 0.4.2",
  "num-traits",
  "pddb",
@@ -4190,6 +4191,7 @@ dependencies = [
  "log",
  "maki-launcher",
  "maki-proto",
+ "maki-vault-api",
  "num-traits",
  "usb-bao1x",
  "xous 0.9.70 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -4205,6 +4207,19 @@ dependencies = [
  "hmac 0.12.1",
  "roughtime",
  "sha1",
+]
+
+[[package]]
+name = "maki-vault-api"
+version = "0.1.0"
+dependencies = [
+ "maki-proto",
+ "num-derive 0.4.2",
+ "num-traits",
+ "rkyv 0.8.8",
+ "xous 0.9.70 (registry+https://github.com/rust-lang/crates.io-index)",
+ "xous-api-names",
+ "xous-ipc 0.10.10 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 
 [[package]]
@@ -7682,6 +7697,8 @@ dependencies = [
  "locales",
  "log",
  "maki-launcher",
+ "maki-proto",
+ "maki-vault-api",
  "modals",
  "num-derive 0.4.2",
  "num-traits",

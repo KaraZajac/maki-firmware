@@ -20,6 +20,7 @@ ticktimer-server = { package = "xous-api-ticktimer", version = "0.9.65" }
 pddb = { path = "../../services/pddb" }
 ux-api = { path = "../../libs/ux-api" }
 blitstr2 = { path = "../../libs/blitstr2" }
+maki-proto = { path = "../../libs/maki-proto" }
 bao1x-hal-service = { path = "../../services/bao1x-hal-service", optional = true }
 
 [features]

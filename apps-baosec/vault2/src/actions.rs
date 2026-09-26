@@ -673,6 +673,7 @@ impl ActionManager {
                     ctime: 0,
                     is_hotp: !is_totp,
                     notes: t!("vault.notes", locales::LANG).to_string(),
+                    site: String::new(),
                 };
 
                 match self.storage.borrow_mut().new_record(&mut totp, None, true) {
@@ -1723,6 +1724,7 @@ impl ActionManager {
                     timestep: 30,
                     ctime: 0,
                     is_hotp: false,
+                    site: String::new(),
                 };
 
                 match self.storage.borrow_mut().new_record(&mut record, None, true) {
@@ -1741,6 +1743,7 @@ impl ActionManager {
                 timestep: 30,
                 ctime: 0,
                 is_hotp: false,
+                site: String::new(),
             };
 
             match self.storage.borrow_mut().new_record(&mut record, None, true) {

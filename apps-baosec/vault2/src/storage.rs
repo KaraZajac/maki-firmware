@@ -13,7 +13,7 @@ use crate::totp::TotpAlgorithm;
 use crate::vault_api::VAULT_PASSWORD_DICT;
 use crate::vault_api::VAULT_TOTP_DICT;
 const VAULT_TOTP_ALLOC_HINT: usize = 128;
-const VAULT_PASSWORD_REC_VERSION: u32 = 1;
+pub(crate) const VAULT_PASSWORD_REC_VERSION: u32 = 1;
 
 // Version history TOTP record:
 //  - v1 created, basic record for TOTP
@@ -21,7 +21,9 @@ const VAULT_PASSWORD_REC_VERSION: u32 = 1;
 //    - `hotp` field added. If 1, then HOTP record. If not existent or not 1, then TOTP
 //    - If HOTP, then the `timestep` field is re-purposed as the `count` field.
 //    - v1 records read directly onto v2 records, and `hotp` is always `false` for v1 records
-const VAULT_TOTP_REC_VERSION: u32 = 2;
+//  - v3 (maki) add `site`: the sites, space-separated, the owner chose this entry for when a
+//    browser asked for a code. Older records read with no sites; older vaults skip the line.
+pub(crate) const VAULT_TOTP_REC_VERSION: u32 = 3;
 
 #[derive(Debug)]
 #[allow(dead_code)]
@@ -66,6 +68,7 @@ pub struct ContentPDDBSettings {
     alloc_hint: Option<usize>,
 }
 
+#[derive(Clone)]
 pub enum ContentKind {
     TOTP,
     Password,
@@ -284,6 +287,22 @@ pub struct TotpRecord {
     pub timestep: u64,
     pub ctime: u64,
     pub is_hotp: bool,
+    /// Sites this entry gives codes for, space-separated hostnames (maki; see the version notes).
+    pub site: String,
+}
+
+impl TotpRecord {
+    pub fn sites(&self) -> impl Iterator<Item = &str> { self.site.split(' ').filter(|s| !s.is_empty()) }
+
+    /// Remember that this entry gives codes for `site`.
+    pub fn add_site(&mut self, site: &str) {
+        if !self.sites().any(|s| s == site) {
+            if !self.site.is_empty() {
+                self.site.push(' ');
+            }
+            self.site.push_str(site);
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -437,6 +456,7 @@ impl StorageContent for TotpRecord {
                         }
                     }
                     "notes" => pr.notes.push_str(data),
+                    "site" => pr.site.push_str(data),
                     "digits" => {
                         if let Ok(digits) = u32::from_str_radix(data, 10) {
                             pr.digits = digits;
@@ -489,7 +509,7 @@ impl StorageContent for TotpRecord {
 
     fn to_vec(&self) -> Vec<u8> {
         format!(
-            "{}:{}\n{}:{}\n{}:{}\n{}:{}\n{}:{}\n{}:{}\n{}:{}\n{}:{}\n{}:{}\n",
+            "{}:{}\n{}:{}\n{}:{}\n{}:{}\n{}:{}\n{}:{}\n{}:{}\n{}:{}\n{}:{}\n{}:{}\n",
             "version",
             self.version,
             "secret",
@@ -506,6 +526,8 @@ impl StorageContent for TotpRecord {
             self.timestep,
             "hotp",
             if self.is_hotp { 1 } else { 0 },
+            "site",
+            self.site,
             "ctime",
             self.ctime,
         )
@@ -535,6 +557,7 @@ impl TryFrom<Vec<u8>> for TotpRecord {
             ctime: 0,
             timestep: 0,
             is_hotp: false,
+            site: String::new(),
         };
         let lines = desc_str.split('\n');
         for line in lines {
@@ -557,6 +580,7 @@ impl TryFrom<Vec<u8>> for TotpRecord {
                         }
                     }
                     "notes" => pr.notes.push_str(data),
+                    "site" => pr.site.push_str(data),
                     "digits" => {
                         if let Ok(digits) = u32::from_str_radix(data, 10) {
                             pr.digits = digits;
@@ -609,7 +633,7 @@ impl TryFrom<Vec<u8>> for TotpRecord {
 impl From<TotpRecord> for Vec<u8> {
     fn from(tr: TotpRecord) -> Self {
         format!(
-            "{}:{}\n{}:{}\n{}:{}\n{}:{}\n{}:{}\n{}:{}\n{}:{}\n{}:{}\n{}:{}\n",
+            "{}:{}\n{}:{}\n{}:{}\n{}:{}\n{}:{}\n{}:{}\n{}:{}\n{}:{}\n{}:{}\n{}:{}\n",
             "version",
             tr.version,
             "secret",
@@ -626,6 +650,8 @@ impl From<TotpRecord> for Vec<u8> {
             tr.timestep,
             "hotp",
             if tr.is_hotp { 1 } else { 0 },
+            "site",
+            tr.site,
             "ctime",
             tr.ctime,
         )

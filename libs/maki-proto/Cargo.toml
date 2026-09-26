@@ -11,3 +11,11 @@ roughtime = { path = "../roughtime" }
 # fake_maki computes real TOTP codes, the way the vault does
 hmac = "0.12.1"
 sha1 = "0.10.6"
+
+[features]
+# the fake maki's shortcut past Roughtime (Device::trust_platform_clock); never for the badge
+fake = []
+
+[[example]]
+name = "fake_maki"
+required-features = ["fake"]
