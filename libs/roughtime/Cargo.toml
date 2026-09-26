@@ -1,0 +1,11 @@
+[package]
+name = "roughtime"
+version = "0.1.0"
+edition = "2021"
+description = "Roughtime (draft-ietf-ntp-roughtime-19) request builder and response verifier, no_std"
+
+[dependencies]
+# the Baochip build of ed25519-dalek 2.x, as the keystore uses; the workspace-patched
+# curve25519-dalek targets Precursor's hardware engine, which bao1x lacks
+ed25519-dalek = { package = "ed25519-dalek-compat", path = "../../bao1x-boot/ed25519-dalek-compat", default-features = false }
+sha2 = { version = "0.10.8", default-features = false }

@@ -26,7 +26,7 @@ rand_core = "0.6.3"
 ticktimer-server = { package = "xous-api-ticktimer", version = "0.9.65" }
 userprefs = { path = "../../libs/userprefs" }
 ux-api = { path = "../../libs/ux-api" }
-baokey-launcher = { path = "../baokey-launcher" }
+maki-launcher = { path = "../maki-launcher" }
 bao1x-api = { path = "../../libs/bao1x-api" }
 bao1x-hal = { path = "../../libs/bao1x-hal" }
 bao1x-hal-service = { path = "../../services/bao1x-hal-service", optional = true }

@@ -112,10 +112,10 @@ fn main() -> ! {
     crate::totp::pumper(mode.clone(), pump_sid, conn, allow_totp_rendering.clone());
     let pump_conn = xous::connect(pump_sid).unwrap();
 
-    // BAOKEY: key presses arrive through the launcher, and only while the vault is in front.
+    // maki: key presses arrive through the launcher, and only while the vault is in front.
     // The launcher is itself a filtered listener on the `Gfx` subsystem, so modals still take
     // precedence exactly as before.
-    let launcher = baokey_launcher::Launcher::new(&xns).expect("couldn't connect to the launcher");
+    let launcher = maki_launcher::Launcher::new(&xns).expect("couldn't connect to the launcher");
     launcher
         .register(
             "Vault",
@@ -420,7 +420,7 @@ fn main() -> ! {
                 vault_ui.redraw();
             }
             Some(VaultOp::FocusChange) => xous::msg_scalar_unpack!(msg, focus, _, _, _, {
-                let foreground = focus == baokey_launcher::Focus::Foreground.to_usize().unwrap();
+                let foreground = focus == maki_launcher::Focus::Foreground.to_usize().unwrap();
                 vault_ui.set_focus(foreground);
                 if foreground {
                     if menu_active {

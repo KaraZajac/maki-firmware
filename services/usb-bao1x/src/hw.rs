@@ -89,7 +89,9 @@ impl<'a> Bao1xUsb<'a> {
         // storage!)
 
         #[cfg(feature = "oem-baosec-lite")]
-        let product = "Baosec-lite";
+        // maki: our own product name, so a host can tell maki from a stock DC34 badge, which
+        // shares the VID/PID and would otherwise be probed as maki
+        let product = "maki";
         #[cfg(all(feature = "board-baosec", not(feature = "oem-baosec-lite")))]
         let product = "Baosec";
         #[cfg(feature = "board-baosec")]

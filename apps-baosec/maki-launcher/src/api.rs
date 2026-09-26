@@ -1,7 +1,7 @@
 //! IPC between the launcher and the apps it manages.
 
 /// xous-names name of the launcher's server.
-pub const SERVER_NAME_LAUNCHER: &str = "_BAOKEY launcher_";
+pub const SERVER_NAME_LAUNCHER: &str = "_maki launcher_";
 
 /// Sent as `arg1` of an app's `focus_op` scalar whenever the app moves to or from the front.
 #[derive(Debug, Copy, Clone, PartialEq, Eq, num_derive::FromPrimitive, num_derive::ToPrimitive)]
@@ -22,6 +22,10 @@ pub(crate) enum LauncherOp {
     Ready = 3,
     /// Scalar from our own timer thread, once a second, to keep the clock current.
     Tick = 4,
+    /// Scalar from maki-link: `arg1` is 0 (unset), 1 (unverified) or 2 (verified).
+    TimeState = 5,
+    /// Scalar from maki-link: `arg1` is 1 while the desktop app is linked, 0 otherwise.
+    LinkState = 6,
 }
 
 /// Sent once by an app at startup to appear on the home screen.

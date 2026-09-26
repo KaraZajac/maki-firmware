@@ -1,0 +1,8 @@
+[package]
+name = "maki-proto"
+version = "0.1.0"
+edition = "2021"
+description = "maki's serial protocol: framing, messages, and the device-side logic"
+
+[dependencies]
+roughtime = { path = "../roughtime" }

@@ -617,25 +617,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "baokey-launcher"
-version = "0.1.0"
-dependencies = [
- "bao1x-hal-service",
- "blitstr2",
- "log",
- "num-derive 0.4.2",
- "num-traits",
- "pddb",
- "rkyv 0.8.8",
- "ux-api",
- "xous 0.9.70 (registry+https://github.com/rust-lang/crates.io-index)",
- "xous-api-log",
- "xous-api-names",
- "xous-api-ticktimer",
- "xous-ipc 0.10.10 (registry+https://github.com/rust-lang/crates.io-index)",
-]
-
-[[package]]
 name = "bare-metal"
 version = "0.2.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4182,6 +4163,49 @@ dependencies = [
 ]
 
 [[package]]
+name = "maki-launcher"
+version = "0.1.0"
+dependencies = [
+ "bao1x-hal-service",
+ "blitstr2",
+ "log",
+ "num-derive 0.4.2",
+ "num-traits",
+ "pddb",
+ "rkyv 0.8.8",
+ "ux-api",
+ "xous 0.9.70 (registry+https://github.com/rust-lang/crates.io-index)",
+ "xous-api-log",
+ "xous-api-names",
+ "xous-api-ticktimer",
+ "xous-ipc 0.10.10 (registry+https://github.com/rust-lang/crates.io-index)",
+]
+
+[[package]]
+name = "maki-link"
+version = "0.1.0"
+dependencies = [
+ "bao1x-hal-service",
+ "getrandom 0.2.12",
+ "log",
+ "maki-launcher",
+ "maki-proto",
+ "num-traits",
+ "usb-bao1x",
+ "xous 0.9.70 (registry+https://github.com/rust-lang/crates.io-index)",
+ "xous-api-log",
+ "xous-api-names",
+ "xous-api-ticktimer",
+]
+
+[[package]]
+name = "maki-proto"
+version = "0.1.0"
+dependencies = [
+ "roughtime",
+]
+
+[[package]]
 name = "managed"
 version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5883,6 +5907,14 @@ dependencies = [
  "xous-ipc 0.10.10 (registry+https://github.com/rust-lang/crates.io-index)",
  "xous-semver",
  "zeroize",
+]
+
+[[package]]
+name = "roughtime"
+version = "0.1.0"
+dependencies = [
+ "ed25519-dalek-compat",
+ "sha2 0.10.8",
 ]
 
 [[package]]
@@ -7632,7 +7664,6 @@ dependencies = [
  "bao1x-emu",
  "bao1x-hal",
  "bao1x-hal-service",
- "baokey-launcher",
  "base32",
  "base45",
  "blitstr2",
@@ -7648,6 +7679,7 @@ dependencies = [
  "keystore",
  "locales",
  "log",
+ "maki-launcher",
  "modals",
  "num-derive 0.4.2",
  "num-traits",

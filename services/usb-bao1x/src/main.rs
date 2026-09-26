@@ -683,6 +683,21 @@ pub(crate) fn main_hw() -> ! {
             Opcode::SerialHookBinary => {
                 serial_listen_mode = SerialListenMode::BinaryListener;
                 serial_listener = msg_opt.take();
+                // maki: hand over anything that arrived while no listener was hooked. Otherwise
+                // bytes landing between two hooks wait for the *next* packet, which never comes
+                // in a request/response protocol where the host is waiting on our reply.
+                if !serial_buf.is_empty() {
+                    if let Some(mut rx_msg) = serial_listener.take() {
+                        let mut response = unsafe {
+                            Buffer::from_memory_message_mut(rx_msg.body.memory_message_mut().unwrap())
+                        };
+                        let mut buf = response.to_original::<UsbSerialBinary, _>().unwrap();
+                        let n = serial_buf.len().min(SERIAL_BINARY_BUFLEN);
+                        buf.d.extend(serial_buf.drain(..n));
+                        response.replace(buf).unwrap();
+                        // dropping rx_msg returns the data to the listener
+                    }
+                }
             }
             Opcode::SerialHookConsole => msg_scalar_unpack!(msg, _, _, _, _, {
                 let log_conn = xous::connect(xous::SID::from_bytes(b"xous-log-server ").unwrap()).unwrap();
@@ -745,7 +760,9 @@ pub(crate) fn main_hw() -> ! {
                                 };
                                 let mut buf = response.to_original::<UsbSerialBinary, _>().unwrap();
                                 let chars_avail = serial_buf.len().min(SERIAL_BINARY_BUFLEN);
-                                buf.d.copy_from_slice(serial_buf.drain(..chars_avail).as_slice());
+                                // maki: extend, not copy_from_slice -- the listener lends an empty Vec,
+                                // so copying any pending bytes into it panicked the USB service
+                                buf.d.extend(serial_buf.drain(..chars_avail));
                                 response.replace(buf).unwrap();
                                 // the rx_msg will drop and respond to the listener
                             }

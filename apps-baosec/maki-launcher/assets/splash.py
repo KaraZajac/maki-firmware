@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Draw the BAOKEY boot image and write it as src/splash.rs.
+"""Draw the maki boot image and write it as src/splash.rs.
 
 A steamed bao with a keyhole, 128x128, 1 bit. Drawn procedurally so there is no
 Inkscape/PIL step; rerun after editing. Output matches the dc34-vault bitmap

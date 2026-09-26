@@ -43,9 +43,9 @@ pub(crate) enum VaultOp {
 
     ShowQr,
 
-    /// BAOKEY launcher: `arg1` is a `baokey_launcher::Focus`
+    /// maki launcher: `arg1` is a `maki_launcher::Focus`
     FocusChange,
-    /// Vault menu: return to the BAOKEY home screen
+    /// Vault menu: return to the maki home screen
     MenuHome,
 }
 

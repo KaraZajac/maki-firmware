@@ -1,0 +1,23 @@
+[package]
+name = "maki-link"
+version = "0.1.0"
+edition = "2021"
+description = "maki's link to the desktop app over USB serial"
+
+[dependencies]
+log = "0.4.14"
+num-traits = { version = "0.2.14", default-features = false }
+xous = "0.9.66"
+log-server = { package = "xous-api-log", version = "0.1.65" }
+xous-names = { package = "xous-api-names", version = "0.9.67" }
+ticktimer-server = { package = "xous-api-ticktimer", version = "0.9.65" }
+getrandom = "0.2"
+maki-proto = { path = "../../libs/maki-proto" }
+maki-launcher = { path = "../../apps-baosec/maki-launcher" }
+usb-bao1x = { path = "../usb-bao1x" }
+bao1x-hal-service = { path = "../bao1x-hal-service", optional = true }
+
+[features]
+board-baosec = ["bao1x-hal-service", "usb-bao1x/board-baosec"]
+hosted-baosec = ["usb-bao1x/hosted-baosec"]
+default = []

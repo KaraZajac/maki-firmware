@@ -1,8 +1,8 @@
 [package]
-name = "baokey-launcher"
+name = "maki-launcher"
 version = "0.1.0"
 edition = "2021"
-description = "BAOKEY home screen: lists the apps and owns input focus"
+description = "maki home screen: lists the apps and owns input focus"
 
 [dependencies]
 log = "0.4.14"

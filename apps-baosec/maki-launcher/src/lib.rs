@@ -1,4 +1,4 @@
-//! Client side of the BAOKEY launcher.
+//! Client side of the maki launcher.
 //!
 //! An app registers once at startup and starts in the background. From then on it receives
 //! key presses only while it is in front, plus a `Focus` scalar on every change. An app in the
@@ -25,6 +25,24 @@ impl Launcher {
         let reg = AppRegistration { name: name.into(), server_name: server_name.into(), key_op, focus_op };
         let buf = Buffer::into_buf(reg).or(Err(xous::Error::InternalError))?;
         buf.lend(self.conn, LauncherOp::Register.to_u32().unwrap()).map(|_| ())
+    }
+
+    /// Tell the home screen whether the clock is trustworthy: 0 unset, 1 unverified, 2 verified.
+    pub fn set_time_state(&self, state: u8) -> Result<(), xous::Error> {
+        xous::send_message(
+            self.conn,
+            xous::Message::new_scalar(LauncherOp::TimeState.to_usize().unwrap(), state as usize, 0, 0, 0),
+        )
+        .map(|_| ())
+    }
+
+    /// Tell the home screen whether the desktop app is linked.
+    pub fn set_link_state(&self, linked: bool) -> Result<(), xous::Error> {
+        xous::send_message(
+            self.conn,
+            xous::Message::new_scalar(LauncherOp::LinkState.to_usize().unwrap(), linked as usize, 0, 0, 0),
+        )
+        .map(|_| ())
     }
 
     /// Return to the home screen. Stop drawing *before* calling this, or the app's next frame

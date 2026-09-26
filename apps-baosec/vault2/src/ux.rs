@@ -95,7 +95,7 @@ pub struct VaultUi {
     start_hold_time: u64,
     tt: ticktimer_server::Ticktimer,
 
-    /// BAOKEY launcher focus; the vault draws only while in front
+    /// maki launcher focus; the vault draws only while in front
     focused: bool,
 }
 

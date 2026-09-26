@@ -1,4 +1,4 @@
-//! BAOKEY launcher: the boot image, the home screen, and the owner of input focus.
+//! maki launcher: the boot image, the home screen, and the owner of input focus.
 //!
 //! The launcher is the only process that registers with bao-video for key presses. While an app
 //! is in front, keys are relayed to that app and nowhere else; on the home screen they move the
@@ -23,7 +23,7 @@ use xous_ipc::Buffer;
 const SPLASH_MIN_MS: u64 = 1500;
 /// Width of the clock's slot at the right end of the status bar.
 const CLOCK_WIDTH: isize = 40;
-const NAME: &str = "BAOKEY";
+const NAME: &str = "maki";
 
 struct App {
     name: String,
@@ -41,9 +41,10 @@ fn set_focus(app: &App, focus: Focus) {
 }
 
 /// Local wall-clock time as `HH:MM`, or `--:--` until something has set it. The module has no
-/// battery, so the clock starts unset on every boot.
+/// battery, so the clock starts unset on every boot. A trailing `?` marks a time that nothing
+/// has verified (the desktop app's own clock, or the vault's QR code).
 #[cfg(feature = "board-baosec")]
-fn clock_text(time_conn: xous::CID) -> String {
+fn clock_text(time_conn: xous::CID, verified: bool) -> String {
     use bao1x_hal_service::api::TimeOp;
     let is_set = matches!(
         xous::send_message(
@@ -62,20 +63,22 @@ fn clock_text(time_conn: xous::CID) -> String {
         Ok(xous::Result::Scalar2(lo, hi)) => {
             let ms = ((hi as u64) << 32) | lo as u64;
             let secs = (ms / 1000) % 86_400;
-            format!("{:02}:{:02}", secs / 3600, (secs % 3600) / 60)
+            format!("{:02}:{:02}{}", secs / 3600, (secs % 3600) / 60, if verified { "" } else { "?" })
         }
         _ => String::from("--:--"),
     }
 }
 
 #[cfg(not(feature = "board-baosec"))]
-fn clock_text(_time_conn: xous::CID) -> String { String::from("--:--") }
+fn clock_text(_time_conn: xous::CID, _verified: bool) -> String { String::from("--:--") }
 
 struct Home {
     gfx: Gfx,
     list: ScrollableList,
     bar_height: isize,
     clock: String,
+    /// the desktop app is linked over USB
+    linked: bool,
 }
 
 impl Home {
@@ -83,7 +86,7 @@ impl Home {
         let mut list = ScrollableList::default();
         list.set_alignment(TextAlignment::Center);
         let bar_height = list.row_height() as isize;
-        Home { gfx: Gfx::new(xns).unwrap(), list, bar_height, clock: String::from("--:--") }
+        Home { gfx: Gfx::new(xns).unwrap(), list, bar_height, clock: String::from("--:--"), linked: false }
     }
 
     fn splash(&self) {
@@ -124,6 +127,17 @@ impl Home {
         write!(clock, "{}", self.clock).ok();
         self.gfx.draw_textview(&mut clock).ok();
 
+        // a dot left of the clock while the desktop app is linked
+        if self.linked {
+            self.gfx
+                .draw_circle(Circle::new_with_style(
+                    Point::new(WIDTH as isize - CLOCK_WIDTH - 6, self.bar_height / 2),
+                    2,
+                    DrawStyle::new(PixelColor::Light, PixelColor::Light, 1),
+                ))
+                .ok();
+        }
+
         self.gfx
             .draw_line(Line::new_with_style(
                 Point::new(0, self.bar_height + 1),
@@ -142,7 +156,7 @@ impl Home {
 fn main() -> ! {
     log_server::init_wait().unwrap();
     log::set_max_level(log::LevelFilter::Info);
-    log::info!("BAOKEY launcher PID is {}", xous::process::id());
+    log::info!("maki launcher PID is {}", xous::process::id());
 
     let xns = xous_names::XousNames::new().unwrap();
     let sid = xns.register_name(SERVER_NAME_LAUNCHER, None).expect("can't register server");
@@ -188,6 +202,7 @@ fn main() -> ! {
     let mut apps: Vec<App> = Vec::new();
     let mut front: Option<usize> = None; // None is the home screen
     let mut ready = false;
+    let mut time_verified = false;
 
     loop {
         let msg = xous::receive_message(sid).unwrap();
@@ -220,14 +235,14 @@ fn main() -> ! {
             }
             Some(LauncherOp::Ready) => {
                 ready = true;
-                home.clock = clock_text(time_conn);
+                home.clock = clock_text(time_conn, time_verified);
                 if front.is_none() {
                     home.redraw();
                 }
             }
             Some(LauncherOp::Tick) => {
                 if ready && front.is_none() {
-                    let now = clock_text(time_conn);
+                    let now = clock_text(time_conn, time_verified);
                     if now != home.clock {
                         home.clock = now;
                         home.redraw();
@@ -271,10 +286,23 @@ fn main() -> ! {
                     set_focus(&apps[i], Focus::Background);
                 }
                 if ready {
-                    home.clock = clock_text(time_conn);
+                    home.clock = clock_text(time_conn, time_verified);
                     home.redraw();
                 }
             }
+            Some(LauncherOp::TimeState) => xous::msg_scalar_unpack!(msg, state, _, _, _, {
+                time_verified = state == 2;
+                if ready && front.is_none() {
+                    home.clock = clock_text(time_conn, time_verified);
+                    home.redraw();
+                }
+            }),
+            Some(LauncherOp::LinkState) => xous::msg_scalar_unpack!(msg, linked, _, _, _, {
+                home.linked = linked != 0;
+                if ready && front.is_none() {
+                    home.redraw();
+                }
+            }),
             None => log::error!("unknown launcher opcode {}", msg.body.id()),
         }
     }
