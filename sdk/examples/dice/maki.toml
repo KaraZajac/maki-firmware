@@ -1,0 +1,9 @@
+id = "com.leviathan.maki.dice"
+name = "Dice"
+version = 1
+label = "1.0"
+api = 1
+storage = 1
+memory = 64
+backup = true
+description = "Rolls one to three dice with maki's random number generator, and counts the rolls."

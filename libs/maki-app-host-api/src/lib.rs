@@ -1,0 +1,240 @@
+//! Client side of maki's app host (ARCHITECTURE.md, "Apps you can install"): what maki-link
+//! uses to install, list and remove apps for maki desktop, and to tell the host whether the
+//! clock is verified.
+//!
+//! The host checks every bundle itself and asks the owner before installing or removing
+//! anything, so whoever calls these can't install or remove an app on their own.
+
+use num_traits::ToPrimitive;
+use xous_ipc::Buffer;
+
+/// xous-names name of the host's server.
+pub const SERVER_NAME_APP_HOST: &str = "_maki app host_";
+
+#[derive(Debug, num_derive::FromPrimitive, num_derive::ToPrimitive)]
+pub enum HostOp {
+    /// Memory message (mutable lend) carrying an `Install`: a piece of a bundle, in order. The
+    /// last is answered once the owner decides.
+    Install = 1,
+    /// Memory message (mutable lend) carrying an `AppList`, filled in.
+    List = 2,
+    /// Memory message (mutable lend) carrying a `Remove`, answered once the owner decides.
+    Remove = 3,
+    /// Scalar from maki-link: `arg1` is 0 (unset), 1 (unverified) or 2 (verified).
+    TimeState = 4,
+}
+
+/// Each installed app's key, focus and menu opcodes: `APP_OPS + 4 * slot` and on.
+pub const APP_OPS: usize = 0x100;
+
+pub const RESULT_OK: u32 = 0;
+pub const RESULT_DENIED: u32 = 1;
+pub const RESULT_TIMED_OUT: u32 = 2;
+/// maki won't install it, and says why; the owner wasn't asked.
+pub const RESULT_REFUSED: u32 = 3;
+pub const RESULT_LOCKED: u32 = 4;
+pub const RESULT_FAILED: u32 = 5;
+/// No such app.
+pub const RESULT_NO_APP: u32 = 6;
+
+/// A piece of a bundle, and what became of it.
+#[derive(Debug, Clone, Default, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
+pub struct Install {
+    pub total: u32,
+    pub offset: u32,
+    pub data: Vec<u8>,
+    /// Set by the host: whether this was the last piece.
+    pub done: bool,
+    pub result: u32,
+    /// Why maki refused it.
+    pub reason: String,
+}
+
+#[derive(Debug, Clone, Default, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
+pub struct AppInfo {
+    pub id: String,
+    pub name: String,
+    pub version: u32,
+    pub label: String,
+    pub developer: Vec<u8>,
+    pub from_store: bool,
+    pub backup: bool,
+    /// Bytes of storage used.
+    pub used: u32,
+    /// 64x64, `maki_icons` form, or empty.
+    pub icon: Vec<u32>,
+}
+
+#[derive(Debug, Clone, Default, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
+pub struct AppList {
+    pub apps: Vec<AppInfo>,
+    pub result: u32,
+}
+
+#[derive(Debug, Clone, Default, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
+pub struct Remove {
+    pub id: String,
+    pub result: u32,
+}
+
+/// The most apps maki keeps.
+pub const MAX_APPS: usize = 32;
+
+#[derive(Clone, Copy)]
+pub struct AppHost {
+    conn: xous::CID,
+}
+
+impl AppHost {
+    /// Blocks until the host is running.
+    pub fn new(xns: &xous_names::XousNames) -> Result<Self, xous::Error> {
+        Ok(AppHost { conn: xns.request_connection_blocking(SERVER_NAME_APP_HOST)? })
+    }
+
+    /// The host, if it's running: an image can be built without it.
+    pub fn try_new(xns: &xous_names::XousNames) -> Option<Self> {
+        xns.request_connection(SERVER_NAME_APP_HOST).ok().map(|conn| AppHost { conn })
+    }
+
+    /// Hands over a piece of a bundle. Pieces come in order, each up to 4096 bytes; the last
+    /// returns once the owner decides.
+    pub fn install(&self, total: u32, offset: u32, data: Vec<u8>) -> Install {
+        let failed = Install { result: RESULT_FAILED, done: true, ..Default::default() };
+        let request = Install { total, offset, data, done: false, result: RESULT_FAILED, reason: String::new() };
+        let mut buf = Buffer::new(8192);
+        if buf.replace(request).is_err() || buf.lend_mut(self.conn, HostOp::Install.to_u32().unwrap()).is_err() {
+            return failed;
+        }
+        buf.to_original::<Install, _>().unwrap_or(failed)
+    }
+
+    pub fn list(&self) -> AppList {
+        let failed = AppList { apps: Vec::new(), result: RESULT_FAILED };
+        // room for every app with its icon
+        let mut buf = Buffer::new((MAX_APPS * 768 + 4096).next_multiple_of(4096));
+        if buf.replace(AppList::default()).is_err() || buf.lend_mut(self.conn, HostOp::List.to_u32().unwrap()).is_err() {
+            return failed;
+        }
+        buf.to_original::<AppList, _>().unwrap_or(failed)
+    }
+
+    /// Removes an app and its data, once the owner says so on maki.
+    pub fn remove(&self, id: &str) -> u32 {
+        let Ok(mut buf) = Buffer::into_buf(Remove { id: id.into(), result: RESULT_FAILED }) else { return RESULT_FAILED };
+        if buf.lend_mut(self.conn, HostOp::Remove.to_u32().unwrap()).is_err() {
+            return RESULT_FAILED;
+        }
+        buf.to_original::<Remove, _>().map(|r| r.result).unwrap_or(RESULT_FAILED)
+    }
+
+    pub fn set_time_state(&self, state: u8) {
+        xous::send_message(
+            self.conn,
+            xous::Message::new_scalar(HostOp::TimeState.to_usize().unwrap(), state as usize, 0, 0, 0),
+        )
+        .ok();
+    }
+}
+
+/// PDDB dictionary (secret basis) of installed apps' records, keyed by app ID. maki-keys reads
+/// it for backups.
+pub const APPS: &str = "maki.apps";
+
+/// PDDB dictionary (secret basis) of apps a restore brought data back for but that aren't
+/// installed: their records, keyed by ID, until an app of that ID is. Its data stays only if
+/// the same developer signed it.
+pub const RESTORED: &str = "maki.restored";
+
+/// PDDB dictionary (secret basis) of an app's own storage, keyed as the app keys it.
+pub fn data_dict(id: &str) -> String { format!("maki.data.{id}") }
+
+/// What the host remembers about an installed app, to list it and put it on the home screen
+/// without reading its bundle.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Record {
+    pub version: u32,
+    /// Whether its data goes in the backup: the manifest's default until the owner says.
+    pub backup: bool,
+    pub from_store: bool,
+    pub developer: [u8; 32],
+    pub name: String,
+    pub label: String,
+    pub icon: Option<[u32; 128]>,
+}
+
+impl Record {
+    pub fn encode(&self) -> Vec<u8> {
+        let mut out = Vec::with_capacity(48 + self.name.len() + self.label.len() + 512);
+        out.extend_from_slice(&self.version.to_le_bytes());
+        out.push(self.backup as u8);
+        out.push(self.from_store as u8);
+        out.extend_from_slice(&self.developer);
+        for s in [&self.name, &self.label] {
+            out.push(s.len().min(255) as u8);
+            out.extend_from_slice(&s.as_bytes()[..s.len().min(255)]);
+        }
+        match &self.icon {
+            Some(icon) => {
+                out.push(1);
+                icon.iter().for_each(|w| out.extend_from_slice(&w.to_le_bytes()));
+            }
+            None => out.push(0),
+        }
+        out
+    }
+
+    pub fn decode(b: &[u8]) -> Option<Record> {
+        let mut at = 0;
+        let mut take = |n: usize| {
+            let s = b.get(at..at + n)?;
+            at += n;
+            Some(s)
+        };
+        let version = u32::from_le_bytes(take(4)?.try_into().ok()?);
+        let backup = take(1)?[0] != 0;
+        let from_store = take(1)?[0] != 0;
+        let developer: [u8; 32] = take(32)?.try_into().ok()?;
+        let len = take(1)?[0] as usize;
+        let name = String::from_utf8(take(len)?.to_vec()).ok()?;
+        let len = take(1)?[0] as usize;
+        let label = String::from_utf8(take(len)?.to_vec()).ok()?;
+        let icon = match take(1)?[0] {
+            0 => None,
+            _ => {
+                let raw = take(512)?;
+                let mut icon = [0u32; 128];
+                for (w, c) in icon.iter_mut().zip(raw.chunks_exact(4)) {
+                    *w = u32::from_le_bytes(c.try_into().unwrap());
+                }
+                Some(icon)
+            }
+        };
+        Some(Record { version, backup, from_store, developer, name, label, icon })
+    }
+}
+
+
+#[cfg(test)]
+mod tests {
+    use super::Record;
+
+    #[test]
+    fn records_round_trip_and_refuse_what_they_cut() {
+        let r = Record {
+            version: 7,
+            backup: true,
+            from_store: false,
+            developer: [9; 32],
+            name: "Dice".into(),
+            label: "1.2".into(),
+            icon: Some(core::array::from_fn(|i| i as u32)),
+        };
+        let b = r.encode();
+        assert_eq!(Record::decode(&b), Some(r.clone()));
+        for len in 0..b.len() {
+            assert_eq!(Record::decode(&b[..len]), None, "cut to {len}");
+        }
+        let plain = Record { icon: None, label: String::new(), ..r };
+        assert_eq!(Record::decode(&plain.encode()), Some(plain));
+    }
+}

@@ -1,0 +1,9 @@
+id = "com.leviathan.maki.tally"
+name = "Tally"
+version = 1
+label = "1.0"
+api = 1
+storage = 1
+memory = 64
+backup = true
+description = "Counts things: the centre adds one, left takes one away. Remembers the count."

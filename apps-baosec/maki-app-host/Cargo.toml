@@ -1,0 +1,32 @@
+[package]
+name = "maki-app-host"
+version = "0.1.0"
+edition = "2021"
+description = "maki's app host: installs .maki apps, keeps them and their data, and runs them (WebAssembly, with wasmi)"
+
+[dependencies]
+log = "0.4.14"
+num-derive = { version = "0.4.2", default-features = false }
+num-traits = { version = "0.2.14", default-features = false }
+xous = "0.9.66"
+xous-ipc = "0.10.6"
+rkyv = { version = "0.8.8", default-features = false, features = ["std", "alloc"] }
+log-server = { package = "xous-api-log", version = "0.1.65" }
+xous-names = { package = "xous-api-names", version = "0.9.67" }
+ticktimer-server = { package = "xous-api-ticktimer", version = "0.9.65" }
+pddb = { path = "../../services/pddb" }
+ux-api = { path = "../../libs/ux-api" }
+blitstr2 = { path = "../../libs/blitstr2" }
+maki-ui = { path = "../../libs/maki-ui" }
+maki-launcher = { path = "../maki-launcher" }
+maki-keys = { package = "maki-keys-api", path = "../../libs/maki-keys-api" }
+maki-bundle = { path = "../../libs/maki-bundle" }
+maki-wasm = { path = "../../libs/maki-wasm" }
+maki-app-host-api = { path = "../../libs/maki-app-host-api" }
+getrandom = "0.2"
+bao1x-hal-service = { path = "../../services/bao1x-hal-service", optional = true }
+
+[features]
+board-baosec = ["ux-api/board-baosec", "blitstr2/board-baosec", "maki-ui/board-baosec", "pddb/board-baosec", "bao1x-hal-service"]
+hosted-baosec = ["ux-api/hosted-baosec", "maki-ui/hosted-baosec"]
+default = []

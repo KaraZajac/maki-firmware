@@ -95,10 +95,27 @@ impl Screen {
     pub fn status_bar(&self, right: &str, linked: bool) { self.titled_bar(NAME, right, linked) }
 
     /// The bar across the top with a title in place of the name: the heading of a page.
-    pub fn titled_bar(&self, title: &str, right: &str, linked: bool) {
+    pub fn titled_bar(&self, title: &str, right: &str, linked: bool) { self.bar_from(0, title, right, linked) }
+
+    /// The bar above an installed app: its name, and for an app that didn't come from the
+    /// store, the sideloaded mark (a light square holding a dark "!"). Only maki draws the bar,
+    /// so no app can remove the mark or pass for maki's own screens.
+    pub fn app_bar(&self, title: &str, right: &str, sideloaded: bool) {
+        if !sideloaded {
+            return self.bar_from(0, title, right, false);
+        }
+        let dark = DrawStyle::new(PixelColor::Dark, PixelColor::Dark, 1);
+        let square = |x0, y0, x1, y1, style| Rectangle::new_with_style(Point::new(x0, y0), Point::new(x1, y1), style);
+        self.gfx.draw_rectangle(square(1, 3, 10, 13, Self::light())).ok();
+        self.gfx.draw_rectangle(square(5, 5, 6, 9, dark)).ok();
+        self.gfx.draw_rectangle(square(5, 10, 6, 11, dark)).ok();
+        self.bar_from(12, title, right, false)
+    }
+
+    fn bar_from(&self, left: isize, title: &str, right: &str, linked: bool) {
         let mut name = TextView::new(
             Gid::dummy(),
-            TextBounds::BoundingBox(Rectangle::new(Point::new(0, 0), Point::new(W - CLOCK_WIDTH, self.bar))),
+            TextBounds::BoundingBox(Rectangle::new(Point::new(left, 0), Point::new(W - CLOCK_WIDTH, self.bar))),
         );
         name.style = GlyphStyle::Bold;
         name.invert = true;

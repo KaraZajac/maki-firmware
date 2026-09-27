@@ -123,6 +123,7 @@ members = [
   "apps-baosec/vault2",
   "apps-baosec/maki-launcher",
   "apps-baosec/maki-apps",
+  "apps-baosec/maki-app-host",
   "libs/roughtime",
   "libs/maki-proto",
   "libs/maki-vault-api",
@@ -134,6 +135,9 @@ members = [
   "libs/maki-ui",
   "libs/maki-fido",
   "libs/maki-eth",
+  "libs/maki-bundle",
+  "libs/maki-wasm",
+  "libs/maki-app-host-api",
   "services/maki-link",
   # Defcon 34 badge
   "libs/dc34-api",
@@ -182,6 +186,15 @@ exclude = [
   # the constant maps are sane
   "libs/bao1x-checks"
 ]
+
+# Host tests sign, verify and interpret thousands of times: optimise the crates that do it even
+# in test builds, or the tests take minutes. Release builds are optimised anyway.
+[profile.dev.package.curve25519-dalek-bao1x]
+opt-level = 3
+[profile.dev.package.ed25519-dalek-compat]
+opt-level = 3
+[profile.dev.package.sha2]
+opt-level = 3
 
 [profile.release]
 codegen-units = 1  # 1 better optimizations

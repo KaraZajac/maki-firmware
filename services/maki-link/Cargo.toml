@@ -16,6 +16,7 @@ maki-proto = { path = "../../libs/maki-proto" }
 maki-vault-api = { path = "../../libs/maki-vault-api" }
 maki-keys = { package = "maki-keys-api", path = "../../libs/maki-keys-api" }
 maki-launcher = { path = "../../apps-baosec/maki-launcher" }
+maki-app-host-api = { path = "../../libs/maki-app-host-api" }
 usb-bao1x = { path = "../usb-bao1x" }
 bao1x-hal-service = { path = "../bao1x-hal-service", optional = true }
 

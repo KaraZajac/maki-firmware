@@ -21,8 +21,8 @@ use hmac::{Hmac, Mac};
 use maki_btc::psbt::Psbt;
 use maki_btc::{display, wallet, Account, Network};
 use maki_proto::device::{
-    reply, Approval, Ask, Backup, Bitcoin, Device, Ethereum, Handled, Platform, TimeState, BACKUP_PIECE, PSBT_PIECE,
-    TX_PIECE,
+    reply, AppEntry, Approval, Apps, Ask, Backup, Bitcoin, Device, Ethereum, Handled, Platform, TimeState, BACKUP_PIECE,
+    PSBT_PIECE, TX_PIECE,
 };
 use maki_proto::frame::{self, Deframer};
 use maki_proto::site;
@@ -66,6 +66,10 @@ struct Store {
     /// the backup being read out, and one coming in
     sealed: Vec<u8>,
     incoming: Vec<u8>,
+    /// installed apps by ID: the bundle, and whether its data goes in the backup
+    apps: std::collections::BTreeMap<String, (Vec<u8>, bool)>,
+    /// a bundle coming in
+    app_incoming: Vec<u8>,
 }
 
 /// The fake's wallet, and the PSBT coming in and the one it last signed; the same for Ethereum.
@@ -258,6 +262,53 @@ fn approve(policy: Policy, prompt: &str) -> Approval {
     }
 }
 
+/// What maki's app host does with a bundle that's all arrived: checks it as the host does, then
+/// asks the owner.
+fn finish_install(bundle: Vec<u8>, store: &Mutex<Store>, policy: Policy) -> (u8, Vec<u8>) {
+    let refused = |why: &str| {
+        println!("  install refused: {why}");
+        reply::app_install(true, Approval::Refused, why)
+    };
+    let b = match maki_bundle::read(&bundle) {
+        Ok(b) => b,
+        Err(e) => return refused(&e.to_string()),
+    };
+    if let Err(e) = maki_wasm::admit(&b.manifest, b.code) {
+        return refused(&format!("maki won't install it: {e}"));
+    }
+    let m = &b.manifest;
+    let installed = store.lock().unwrap().apps.get(&m.id).map(|(old, _)| old.clone());
+    if let Some(old) = installed {
+        let old = maki_bundle::read(&old).expect("installed bundles read");
+        if let Err(e) = maki_bundle::may_update(&old.developer, old.manifest.version, &b) {
+            return refused(&e);
+        }
+    }
+    let a = approve(
+        policy,
+        &format!("install {} {} (sideloaded, developer {})?", m.name, m.label, maki_bundle::fingerprint(&b.developer)),
+    );
+    if a == Approval::Approved {
+        store.lock().unwrap().apps.insert(m.id.clone(), (bundle.clone(), m.backup));
+    }
+    reply::app_install(true, a, "")
+}
+
+fn app_entry(bundle: &[u8], backup: bool) -> AppEntry {
+    let b = maki_bundle::read(bundle).expect("installed bundles read");
+    AppEntry {
+        id: b.manifest.id.clone(),
+        name: b.manifest.name.clone(),
+        version: b.manifest.version,
+        label: b.manifest.label.clone(),
+        developer: b.developer.to_vec(),
+        from_store: false,
+        backup,
+        used: 0,
+        icon: b.icon.map(|i| i.iter().flat_map(|w| w.to_le_bytes()).collect()).unwrap_or_default(),
+    }
+}
+
 /// What the vault does on the badge, minus the screen.
 fn answer(ask: Ask, store: &Mutex<Store>, policy: Policy) -> (u8, Vec<u8>) {
     match ask {
@@ -392,6 +443,62 @@ fn main() {
                                 });
                             }
                         }
+                    }
+                    Handled::Apps(Apps::List { index }) => {
+                        let st = store.lock().unwrap();
+                        let entry = st.apps.values().nth(index as usize).map(|(b, backup)| app_entry(b, *backup));
+                        let (kind, body) = reply::app_list(Approval::Approved, st.apps.len() as u32, entry.as_ref());
+                        writer.lock().unwrap().write_all(&frame::encode(kind, packet.id, &body)).ok();
+                    }
+                    Handled::Apps(Apps::Install { total, offset, data }) => {
+                        let finished = {
+                            let mut st = store.lock().unwrap();
+                            if offset == 0 {
+                                st.app_incoming.clear();
+                            }
+                            if offset as usize != st.app_incoming.len() {
+                                st.app_incoming.clear();
+                                None
+                            } else {
+                                st.app_incoming.extend_from_slice(&data);
+                                Some(st.app_incoming.len() as u32 == total)
+                            }
+                        };
+                        match finished {
+                            None => {
+                                let (kind, body) = reply::app_install(true, Approval::Refused, "pieces out of order");
+                                writer.lock().unwrap().write_all(&frame::encode(kind, packet.id, &body)).ok();
+                            }
+                            Some(false) => {
+                                let (kind, body) = reply::app_install(false, Approval::Approved, "");
+                                writer.lock().unwrap().write_all(&frame::encode(kind, packet.id, &body)).ok();
+                            }
+                            Some(true) => {
+                                let bundle = std::mem::take(&mut store.lock().unwrap().app_incoming);
+                                let (writer, store, id) = (writer.clone(), store.clone(), packet.id);
+                                std::thread::spawn(move || {
+                                    let (kind, body) = finish_install(bundle, &store, policy);
+                                    writer.lock().unwrap().write_all(&frame::encode(kind, id, &body)).ok();
+                                });
+                            }
+                        }
+                    }
+                    Handled::Apps(Apps::Remove { id: app }) => {
+                        let (writer, store, id) = (writer.clone(), store.clone(), packet.id);
+                        std::thread::spawn(move || {
+                            let name = store.lock().unwrap().apps.get(&app).map(|(b, _)| app_entry(b, false).name);
+                            let (kind, body) = match name {
+                                None => reply::app_remove(Approval::NoMatch),
+                                Some(name) => {
+                                    let a = approve(policy, &format!("remove {name} and its data?"));
+                                    if a == Approval::Approved {
+                                        store.lock().unwrap().apps.remove(&app);
+                                    }
+                                    reply::app_remove(a)
+                                }
+                            };
+                            writer.lock().unwrap().write_all(&frame::encode(kind, id, &body)).ok();
+                        });
                     }
                     Handled::Bitcoin(request) => {
                         println!("  0x{:02x}#{} -> bitcoin", packet.kind, packet.id);

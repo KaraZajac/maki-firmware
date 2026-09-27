@@ -1,0 +1,29 @@
+[package]
+name = "maki-wasm"
+version = "0.1.0"
+edition = "2021"
+description = "maki's app host core: runs .maki WebAssembly apps with wasmi, giving them only maki's functions"
+
+[dependencies]
+# Untrusted code: every module validated; "can't happen" paths panic instead of being undefined
+# behaviour (extra-checks); a plain dispatch loop rather than tail calls, which depend on the
+# optimiser for their stack use. Neither wat nor memory64: modules come compiled and 32-bit.
+wasmi = { version = "2.0", default-features = false, features = [
+    "std",
+    "validate",
+    "extra-checks",
+    "portable-dispatch",
+] }
+maki-bundle = { path = "../maki-bundle" }
+# maki's own fonts, so apps look the same in the simulator as on maki
+blitstr2 = { path = "../blitstr2", features = ["board-baosec", "bao1x"] }
+qrcode = { version = "0.12", default-features = false }
+
+# timing each step of loading an app, for finding what's slow on maki
+log = { version = "0.4", optional = true }
+
+[features]
+trace = ["log"]
+
+[dev-dependencies]
+wat = "1"

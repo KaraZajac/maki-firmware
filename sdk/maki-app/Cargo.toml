@@ -1,0 +1,12 @@
+[package]
+name = "maki-app"
+version = "0.1.0"
+edition = "2021"
+description = "Write apps for maki, the DEF CON 34 badge firmware: the screen, buttons, storage and time, for wasm32"
+
+[features]
+default = ["panic-handler"]
+# A panic stops the app with its message on maki's screen. Leave it on for #![no_std] apps;
+# apps that use std turn it off and get the same from `std`.
+panic-handler = []
+std = []

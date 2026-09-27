@@ -47,6 +47,21 @@ impl Launcher {
         buf.lend(self.conn, LauncherOp::Register.to_u32().unwrap()).map(|_| ())
     }
 
+    /// Take an app off the home screen: the one registered with this server and key opcode. If
+    /// it's in front, the home screen comes back.
+    pub fn unregister(&self, server_name: &str, key_op: u32) -> Result<(), xous::Error> {
+        let reg = AppRegistration {
+            name: String::new(),
+            server_name: server_name.into(),
+            key_op,
+            focus_op: 0,
+            menu_op: 0,
+            icon: Vec::new(),
+        };
+        let buf = Buffer::into_buf(reg).or(Err(xous::Error::InternalError))?;
+        buf.lend(self.conn, LauncherOp::Unregister.to_u32().unwrap()).map(|_| ())
+    }
+
     /// Tell the home screen whether the clock is trustworthy: 0 unset, 1 unverified, 2 verified.
     pub fn set_time_state(&self, state: u8) -> Result<(), xous::Error> {
         xous::send_message(

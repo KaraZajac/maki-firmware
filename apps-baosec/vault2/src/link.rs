@@ -17,7 +17,9 @@ use crate::storage::{self, ContentKind, PasswordRecord, StorageContent, TotpReco
 use crate::totp::{TotpEntry, generate_totp_code, get_current_unix_time};
 
 pub(crate) fn start(main_conn: xous::CID) {
-    thread::spawn(move || {
+    // maki's requests: a smaller stack than the default, since RAM is short and a thread's whole
+    // stack is taken when it starts
+    thread::Builder::new().stack_size(64 * 1024).spawn(move || {
         let xns = xous_names::XousNames::new().unwrap();
         // one connection, which maki-link makes at boot: no app can reach this
         let sid = xns.register_name(SERVER_NAME_VAULT_LINK, Some(1)).expect("can't register the vault link");
@@ -51,7 +53,8 @@ pub(crate) fn start(main_conn: xous::CID) {
                 None => log::warn!("vault link: unknown opcode {}", msg.body.id()),
             }
         }
-    });
+    })
+    .unwrap();
 }
 
 fn kind_name(r: &Request) -> &'static str {

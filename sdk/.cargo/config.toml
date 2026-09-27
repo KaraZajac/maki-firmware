@@ -1,0 +1,4 @@
+# Apps get a 16 KiB stack rather than wasm-ld's 1 MiB: maki gives an app a few hundred KiB
+# of memory at most, and the stack lives in it.
+[target.wasm32-unknown-unknown]
+rustflags = ["-C", "link-arg=-zstack-size=16384"]

@@ -25,6 +25,7 @@ maki-seed = { path = "../../libs/maki-seed" }
 maki-btc = { path = "../../libs/maki-btc" }
 maki-eth = { path = "../../libs/maki-eth" }
 maki-fido = { path = "../../libs/maki-fido" }
+maki-app-host-api = { path = "../../libs/maki-app-host-api" }
 maki-launcher = { path = "../../apps-baosec/maki-launcher" }
 
 [features]

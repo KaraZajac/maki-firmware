@@ -555,3 +555,77 @@ fn ethereum_replies_carry_only_what_the_answer_allows() {
         (1, Approval::Refused as u8, 0, "maki doesn't sign blob transactions")
     );
 }
+
+#[test]
+fn app_requests_go_to_the_host() {
+    let mut d = device();
+    assert_eq!(handled(&mut d, kind::APP_LIST, Writer::new().u32(2).finish()), Handled::Apps(Apps::List { index: 2 }));
+    let piece = vec![b'M', b'A', b'K', b'I'];
+    assert_eq!(
+        handled(&mut d, kind::APP_INSTALL, Writer::new().u32(9000).u32(4096).bytes16(&piece).finish()),
+        Handled::Apps(Apps::Install { total: 9000, offset: 4096, data: piece })
+    );
+    assert_eq!(
+        handled(&mut d, kind::APP_REMOVE, Writer::new().str8("com.leviathan.maki.dice").finish()),
+        Handled::Apps(Apps::Remove { id: "com.leviathan.maki.dice".into() })
+    );
+}
+
+#[test]
+fn app_requests_out_of_range_are_refused() {
+    let mut d = device();
+    let bad = [
+        (kind::APP_INSTALL, Writer::new().u32(0).u32(0).bytes16(&[]).finish()),
+        (kind::APP_INSTALL, Writer::new().u32(MAX_APP + 1).u32(0).bytes16(&[1]).finish()),
+        (kind::APP_INSTALL, Writer::new().u32(10).u32(5).bytes16(&[0; 6]).finish()),
+        (kind::APP_INSTALL, Writer::new().u32(MAX_APP).u32(0).bytes16(&vec![0; APP_PIECE + 1]).finish()),
+        (kind::APP_REMOVE, Writer::new().str8("Dice").finish()),
+        (kind::APP_REMOVE, Writer::new().str8("com..dice").finish()),
+        (kind::APP_REMOVE, Writer::new().str8("").finish()),
+    ];
+    for (k, body) in bad {
+        let reply = ask(&mut d, k, body.clone());
+        assert_eq!(error_code(&reply), ErrorCode::BadArgument as u8, "0x{k:02x} {body:02x?}");
+    }
+    let reply = ask(&mut d, kind::APP_LIST, Writer::new().u32(1).u8(0).finish());
+    assert_eq!(error_code(&reply), ErrorCode::Malformed as u8);
+}
+
+#[test]
+fn app_replies_carry_only_what_the_answer_allows() {
+    let entry = AppEntry {
+        id: "com.leviathan.maki.dice".into(),
+        name: "Dice".into(),
+        version: 3,
+        label: "1.2".into(),
+        developer: vec![7; 32],
+        from_store: false,
+        backup: true,
+        used: 4,
+        icon: vec![0xff; 512],
+    };
+    let (k, body) = reply::app_list(Approval::Approved, 2, Some(&entry));
+    assert_eq!(k, kind::APP_LIST | kind::REPLY);
+    let mut r = Reader::new(&body);
+    assert_eq!((r.u8().unwrap(), r.u32().unwrap(), r.u8().unwrap()), (0, 2, 1));
+    assert_eq!((r.str8().unwrap(), r.str8().unwrap(), r.u32().unwrap(), r.str8().unwrap()), ("com.leviathan.maki.dice", "Dice", 3, "1.2"));
+    assert_eq!((r.bytes16().unwrap(), r.u8().unwrap(), r.u8().unwrap(), r.u32().unwrap()), (&[7u8; 32][..], 0, 1, 4));
+    assert_eq!(r.bytes16().unwrap().len(), 512);
+    r.end().unwrap();
+    // past the end: the count, no app
+    let (_, body) = reply::app_list(Approval::Approved, 2, None);
+    assert_eq!(body, [0, 2, 0, 0, 0, 0]);
+    // locked: nothing, not even the count
+    let (_, body) = reply::app_list(Approval::Locked, 2, Some(&entry));
+    assert_eq!(body, [Approval::Locked as u8, 0, 0, 0, 0, 0]);
+
+    let (k, body) = reply::app_install(false, Approval::Approved, "ignored");
+    assert_eq!((k, body), (kind::APP_INSTALL | kind::REPLY, vec![0, 0, 0]));
+    let (_, body) = reply::app_install(true, Approval::Refused, &"é".repeat(200));
+    let mut r = Reader::new(&body);
+    assert_eq!((r.u8().unwrap(), r.u8().unwrap()), (1, Approval::Refused as u8));
+    // cut at a character, never inside one
+    assert_eq!(r.str8().unwrap(), "é".repeat(127));
+    let (k, body) = reply::app_remove(Approval::Denied);
+    assert_eq!((k, body), (kind::APP_REMOVE | kind::REPLY, vec![Approval::Denied as u8]));
+}

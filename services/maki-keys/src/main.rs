@@ -37,6 +37,12 @@ const KEY_ENTROPY: &str = "entropy";
 /// the FIDO authenticator's resident credentials and signature counter (see passkeys.rs). An
 /// older firmware restoring a newer backup skips the dictionaries it doesn't know.
 const BACKUP_DICTS: [&str; 3] = ["vault.passwords", "vault.totp", passkeys::DICT];
+/// Installed apps whose data the owner keeps in the backup (ARCHITECTURE.md, "Storage and
+/// backups"): each app's record, keyed by its ID, so a restore knows whose data it is; then its
+/// data, keyed `ID\tkey`. Not the apps themselves: the whole backup is made in maki's RAM.
+const APP_RECORD: u8 = 3;
+const APP_DATA: u8 = 4;
+use maki_app_host_api::RESTORED;
 const BACKUP_MAGIC: &[u8; 8] = b"MAKIBAK1";
 const RESTORE_TIMEOUT_S: u32 = if option_env!("MAKI_DEMO").is_some() { 600 } else { 60 };
 const BACKUP_HEADER: &[u8] = b"maki backup 1\n";
@@ -46,6 +52,42 @@ struct Entry {
     dict: u8,
     key: String,
     value: Vec<u8>,
+}
+
+fn entry(out: &mut Vec<u8>, dict: u8, key: &str, value: &[u8]) {
+    out.push(dict);
+    out.extend_from_slice(&(key.len() as u16).to_le_bytes());
+    out.extend_from_slice(key.as_bytes());
+    out.extend_from_slice(&(value.len() as u32).to_le_bytes());
+    out.extend_from_slice(value);
+}
+
+/// Each app the owner keeps in the backup, record then data, as long as the backup stays
+/// within what maki can seal and send: an app that doesn't fit is left out whole.
+fn gather_apps(store: &Store, basis: &str, out: &mut Vec<u8>) {
+    let room = MAX_BACKUP - 1024;
+    let Ok(ids) = store.pddb.list_keys(maki_app_host_api::APPS, Some(basis)) else { return };
+    for id in ids {
+        let Some(bytes) = read_key(store, maki_app_host_api::APPS, &id, basis) else { continue };
+        if !maki_app_host_api::Record::decode(&bytes).map(|r| r.backup).unwrap_or(false) {
+            continue;
+        }
+        let mut app = Vec::new();
+        entry(&mut app, APP_RECORD, &id, &bytes);
+        let dict = maki_app_host_api::data_dict(&id);
+        for key in store.pddb.list_keys(&dict, Some(basis)).unwrap_or_default() {
+            if let Some(mut value) = read_key(store, &dict, &key, basis) {
+                entry(&mut app, APP_DATA, &format!("{id}\t{key}"), &value);
+                value.zeroize();
+            }
+        }
+        if out.len() + app.len() > room {
+            log::warn!("backup: {id}'s data left out: the backup would be too big");
+        } else {
+            out.extend_from_slice(&app);
+        }
+        app.zeroize();
+    }
 }
 
 fn gather(store: &Store, basis: &str) -> Vec<u8> {
@@ -61,14 +103,11 @@ fn gather(store: &Store, basis: &str) -> Vec<u8> {
             if k.read_to_end(&mut value).is_err() {
                 continue;
             }
-            out.push(id as u8);
-            out.extend_from_slice(&(key.len() as u16).to_le_bytes());
-            out.extend_from_slice(key.as_bytes());
-            out.extend_from_slice(&(value.len() as u32).to_le_bytes());
-            out.extend_from_slice(&value);
+            entry(&mut out, id as u8, &key, &value);
             value.zeroize();
         }
     }
+    gather_apps(store, basis, &mut out);
     out
 }
 
@@ -86,7 +125,7 @@ fn parse(plain: &[u8]) -> Option<Vec<Entry>> {
         let key = String::from_utf8(take(klen, &mut rest)?).ok()?;
         let vlen = u32::from_le_bytes(take(4, &mut rest)?.try_into().ok()?) as usize;
         let value = take(vlen, &mut rest)?;
-        if (dict as usize) < BACKUP_DICTS.len() {
+        if (dict as usize) < BACKUP_DICTS.len() || dict == APP_RECORD || dict == APP_DATA {
             entries.push(Entry { dict, key, value });
         }
     }
@@ -148,6 +187,8 @@ struct Added {
     logins: u32,
     codes: u32,
     passkeys: u32,
+    /// apps whose data came back
+    apps: u32,
 }
 
 fn read_key(store: &Store, dict: &str, key: &str, basis: &str) -> Option<Vec<u8>> {
@@ -185,7 +226,45 @@ fn restore(store: &Store, basis: &str, entries: &[Entry], write: bool) -> Added 
             .and_then(|mut k| k.write_all(value))
             .is_ok()
     };
-    for e in entries {
+    // apps' data comes back into the same developer's app: installed now, or later (the app
+    // host keeps it then, or drops it for another developer's app of the same ID)
+    let theirs = |id: &str| -> Option<maki_app_host_api::Record> {
+        entries
+            .iter()
+            .find(|e| e.dict == APP_RECORD && e.key == id)
+            .and_then(|e| maki_app_host_api::Record::decode(&e.value))
+    };
+    let installed = |id: &str| {
+        read_key(store, maki_app_host_api::APPS, id, basis).and_then(|b| maki_app_host_api::Record::decode(&b))
+    };
+    let mut apps_back: Vec<String> = Vec::new();
+    for e in entries.iter().filter(|e| e.dict == APP_DATA) {
+        let Some((id, key)) = e.key.split_once('\t') else { continue };
+        let Some(record) = theirs(id) else { continue };
+        match installed(id) {
+            Some(now) if now.developer != record.developer => continue,
+            Some(_) => {}
+            // not installed: the data waits, with whose it is
+            None => match read_key(store, RESTORED, id, basis).and_then(|b| maki_app_host_api::Record::decode(&b)) {
+                // another developer's data already waits under this ID: leave it be
+                Some(waiting) if waiting.developer != record.developer => continue,
+                Some(_) => {}
+                None if write => {
+                    put(RESTORED, id, &record.encode());
+                }
+                None => {}
+            },
+        }
+        let dict = maki_app_host_api::data_dict(id);
+        if read_key(store, &dict, key, basis).is_some() {
+            continue; // maki has it already: keep maki's
+        }
+        if (!write || put(&dict, key, &e.value)) && !apps_back.iter().any(|a| a == id) {
+            apps_back.push(id.to_string());
+        }
+    }
+    added.apps = apps_back.len() as u32;
+    for e in entries.iter().filter(|e| (e.dict as usize) < BACKUP_DICTS.len()) {
         let dict = BACKUP_DICTS[e.dict as usize];
         if dict == passkeys::DICT {
             if e.key == passkeys::COUNTER.to_string() {
@@ -607,14 +686,17 @@ fn main() -> ! {
                     let mut msg = msg;
                     let store = Store { pddb: Pddb::new() };
                     let would = restore(&store, &basis, &entries, false);
-                    let (result, added) = if would.logins + would.codes + would.passkeys == 0 {
+                    let (result, added) = if would.logins + would.codes + would.passkeys + would.apps == 0 {
                         // nothing new; a higher signature counter still comes across
                         (RESULT_OK, restore(&store, &basis, &entries, true))
                     } else {
                         let xns = xous_names::XousNames::new().unwrap();
                         let count = |n: u32, one: &str| format!("{} {}{}", n, one, if n == 1 { "" } else { "s" });
-                        let what = [count(would.logins, "login"), count(would.codes, "code"), count(would.passkeys, "passkey")]
+                        let mut what = [count(would.logins, "login"), count(would.codes, "code"), count(would.passkeys, "passkey")]
                             .join("\n");
+                        if would.apps > 0 {
+                            what.push_str(&format!("\n{}'s data", count(would.apps, "app")));
+                        }
                         let page = maki_launcher::Page { heading: "Restore".into(), value: "from a backup".into(), mono: what };
                         match maki_launcher::Launcher::new(&xns).map(|l| {
                             l.review("maki desktop", "Restore backup?", "adds what's missing", vec![page], "restore", "cancel", RESTORE_TIMEOUT_S)
@@ -628,11 +710,12 @@ fn main() -> ! {
                     // the FIDO store changed behind the vault's back: it re-reads it
                     generation.fetch_add(1, Ordering::SeqCst);
                     log::info!(
-                        "restore: {} ({} logins, {} codes, {} passkeys added)",
+                        "restore: {} ({} logins, {} codes, {} passkeys, {} apps' data added)",
                         result,
                         added.logins,
                         added.codes,
-                        added.passkeys
+                        added.passkeys,
+                        added.apps
                     );
                     if let Some(mem) = msg.body.memory_message_mut() {
                         let mut buffer = unsafe { Buffer::from_memory_message_mut(mem) };

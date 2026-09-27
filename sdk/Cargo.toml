@@ -1,0 +1,13 @@
+# maki's app SDK: the crate apps are written with, example apps, and the `maki` tool that packs,
+# signs, inspects and simulates them. Apps build for wasm32-unknown-unknown; the tool for the
+# computer it runs on.
+[workspace]
+members = ["maki-app", "maki", "examples/hello", "examples/dice", "examples/tally"]
+resolver = "2"
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true

@@ -1,0 +1,10 @@
+# The smallest app: says hello until the owner leaves.
+id = "com.leviathan.maki.hello"
+name = "Hello"
+version = 1
+label = "1.0"
+api = 1
+storage = 0
+memory = 64
+backup = false
+description = "Says hello. The smallest maki app there is."

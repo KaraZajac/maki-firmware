@@ -8,6 +8,9 @@ pub const SERVER_NAME_LAUNCHER: &str = "_maki launcher_";
 pub enum Focus {
     Background = 0,
     Foreground = 1,
+    /// The owner picked Exit from the app's menu: in the background, and done with. (Apps that
+    /// only ask whether they're in front can treat it as Background.)
+    Exited = 2,
 }
 
 #[derive(Debug, num_derive::FromPrimitive, num_derive::ToPrimitive)]
@@ -29,6 +32,9 @@ pub(crate) enum LauncherOp {
     /// Memory message (mutable lend) carrying an `AskRequest`: shown over whatever is in front,
     /// answered when the owner decides or it times out.
     Ask = 7,
+    /// Memory message carrying an `AppRegistration` whose `server_name` and `key_op` name an
+    /// app to take off the home screen (the rest is ignored): an installed app removed.
+    Unregister = 8,
 }
 
 /// A decision for the owner, which the launcher shows over whatever is on screen. The app in

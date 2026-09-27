@@ -66,6 +66,9 @@ bytes. Bodies must be consumed exactly: trailing bytes are an error.
 | `0x41` ETH_SIGN_TX | `site:str8` `index:u32` `total:u32` `offset:u32` `piece:bytes16` | `done:u8` `approval:u8` `signed:u32` `reason:str8` |
 | `0x42` ETH_SIGNED | `offset:u32` | `status:u8` `total:u32` `offset:u32` `piece:bytes16` |
 | `0x43` ETH_SIGN_MESSAGE | `site:str8` `index:u32` `message:bytes16` | `approval:u8` `signature:bytes16` |
+| `0x50` APP_LIST | `index:u32` | `status:u8` `count:u32` `present:u8`, then if present: `id:str8` `name:str8` `version:u32` `label:str8` `developer:bytes16` `from_store:u8` `backup:u8` `used:u32` `icon:bytes16` |
+| `0x51` APP_INSTALL | `total:u32` `offset:u32` `piece:bytes16` | `done:u8` `approval:u8` `reason:str8` |
+| `0x52` APP_REMOVE | `id:str8` | `approval:u8` |
 | `0x7f` ERROR (reply only) | | `code:u8` `detail:str8` |
 
 `time_state`: 0 unset, 1 unverified, 2 verified.
@@ -245,3 +248,27 @@ What maki checks and shows:
   call maki can't read, with its function selector and length.
 - Typed data (EIP-712) isn't signed yet: maki couldn't show what it means. `eth_sign` never will
   be: it signs anything, a transaction included.
+
+## Apps
+
+maki installs apps from `.maki` bundles (ARCHITECTURE.md in the BAOKEY repo, "Apps you can
+install"; the format is `libs/maki-bundle`). maki's app host checks each bundle itself and asks
+the owner before installing or removing anything: whoever sends these can't do either alone.
+
+- **APP_LIST** describes the installed app at `index` (in order of ID), with how many there are;
+  past the end, `present` is 0. `status` is 6 (locked) until maki has its PIN, and 4 if the
+  firmware has no app host. `developer` is the developer's Ed25519 key (32 bytes); `from_store`
+  is 0 for a sideloaded app; `backup` is whether its data goes in maki's backup (the owner's
+  choice); `used` is the bytes of storage it uses; `icon` is 64x64 in `maki_icons` form as 128
+  little-endian words, or empty.
+- **APP_INSTALL** sends a bundle in pieces of up to 4096 bytes, in order, with the same `total`
+  each time (at most 512 KiB); a piece at offset 0 starts a new bundle. Pieces before the last
+  are answered at once (`done` 0). The last is answered once maki has checked the bundle (its
+  signature, its manifest, and that its code is WebAssembly maki can run within what it asks
+  for) and the owner has gone through what it is, where it's from, its developer's key and what
+  it may do: 0 installed, 1 cancelled, 3 timed out, 6 locked, or 9 refused with `reason`
+  (maki's own words: a bad signature, a native app, a permission this maki doesn't offer, an
+  older version than the one installed, another developer's app with the same ID). An update
+  (the same ID) must be signed with the same developer key and have a higher version.
+- **APP_REMOVE** removes an app and its data once the owner says so on maki: 0 removed,
+  1 denied, 2 no such app, 3 timed out, 6 locked.

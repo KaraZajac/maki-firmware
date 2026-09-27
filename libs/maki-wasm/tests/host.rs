@@ -1,0 +1,466 @@
+//! The host runs whatever a bundle carries: apps get maki's functions and nothing else, and
+//! whatever an app does, maki's host carries on.
+
+use std::cell::RefCell;
+use std::collections::{BTreeMap, VecDeque};
+use std::rc::Rc;
+use std::time::Duration;
+
+use maki_wasm::*;
+
+#[derive(Default)]
+struct Record {
+    events: VecDeque<Event>,
+    frames: Vec<Canvas>,
+    menu: Vec<String>,
+    logs: Vec<String>,
+    storage: BTreeMap<String, Vec<u8>>,
+    waits: Vec<Option<Duration>>,
+}
+
+/// Hands out scripted events (Exit once they run out) and records what the app does.
+struct Script(Rc<RefCell<Record>>);
+
+impl Platform for Script {
+    fn wait(&mut self, timeout: Option<Duration>) -> Event {
+        let mut r = self.0.borrow_mut();
+        r.waits.push(timeout);
+        r.events.pop_front().unwrap_or(Event::Exit)
+    }
+    fn present(&mut self, canvas: &Canvas) { self.0.borrow_mut().frames.push(canvas.clone()) }
+    fn set_menu(&mut self, items: &[String]) { self.0.borrow_mut().menu = items.to_vec() }
+    fn millis(&self) -> u64 { 5_000 }
+    fn unix_time(&self) -> Option<(u64, bool)> { Some((1_790_000_000, true)) }
+    fn random(&mut self, buf: &mut [u8]) { buf.iter_mut().for_each(|b| *b = 0x5a) }
+    fn log(&mut self, line: &str) { self.0.borrow_mut().logs.push(line.into()) }
+    fn storage_get(&mut self, key: &str) -> Option<Vec<u8>> { self.0.borrow().storage.get(key).cloned() }
+    fn storage_set(&mut self, key: &str, value: &[u8]) -> Result<(), ()> {
+        self.0.borrow_mut().storage.insert(key.into(), value.into());
+        Ok(())
+    }
+    fn storage_delete(&mut self, key: &str) -> bool { self.0.borrow_mut().storage.remove(key).is_some() }
+    fn storage_keys(&mut self) -> Vec<String> { self.0.borrow().storage.keys().cloned().collect() }
+}
+
+const LIMITS: Limits = Limits { memory: 256 * 1024, storage: 1024, fuel: 1_000_000 };
+
+fn module(body: &str) -> Vec<u8> { wat::parse_str(body).unwrap() }
+
+/// Runs `wat` with `events`, returning why it stopped and what it did.
+fn run_with(wat: &str, events: &[Event], limits: Limits) -> (Stop, Record) {
+    let record = Rc::new(RefCell::new(Record { events: events.iter().copied().collect(), ..Default::default() }));
+    let stop = run(&module(wat), Box::new(Script(record.clone())), limits);
+    let r = Rc::try_unwrap(record).ok().unwrap().into_inner();
+    (stop, r)
+}
+
+/// An app that logs every event's code, as decimal, and returns on Exit.
+const ECHO: &str = r#"
+(module
+  (import "maki" "wait" (func $wait (param i32) (result i32)))
+  (import "maki" "log" (func $log (param i32 i32)))
+  (memory (export "memory") 1)
+  (func $digits (param $n i32) (result i32)
+    ;; writes $n in decimal at 100, returns its length
+    (local $len i32) (local $i i32) (local $m i32)
+    (local.set $m (local.get $n))
+    (loop $count
+      (local.set $len (i32.add (local.get $len) (i32.const 1)))
+      (local.set $m (i32.div_u (local.get $m) (i32.const 10)))
+      (br_if $count (local.get $m)))
+    (local.set $i (local.get $len))
+    (loop $write
+      (local.set $i (i32.sub (local.get $i) (i32.const 1)))
+      (i32.store8 (i32.add (i32.const 100) (local.get $i))
+        (i32.add (i32.const 48) (i32.rem_u (local.get $n) (i32.const 10))))
+      (local.set $n (i32.div_u (local.get $n) (i32.const 10)))
+      (br_if $write (local.get $i)))
+    (local.get $len))
+  (func (export "maki_main")
+    (local $e i32)
+    (loop $events
+      (local.set $e (call $wait (i32.const 250)))
+      (call $log (i32.const 100) (call $digits (local.get $e)))
+      (br_if $events (i32.ne (local.get $e) (i32.const 6))))))
+"#;
+
+#[test]
+fn events_reach_the_app_as_codes() {
+    let events = [Event::Left, Event::Right, Event::Centre, Event::Menu(2), Event::Hidden, Event::Shown, Event::Timeout];
+    let (stop, r) = run_with(ECHO, &events, LIMITS);
+    assert_eq!(stop, Stop::Finished);
+    assert_eq!(r.logs, ["1", "2", "3", "258", "5", "4", "0", "6"]);
+    assert!(r.waits.iter().all(|w| *w == Some(Duration::from_millis(250))));
+}
+
+#[test]
+fn drawing_reaches_the_screen_when_presented() {
+    let wat = r#"
+    (module
+      (import "maki" "text" (func $text (param i32 i32 i32 i32 i32 i32) (result i32)))
+      (import "maki" "rect" (func $rect (param i32 i32 i32 i32 i32 i32)))
+      (import "maki" "present" (func $present))
+      (import "maki" "screen_width" (func $w (result i32)))
+      (import "maki" "screen_height" (func $h (result i32)))
+      (import "maki" "wait" (func $wait (param i32) (result i32)))
+      (memory (export "memory") 1)
+      (data (i32.const 16) "Hi")
+      (func (export "maki_main")
+        (drop (call $text (i32.const 0) (i32.const 0) (i32.const 16) (i32.const 2) (i32.const 1) (i32.const 1)))
+        (call $rect (i32.const 100) (i32.const 90) (call $w) (call $h) (i32.const 1) (i32.const 1))
+        (call $present)
+        (drop (call $wait (i32.const -1)))))
+    "#;
+    let (stop, r) = run_with(wat, &[], LIMITS);
+    assert_eq!(stop, Stop::Finished);
+    assert_eq!(r.frames.len(), 1);
+    let f = &r.frames[0];
+    let lit = |x0, y0, x1, y1| (y0..y1).flat_map(|y| (x0..x1).map(move |x| (x, y))).filter(|&(x, y)| f.get(x, y)).count();
+    assert!(lit(0, 0, 20, 15) > 10, "no text:\n{f:?}");
+    assert_eq!(lit(100, 90, 128, 110), 28 * 20);
+    assert_eq!(lit(30, 30, 90, 80), 0);
+    assert_eq!(r.waits, [None]);
+}
+
+#[test]
+fn an_app_that_never_waits_is_stopped() {
+    let wat = r#"(module (memory (export "memory") 1) (func (export "maki_main") (loop $l (br $l))))"#;
+    assert_eq!(run_with(wat, &[], LIMITS).0, Stop::NotResponding);
+}
+
+#[test]
+fn waiting_refuels() {
+    // spins for about half its fuel between waits, ten times over
+    let wat = r#"
+    (module
+      (import "maki" "wait" (func $wait (param i32) (result i32)))
+      (memory (export "memory") 1)
+      (func (export "maki_main")
+        (local $round i32) (local $i i32)
+        (loop $rounds
+          (local.set $i (i32.const 100000))
+          (loop $spin (local.set $i (i32.sub (local.get $i) (i32.const 1))) (br_if $spin (local.get $i)))
+          (drop (call $wait (i32.const 0)))
+          (local.set $round (i32.add (local.get $round) (i32.const 1)))
+          (br_if $rounds (i32.lt_u (local.get $round) (i32.const 10))))))
+    "#;
+    let events = [Event::Timeout; 10];
+    assert_eq!(run_with(wat, &events, LIMITS).0, Stop::Finished);
+}
+
+#[test]
+fn waiting_after_exit_stops_the_app() {
+    let wat = r#"
+    (module
+      (import "maki" "wait" (func $wait (param i32) (result i32)))
+      (memory (export "memory") 1)
+      (func (export "maki_main") (loop $l (drop (call $wait (i32.const -1))) (br $l))))
+    "#;
+    assert_eq!(run_with(wat, &[Event::Left], LIMITS).0, Stop::Exited);
+}
+
+#[test]
+fn abort_says_why() {
+    let wat = r#"
+    (module
+      (import "maki" "abort" (func $abort (param i32 i32)))
+      (memory (export "memory") 1)
+      (data (i32.const 0) "out of dice")
+      (func (export "maki_main") (call $abort (i32.const 0) (i32.const 11))))
+    "#;
+    assert_eq!(run_with(wat, &[], LIMITS).0, Stop::Aborted("out of dice".into()));
+}
+
+#[test]
+fn traps_and_bad_arguments_stop_the_app_not_maki() {
+    let cases = [
+        // text from beyond the end of memory
+        (r#"(drop (call $text (i32.const 0) (i32.const 0) (i32.const 65530) (i32.const 10) (i32.const 0) (i32.const 1)))"#, "text: bad pointer"),
+        // a length that wraps around
+        (r#"(drop (call $text (i32.const 0) (i32.const 0) (i32.const 16) (i32.const -1) (i32.const 0) (i32.const 1)))"#, "more than"),
+        (r#"(drop (call $text (i32.const 0) (i32.const 0) (i32.const 16) (i32.const 2) (i32.const 9) (i32.const 1)))"#, "no text style 9"),
+        (r#"(drop (call $text (i32.const 0) (i32.const 0) (i32.const 16) (i32.const 2) (i32.const 0) (i32.const 3)))"#, "no color 3"),
+        (r#"(call $blit (i32.const 0) (i32.const 0) (i32.const 1000) (i32.const 1) (i32.const 0) (i32.const 1))"#, "bigger than"),
+        (r#"(call $blit (i32.const 0) (i32.const 0) (i32.const 256) (i32.const 256) (i32.const 60000) (i32.const 1))"#, "blit: bad pointer"),
+        (r#"(call $random (i32.const 65535) (i32.const 2))"#, "random: bad pointer"),
+        (r#"(drop (i32.load (i32.const 70000)))"#, "out of bounds"),
+        (r#"unreachable"#, "unreachable"),
+        (r#"(call $deep)"#, "stack"),
+    ];
+    for (body, why) in cases {
+        let wat = format!(
+            r#"(module
+              (import "maki" "text" (func $text (param i32 i32 i32 i32 i32 i32) (result i32)))
+              (import "maki" "blit" (func $blit (param i32 i32 i32 i32 i32 i32)))
+              (import "maki" "random" (func $random (param i32 i32)))
+              (memory (export "memory") 1)
+              (data (i32.const 16) "Hi")
+              (func $deep (call $deep))
+              (func (export "maki_main") {body}))"#
+        );
+        match run_with(&wat, &[], LIMITS).0 {
+            Stop::Crashed(message) => assert!(message.contains(why), "{body}: {message}"),
+            other => panic!("{body}: {other:?}"),
+        }
+    }
+}
+
+#[test]
+fn only_maki_functions_can_be_imported() {
+    let cases = [
+        (r#"(import "wasi_snapshot_preview1" "fd_write" (func (param i32 i32 i32 i32) (result i32)))"#, "wasi_snapshot_preview1.fd_write"),
+        (r#"(import "maki" "read_phrase" (func))"#, "read_phrase"),
+        (r#"(import "maki" "clear" (func (param i64)))"#, "clear"),
+        (r#"(import "maki" "memory" (memory 1))"#, "memory"),
+    ];
+    for (import, why) in cases {
+        let wat = format!(r#"(module {import} (memory (export "memory") 1) (func (export "maki_main")))"#);
+        let err = check(&module(&wat), LIMITS).unwrap_err();
+        assert!(err.contains(why), "{import}: {err}");
+    }
+}
+
+#[test]
+fn what_check_requires() {
+    let ok = r#"(module (memory (export "memory") 1) (func (export "maki_main")))"#;
+    check(&module(ok), LIMITS).unwrap();
+    let cases = [
+        (r#"(module (memory (export "memory") 1) (func $s) (start $s) (func (export "maki_main")))"#, "start"),
+        (r#"(module (memory (export "memory") 1) (func (export "main")))"#, "maki_main"),
+        (r#"(module (memory (export "memory") 1) (func (export "maki_main") (param i32)))"#, "maki_main"),
+        (r#"(module (func (export "maki_main")))"#, "memory"),
+        // five pages, 320 KiB, more than the limit
+        (r#"(module (memory (export "memory") 5) (func (export "maki_main")))"#, "start"),
+    ];
+    for (wat, why) in cases {
+        let err = check(&module(wat), LIMITS).unwrap_err();
+        assert!(err.contains(why), "{wat}: {err}");
+    }
+    assert!(check(b"\0asm\x01\0\0\0garbage", LIMITS).unwrap_err().contains("not WebAssembly"));
+    assert!(check(b"MZ", LIMITS).is_err());
+}
+
+#[test]
+fn memory_grows_only_to_the_limit() {
+    // four pages is 256 KiB, the limit: growing by one more fails, and the app sees -1
+    let wat = r#"
+    (module
+      (import "maki" "log" (func $log (param i32 i32)))
+      (memory (export "memory") 1)
+      (data (i32.const 0) "grew" "limit")
+      (func (export "maki_main")
+        (if (i32.ne (memory.grow (i32.const 3)) (i32.const -1)) (then (call $log (i32.const 0) (i32.const 4))))
+        (if (i32.eq (memory.grow (i32.const 1)) (i32.const -1)) (then (call $log (i32.const 4) (i32.const 5))))))
+    "#;
+    let (stop, r) = run_with(wat, &[], LIMITS);
+    assert_eq!(stop, Stop::Finished);
+    assert_eq!(r.logs, ["grew", "limit"]);
+}
+
+/// Imports for storage tests, and a helper that logs a result code.
+const STORAGE: &str = r#"
+  (import "maki" "storage_get" (func $get (param i32 i32 i32 i32) (result i32)))
+  (import "maki" "storage_set" (func $set (param i32 i32 i32 i32) (result i32)))
+  (import "maki" "storage_delete" (func $del (param i32 i32) (result i32)))
+  (import "maki" "storage_key" (func $key (param i32 i32 i32) (result i32)))
+  (import "maki" "log" (func $log (param i32 i32)))
+  (memory (export "memory") 1)
+  (func $say (param $n i32)
+    ;; logs the result code as one character: "a" + (n + 5) for -5..20
+    (i32.store8 (i32.const 900) (i32.add (i32.const 97) (i32.add (local.get $n) (i32.const 5))))
+    (call $log (i32.const 900) (i32.const 1)))
+"#;
+
+fn code(n: i32) -> String { ((b'a' as i32 + n + 5) as u8 as char).to_string() }
+
+#[test]
+fn storage_keeps_values_within_the_quota() {
+    let wat = format!(
+        r#"(module {STORAGE}
+          (data (i32.const 0) "score")
+          (data (i32.const 8) "42")
+          (data (i32.const 16) "name")
+          (data (i32.const 24) "Kara")
+          (func (export "maki_main")
+            (call $say (call $get (i32.const 0) (i32.const 5) (i32.const 100) (i32.const 10)))   ;; not found
+            (call $say (call $set (i32.const 0) (i32.const 5) (i32.const 8) (i32.const 2)))      ;; 0
+            (call $say (call $set (i32.const 16) (i32.const 4) (i32.const 24) (i32.const 4)))    ;; 0
+            (call $say (call $get (i32.const 0) (i32.const 5) (i32.const 100) (i32.const 1)))    ;; 2, one byte copied
+            (call $log (i32.const 100) (i32.const 2))
+            (call $say (call $key (i32.const 0) (i32.const 200) (i32.const 10)))                 ;; "name": 4
+            (call $log (i32.const 200) (i32.const 4))
+            (call $say (call $key (i32.const 2) (i32.const 200) (i32.const 10)))                 ;; not found
+            (call $say (call $set (i32.const 0) (i32.const 5) (i32.const 0) (i32.const 1100)))   ;; over the quota
+            (call $say (call $set (i32.const 0) (i32.const 0) (i32.const 8) (i32.const 2)))      ;; empty key
+            (call $say (call $set (i32.const 0) (i32.const 5) (i32.const 0) (i32.const 20000)))  ;; too big
+            (call $say (call $del (i32.const 16) (i32.const 4)))                                 ;; 0
+            (call $say (call $del (i32.const 16) (i32.const 4)))))                               ;; not found
+        "#
+    );
+    let (stop, r) = run_with(&wat, &[], LIMITS);
+    assert_eq!(stop, Stop::Finished);
+    let expected: Vec<String> = [
+        code(NOT_FOUND),
+        code(0),
+        code(0),
+        code(2),
+        "4\0".into(),
+        code(4),
+        "name".into(),
+        code(NOT_FOUND),
+        code(FULL),
+        code(INVALID),
+        code(TOO_BIG),
+        code(0),
+        code(NOT_FOUND),
+    ]
+    .into();
+    assert_eq!(r.logs, expected);
+    assert_eq!(r.storage.get("score").unwrap(), b"42");
+    assert!(!r.storage.contains_key("name"));
+}
+
+#[test]
+fn the_quota_counts_what_was_stored_before() {
+    let wat = format!(
+        r#"(module {STORAGE}
+          (data (i32.const 0) "b")
+          (func (export "maki_main")
+            (call $say (call $set (i32.const 0) (i32.const 1) (i32.const 0) (i32.const 100)))))"#
+    );
+    let record = Rc::new(RefCell::new(Record::default()));
+    record.borrow_mut().storage.insert("a".into(), vec![0; 950]);
+    let stop = run(&module(&wat), Box::new(Script(record.clone())), LIMITS);
+    assert_eq!(stop, Stop::Finished);
+    assert_eq!(record.borrow().logs, [code(FULL)]);
+}
+
+#[test]
+fn menus_are_checked() {
+    let wat = r#"
+    (module
+      (import "maki" "menu" (func $menu (param i32 i32) (result i32)))
+      (import "maki" "log" (func $log (param i32 i32)))
+      (memory (export "memory") 1)
+      (data (i32.const 0) "Roll again\nReset")
+      (data (i32.const 100) "fine" "bad")
+      (data (i32.const 200) "one\n\nthree")
+      (func (export "maki_main")
+        (if (i32.eqz (call $menu (i32.const 0) (i32.const 16))) (then (call $log (i32.const 100) (i32.const 4))))
+        (if (i32.eq (call $menu (i32.const 200) (i32.const 10)) (i32.const -3)) (then (call $log (i32.const 104) (i32.const 3))))))
+    "#;
+    let (stop, r) = run_with(wat, &[], LIMITS);
+    assert_eq!(stop, Stop::Finished);
+    assert_eq!(r.logs, ["fine", "bad"]);
+    assert_eq!(r.menu, ["Roll again", "Reset"]);
+}
+
+#[test]
+fn time_and_randomness() {
+    let wat = r#"
+    (module
+      (import "maki" "unix_time" (func $unix (result i64)))
+      (import "maki" "time_verified" (func $verified (result i32)))
+      (import "maki" "millis" (func $millis (result i64)))
+      (import "maki" "random" (func $random (param i32 i32)))
+      (import "maki" "log" (func $log (param i32 i32)))
+      (memory (export "memory") 1)
+      (data (i32.const 0) "time" "rand")
+      (func (export "maki_main")
+        (if (i32.and
+              (i64.eq (call $unix) (i64.const 1790000000))
+              (i32.and (call $verified) (i64.eq (call $millis) (i64.const 0))))
+          (then (call $log (i32.const 0) (i32.const 4))))
+        (call $random (i32.const 100) (i32.const 4))
+        (if (i32.eq (i32.load (i32.const 100)) (i32.const 0x5a5a5a5a)) (then (call $log (i32.const 4) (i32.const 4))))))
+    "#;
+    let (stop, r) = run_with(wat, &[], LIMITS);
+    assert_eq!(stop, Stop::Finished);
+    assert_eq!(r.logs, ["time", "rand"]);
+}
+
+#[test]
+fn canvas_drawing_is_exact_and_clipped() {
+    let mut c = Canvas::default();
+    c.line(0, 0, 3, 3, Color::Light);
+    assert!((0..4).all(|i| c.get(i, i)) && !c.get(1, 0));
+    c.rect(10, 10, 4, 3, Color::Light, false);
+    assert!(c.get(10, 10) && c.get(13, 12) && !c.get(11, 11));
+    c.rect(10, 10, 4, 3, Color::Invert, true);
+    assert!(!c.get(10, 10) && c.get(11, 11));
+    // extremes don't panic and don't take forever
+    c.line(i32::MIN, i32::MIN, i32::MAX, i32::MAX, Color::Invert);
+    c.rect(i32::MIN, i32::MIN, i32::MAX, i32::MAX, Color::Light, true);
+    c.text(i32::MAX, i32::MIN, "far away", Style::Tall, Color::Light);
+    c.clear(Color::Dark);
+    assert_eq!(c.words().iter().filter(|w| **w != 0).count(), 0);
+    // blit: the top bit is the leftmost pixel
+    c.blit(0, 0, 9, 2, &[0b1000_0001, 0b1000_0000, 0, 0x80], Color::Light);
+    assert!(c.get(0, 0) && c.get(7, 0) && c.get(8, 0) && c.get(8, 1) && !c.get(1, 0) && !c.get(0, 1));
+    // the display wants set bits dark
+    assert_eq!(c.to_display()[0] & 1, 0);
+    assert_eq!(c.to_display()[4] & 1, 1);
+}
+
+#[test]
+fn text_width_matches_what_text_draws() {
+    for style in [Style::Regular, Style::Bold, Style::Small, Style::Mono, Style::Tall] {
+        let mut c = Canvas::default();
+        let end = c.text(3, 5, "Dice 42!", style, Color::Light);
+        let w = Canvas::text_width("Dice 42!", style);
+        assert_eq!(end - 3 - 1, w, "{style:?}");
+        let rightmost = (0..128).rev().find(|&x| (0..110).any(|y| c.get(x, y))).unwrap();
+        assert!(rightmost <= 3 + w, "{style:?}: drawn to {rightmost}, width {w}");
+        assert!(Style::Regular.height() > 0);
+    }
+    // unknown characters draw as the replacement character, not nothing
+    assert!(Canvas::text_width("\u{e000}", Style::Regular) > 0);
+}
+
+#[test]
+fn qr_codes_fit_or_say_so() {
+    let mut c = Canvas::default();
+    let side = c.qr(0, 0, b"bc1qcr8te4kr609gcawutmrza0j4xv80jy8z306fyu", 100).unwrap();
+    assert!(side <= 100 && side > 50);
+    // quiet zone light, a finder pattern's corner dark
+    assert!(c.get(0, 0) && c.get(1, 1));
+    let scale = side / 29;
+    assert!(!c.get(2 * scale, 2 * scale));
+    // too much for the room, or for any QR code
+    assert_eq!(c.qr(0, 0, &[b'x'; 900], 60), None);
+    assert_eq!(c.qr(0, 0, &[b'x'; 3000], 110), None);
+}
+
+#[test]
+fn admit_says_what_maki_takes() {
+    use maki_bundle::{Kind, Manifest, Permission};
+    let ok = module(r#"(module (memory (export "memory") 1) (func (export "maki_main")))"#);
+    let m = Manifest {
+        id: "com.example.ok".into(),
+        name: "OK".into(),
+        version: 1,
+        label: String::new(),
+        kind: Kind::Wasm,
+        api: 1,
+        firmware: String::new(),
+        permissions: vec![],
+        storage_kib: 4,
+        memory_kib: 64,
+        backup: true,
+        description: String::new(),
+    };
+    let limits = admit(&m, &ok).unwrap();
+    assert_eq!((limits.memory, limits.storage), (64 * 1024, 4 * 1024));
+    let refusals = [
+        (Manifest { kind: Kind::Native, api: 0, firmware: "x".into(), ..m.clone() }, "native"),
+        (Manifest { api: API_VERSION + 1, ..m.clone() }, "newer maki"),
+        (Manifest { permissions: vec![(Permission::Keyboard, "typing".into())], ..m.clone() }, "type on your computer"),
+        (Manifest { memory_kib: MAX_MEMORY_KIB + 1, ..m.clone() }, "memory"),
+        (Manifest { storage_kib: MAX_STORAGE_KIB + 1, ..m.clone() }, "storage"),
+        (Manifest { memory_kib: 32, ..m.clone() }, "can't start"),
+    ];
+    for (manifest, why) in refusals {
+        let err = admit(&manifest, &ok).unwrap_err();
+        assert!(err.contains(why), "{why}: {err}");
+    }
+}

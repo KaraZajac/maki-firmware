@@ -115,6 +115,56 @@ pub enum Handled {
     Bitcoin(Bitcoin),
     /// The Ethereum account, the same way, with `reply::eth_*`.
     Ethereum(Ethereum),
+    /// Installed apps: the glue passes these to maki's app host, which checks bundles and asks
+    /// the owner, and answers with `reply::app_*`.
+    Apps(Apps),
+}
+
+/// Installed apps (ARCHITECTURE.md, "Apps you can install").
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Apps {
+    List { index: u32 },
+    Install { total: u32, offset: u32, data: Vec<u8> },
+    Remove { id: String },
+}
+
+/// Pieces of a bundle are at most this big.
+pub const APP_PIECE: usize = 4096;
+/// The biggest bundle maki takes (`maki_bundle::MAX_BUNDLE`).
+pub const MAX_APP: u32 = 512 * 1024;
+
+/// An installed app, as APP_LIST describes it.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct AppEntry {
+    /// Reverse-DNS: `com.example.dice`.
+    pub id: String,
+    pub name: String,
+    pub version: u32,
+    /// The version as people write it; may be empty.
+    pub label: String,
+    /// The developer's Ed25519 key, 32 bytes.
+    pub developer: Vec<u8>,
+    /// Reviewed and stamped by the maki store; otherwise sideloaded.
+    pub from_store: bool,
+    /// Whether its data goes in maki's backup: the owner's choice.
+    pub backup: bool,
+    /// Bytes of storage it uses.
+    pub used: u32,
+    /// 64x64 in `maki_icons` form as little-endian words (512 bytes), or empty.
+    pub icon: Vec<u8>,
+}
+
+/// Whether `id` is an app ID as bundles have them: reverse-DNS, lower case.
+pub fn app_id_valid(id: &str) -> bool {
+    id.len() >= 3
+        && id.len() <= 64
+        && id.contains('.')
+        && id.split('.').all(|part| {
+            !part.is_empty()
+                && !part.starts_with('-')
+                && !part.ends_with('-')
+                && part.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+        })
 }
 
 /// Ethereum requests come from a site (the browser extension's EIP-1193 provider), which maki
@@ -301,6 +351,42 @@ pub mod reply {
         let body = Writer::new().u8(done as u8).u8(status as u8).u16(logins).u16(codes).u16(passkeys).finish();
         (kind::BACKUP_PUT | kind::REPLY, body)
     }
+
+    /// How many apps are installed, and the one asked for if there's one at that index;
+    /// `status` is `Approved`, or why not (`Locked`, `Unavailable`) with nothing.
+    pub fn app_list(status: Approval, count: u32, entry: Option<&super::AppEntry>) -> (u8, Vec<u8>) {
+        let ok = status == Approval::Approved;
+        let entry = entry.filter(|_| ok);
+        let mut w = Writer::new().u8(status as u8).u32(if ok { count } else { 0 }).u8(entry.is_some() as u8);
+        if let Some(e) = entry {
+            w = w
+                .str8(&e.id)
+                .str8(&e.name)
+                .u32(e.version)
+                .str8(&e.label)
+                .bytes16(&e.developer)
+                .u8(e.from_store as u8)
+                .u8(e.backup as u8)
+                .u32(e.used)
+                .bytes16(&e.icon);
+        }
+        (kind::APP_LIST | kind::REPLY, w.finish())
+    }
+
+    /// A piece of a bundle taken (`done` false, `Approved`), or the outcome once the owner
+    /// decided or maki refused it, with the reason (at most 255 bytes, cut at a character).
+    pub fn app_install(done: bool, approval: Approval, reason: &str) -> (u8, Vec<u8>) {
+        let reason = if approval == Approval::Refused { reason } else { "" };
+        let mut end = reason.len().min(255);
+        while !reason.is_char_boundary(end) {
+            end -= 1;
+        }
+        (kind::APP_INSTALL | kind::REPLY, Writer::new().u8(done as u8).u8(approval as u8).str8(&reason[..end]).finish())
+    }
+
+    pub fn app_remove(approval: Approval) -> (u8, Vec<u8>) {
+        (kind::APP_REMOVE | kind::REPLY, Writer::new().u8(approval as u8).finish())
+    }
 }
 
 pub trait Platform {
@@ -372,6 +458,7 @@ impl<P: Platform> Device<P> {
             kind::ETH_ACCOUNT | kind::ETH_SIGN_TX | kind::ETH_SIGNED | kind::ETH_SIGN_MESSAGE => {
                 return Self::ethereum(packet.kind, body)
             }
+            kind::APP_LIST | kind::APP_INSTALL | kind::APP_REMOVE => return Self::apps(packet.kind, body),
             _ => Ok(error(ErrorCode::UnknownKind, "unknown message kind")),
         };
         let (kind, body) = result.unwrap_or_else(malformed);
@@ -416,6 +503,39 @@ impl<P: Platform> Device<P> {
                 Handled::Reply(k, b)
             }
             Ok((_, ask)) => Handled::Ask(ask),
+        }
+    }
+
+    fn apps(kind: u8, body: &[u8]) -> Handled {
+        let parsed = (|| {
+            let mut r = Reader::new(body);
+            let request = match kind {
+                kind::APP_LIST => Apps::List { index: r.u32()? },
+                kind::APP_INSTALL => Apps::Install { total: r.u32()?, offset: r.u32()?, data: r.bytes16()?.to_vec() },
+                _ => Apps::Remove { id: r.str8()?.to_string() },
+            };
+            r.end()?;
+            Ok::<_, Truncated>(request)
+        })();
+        let bad = |why: &str| {
+            let (k, b) = error(ErrorCode::BadArgument, why);
+            Handled::Reply(k, b)
+        };
+        match parsed {
+            Err(t) => {
+                let (k, b) = malformed(t);
+                Handled::Reply(k, b)
+            }
+            Ok(Apps::Install { total, offset, ref data })
+                if total == 0
+                    || total > MAX_APP
+                    || data.len() > APP_PIECE
+                    || offset as u64 + data.len() as u64 > total as u64 =>
+            {
+                bad("bundle piece out of range")
+            }
+            Ok(Apps::Remove { ref id }) if !app_id_valid(id) => bad("not an app ID"),
+            Ok(request) => Handled::Apps(request),
         }
     }
 

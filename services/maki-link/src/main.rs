@@ -10,7 +10,10 @@ use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 
-use maki_proto::device::{reply, Approval, Ask, Backup, Bitcoin, Device, Ethereum, Handled, Platform, TimeState};
+use maki_app_host_api as app_host;
+use maki_proto::device::{
+    reply, AppEntry, Apps, Approval, Ask, Backup, Bitcoin, Device, Ethereum, Handled, Platform, TimeState,
+};
 use maki_proto::frame::{self, Deframer};
 use num_traits::ToPrimitive;
 
@@ -54,12 +57,55 @@ fn unavailable(ask: &Ask) -> (u8, Vec<u8>) { refused(ask, Approval::Unavailable)
 fn locked(ask: &Ask) -> (u8, Vec<u8>) { refused(ask, Approval::Locked) }
 
 /// What the worker does: a request for the owner, the last piece of a restore (which asks the
-/// owner too), or a Bitcoin request that waits for them.
+/// owner too), a wallet request that waits for them, or an app to install or remove.
 enum Work {
     Ask(u16, Ask),
     Restore { id: u16, total: u32, offset: u32, data: Vec<u8> },
     Bitcoin(u16, Bitcoin),
     Ethereum(u16, Ethereum),
+    AppInstall { id: u16, total: u32, offset: u32, data: Vec<u8> },
+    AppRemove { id: u16, app: String },
+}
+
+/// The app host's answers, as the protocol's.
+fn app_approval(result: u32) -> Approval {
+    match result {
+        app_host::RESULT_OK => Approval::Approved,
+        app_host::RESULT_DENIED => Approval::Denied,
+        app_host::RESULT_TIMED_OUT => Approval::TimedOut,
+        app_host::RESULT_REFUSED => Approval::Refused,
+        app_host::RESULT_LOCKED => Approval::Locked,
+        app_host::RESULT_NO_APP => Approval::NoMatch,
+        _ => Approval::Unavailable,
+    }
+}
+
+/// A piece of a bundle, handed to the app host (None: an image without one).
+fn app_install(host: Option<app_host::AppHost>, total: u32, offset: u32, data: Vec<u8>) -> (u8, Vec<u8>) {
+    let Some(host) = host else { return reply::app_install(true, Approval::Unavailable, "") };
+    let r = host.install(total, offset, data);
+    reply::app_install(r.done, app_approval(r.result), &r.reason)
+}
+
+/// The installed app at `index`, and how many there are.
+fn app_list(host: Option<app_host::AppHost>, index: u32) -> (u8, Vec<u8>) {
+    let Some(host) = host else { return reply::app_list(Approval::Unavailable, 0, None) };
+    let list = host.list();
+    if list.result != app_host::RESULT_OK {
+        return reply::app_list(app_approval(list.result), 0, None);
+    }
+    let entry = list.apps.get(index as usize).map(|a| AppEntry {
+        id: a.id.clone(),
+        name: a.name.clone(),
+        version: a.version,
+        label: a.label.clone(),
+        developer: a.developer.clone(),
+        from_store: a.from_store,
+        backup: a.backup,
+        used: a.used,
+        icon: a.icon.iter().flat_map(|w| w.to_le_bytes()).collect(),
+    });
+    reply::app_list(Approval::Approved, list.apps.len() as u32, entry.as_ref())
 }
 
 /// maki-keys' answers, as the protocol's.
@@ -103,6 +149,21 @@ fn vault_worker(work: mpsc::Receiver<Work>, waiting: Arc<AtomicU32>, send_lock: 
             }
             Work::Ethereum(id, request) => {
                 let (kind, body) = ethereum(&keys, request);
+                waiting.fetch_sub(1, Ordering::SeqCst);
+                send(&usb, &send_lock, &frame::encode(kind, id, &body));
+                continue;
+            }
+            Work::AppInstall { id, total, offset, data } => {
+                let (kind, body) = app_install(app_host::AppHost::try_new(&xns), total, offset, data);
+                waiting.fetch_sub(1, Ordering::SeqCst);
+                send(&usb, &send_lock, &frame::encode(kind, id, &body));
+                continue;
+            }
+            Work::AppRemove { id, app } => {
+                let (kind, body) = match app_host::AppHost::try_new(&xns) {
+                    Some(host) => reply::app_remove(app_approval(host.remove(&app))),
+                    None => reply::app_remove(Approval::Unavailable),
+                };
                 waiting.fetch_sub(1, Ordering::SeqCst);
                 send(&usb, &send_lock, &frame::encode(kind, id, &body));
                 continue;
@@ -189,6 +250,8 @@ fn waits(request: &Bitcoin) -> bool {
 struct Badge {
     tt: ticktimer_server::Ticktimer,
     launcher: maki_launcher::Launcher,
+    /// The clock's state, which a thread passes on to the app host (see `main`).
+    time_state: Arc<AtomicU32>,
     #[cfg(feature = "board-baosec")]
     time_conn: xous::CID,
 }
@@ -233,6 +296,7 @@ impl Platform for Badge {
     fn time_state_changed(&mut self, state: TimeState) {
         log::info!("time is now {:?}", state);
         self.launcher.set_time_state(state as u8).ok();
+        self.time_state.store(state as u32, Ordering::SeqCst);
     }
 }
 
@@ -242,9 +306,11 @@ fn main() -> ! {
     log::info!("maki-link PID is {}", xous::process::id());
 
     let xns = xous_names::XousNames::new().unwrap();
+    let time_state = Arc::new(AtomicU32::new(0));
     let badge = Badge {
         tt: ticktimer_server::Ticktimer::new().unwrap(),
         launcher: maki_launcher::Launcher::new(&xns).expect("couldn't connect to the launcher"),
+        time_state: time_state.clone(),
         #[cfg(feature = "board-baosec")]
         time_conn: xous::connect(xous::SID::from_bytes(bao1x_hal_service::api::TIME_SERVER_PUBLIC).unwrap())
             .unwrap(),
@@ -256,14 +322,27 @@ fn main() -> ! {
     // No 64-bit atomics on this core: uptime is kept as wrapping u32 milliseconds (49 days).
     let last_contact = Arc::new(AtomicU32::new(0));
     let linked = Arc::new(AtomicBool::new(false));
-    std::thread::spawn({
-        let (last_contact, linked) = (last_contact.clone(), linked.clone());
+    // Also tells the app host whether the time is verified (for apps): it may start after us,
+    // or not be in the image at all, so connect when it appears and pass on every change. One
+    // thread for both, with a small stack: each thread's stack is RAM from the start.
+    std::thread::Builder::new().stack_size(32 * 1024).spawn({
+        let (last_contact, linked, time_state) = (last_contact.clone(), linked.clone(), time_state.clone());
         move || {
             let xns = xous_names::XousNames::new().unwrap();
             let launcher = maki_launcher::Launcher::new(&xns).expect("couldn't connect to the launcher");
             let tt = ticktimer_server::Ticktimer::new().unwrap();
+            let mut host = None;
+            let mut told = u32::MAX;
             loop {
                 tt.sleep_ms(2_000).ok();
+                if host.is_none() {
+                    host = app_host::AppHost::try_new(&xns);
+                }
+                let now = time_state.load(Ordering::SeqCst);
+                if let Some(h) = host.filter(|_| now != told) {
+                    h.set_time_state(now as u8);
+                    told = now;
+                }
                 let quiet = (tt.elapsed_ms() as u32).wrapping_sub(last_contact.load(Ordering::SeqCst));
                 if quiet > LINK_TIMEOUT_MS && linked.swap(false, Ordering::SeqCst) {
                     log::info!("desktop app gone quiet: unlinked");
@@ -271,7 +350,8 @@ fn main() -> ! {
                 }
             }
         }
-    });
+    })
+    .unwrap();
     let tt = ticktimer_server::Ticktimer::new().unwrap();
     let launcher = maki_launcher::Launcher::new(&xns).expect("couldn't connect to the launcher");
 
@@ -349,6 +429,56 @@ fn main() -> ! {
                     break;
                 }
             }
+        });
+    }
+
+    // The emulator has no USB for maki desktop to install apps over. Built with MAKI_DEMO_APP,
+    // once maki is unlocked, maki-link hands the app host two of the SDK's examples as if the
+    // desktop had sent them (each asks the owner), then one changed after it was signed (which
+    // maki refuses), and lists what's installed.
+    if option_env!("MAKI_DEMO_APP").is_some() {
+        std::thread::spawn(|| {
+            let bundles: [(&str, &[u8]); 2] = [
+                ("dice", include_bytes!("../../../libs/maki-wasm/tests/fixtures/dice.maki")),
+                ("tally", include_bytes!("../../../libs/maki-wasm/tests/fixtures/tally.maki")),
+            ];
+            let mut tampered = include_bytes!("../../../libs/maki-wasm/tests/fixtures/hello.maki").to_vec();
+            tampered[40] ^= 1;
+            let xns = xous_names::XousNames::new().unwrap();
+            let keys = maki_keys::Keys::new(&xns).expect("maki-keys");
+            let tt = ticktimer_server::Ticktimer::new().unwrap();
+            while !(keys.status().0 == maki_keys::State::Unlocked && keys.has_phrase()) {
+                tt.sleep_ms(500).ok();
+            }
+            // after the work unlocking starts (the passkeys' keys from the phrase), not during it
+            tt.sleep_ms(60_000).ok();
+            log::warn!("demo app: waiting for the app host");
+            let host = app_host::AppHost::new(&xns).expect("the app host");
+            log::warn!("demo app: installing");
+            let install = |bytes: &[u8]| {
+                let mut r = app_host::Install::default();
+                for (i, piece) in bytes.chunks(4096).enumerate() {
+                    r = host.install(bytes.len() as u32, (i * 4096) as u32, piece.to_vec());
+                    if r.done {
+                        break;
+                    }
+                }
+                r
+            };
+            for (name, bytes) in bundles {
+                let r = install(bytes);
+                log::warn!("demo app install {name}: result {} '{}'", r.result, r.reason);
+            }
+            let r = install(&tampered);
+            log::warn!(
+                "demo app install tampered: result {} '{}', as expected: {}",
+                r.result,
+                r.reason,
+                r.result == app_host::RESULT_REFUSED
+            );
+            let list = host.list();
+            let names: Vec<String> = list.apps.iter().map(|a| format!("{} {}", a.id, a.version)).collect();
+            log::warn!("demo app list: result {} {:?}", list.result, names);
         });
     }
 
@@ -465,6 +595,40 @@ fn main() -> ! {
                                     Err(_) => {
                                         waiting.fetch_sub(1, Ordering::SeqCst);
                                         reply::restore_piece(true, Approval::Unavailable, 0, 0, 0)
+                                    }
+                                }
+                            }
+                        }
+                        Handled::Apps(Apps::List { index }) => app_list(app_host::AppHost::try_new(&xns), index),
+                        // pieces go straight to the host; the last one waits for the owner
+                        Handled::Apps(Apps::Install { total, offset, data })
+                            if offset as usize + data.len() < total as usize =>
+                        {
+                            app_install(app_host::AppHost::try_new(&xns), total, offset, data)
+                        }
+                        Handled::Apps(request) => {
+                            let busy = |request: &Apps| match request {
+                                Apps::Remove { .. } => reply::app_remove(Approval::Unavailable),
+                                _ => reply::app_install(true, Approval::Unavailable, ""),
+                            };
+                            if waiting.fetch_add(1, Ordering::SeqCst) >= MAX_WAITING_ASKS {
+                                waiting.fetch_sub(1, Ordering::SeqCst);
+                                log::warn!("too many requests waiting on the owner");
+                                busy(&request)
+                            } else {
+                                let work = match request {
+                                    Apps::Install { total, offset, data } => {
+                                        Work::AppInstall { id: packet.id, total, offset, data }
+                                    }
+                                    Apps::Remove { id } => Work::AppRemove { id: packet.id, app: id },
+                                    Apps::List { .. } => unreachable!(),
+                                };
+                                match to_vault.send(work) {
+                                    Ok(()) => continue,
+                                    Err(_) => {
+                                        log::error!("the worker is gone");
+                                        waiting.fetch_sub(1, Ordering::SeqCst);
+                                        reply::app_install(true, Approval::Unavailable, "")
                                     }
                                 }
                             }

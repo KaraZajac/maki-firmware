@@ -157,7 +157,9 @@ pub(crate) fn pumper(
     main_conn: xous::CID,
     allow_totp_rendering: Arc<core::sync::atomic::AtomicBool>,
 ) {
-    let _ = thread::spawn({
+    // maki: a small stack, as it only pumps redraws: a thread's whole stack is RAM from the
+    // start, and RAM is short
+    let _ = thread::Builder::new().stack_size(32 * 1024).spawn({
         move || {
             let tt = ticktimer_server::Ticktimer::new().unwrap();
             let self_conn = xous::connect(sid).unwrap();
@@ -198,7 +200,8 @@ pub(crate) fn pumper(
             }
             xous::destroy_server(sid).ok();
         }
-    });
+    })
+    .unwrap();
 }
 
 pub(crate) fn db_str_to_code(db_str: &str) -> Result<String, TotpError> {

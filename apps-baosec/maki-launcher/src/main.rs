@@ -34,6 +34,8 @@ const SPLASH_MIN_MS: u64 = 1500;
 
 struct App {
     name: String,
+    /// The app's server, which with `key_op` names it to `Unregister`.
+    server: String,
     conn: xous::CID,
     key_op: usize,
     focus_op: usize,
@@ -598,6 +600,7 @@ impl System {
                     (Some(p), None) => self.maki_menu(p),
                     (Some(p), Some(i)) if p == last => {
                         log::info!("'{}' exited from its menu", self.apps[i].name);
+                        set_focus(&self.apps[i], Focus::Exited);
                         self.go_home();
                     }
                     (Some(p), Some(i)) => {
@@ -672,15 +675,19 @@ fn main() -> ! {
             .ok();
     });
 
-    // keeps the clock current; the main loop only redraws when the minute changes
-    std::thread::spawn(move || {
-        let tt = ticktimer_server::Ticktimer::new().unwrap();
-        loop {
-            tt.sleep_ms(1000).ok();
-            xous::send_message(conn, xous::Message::new_scalar(LauncherOp::Tick.to_usize().unwrap(), 0, 0, 0, 0))
-                .ok();
-        }
-    });
+    // keeps the clock current; the main loop only redraws when the minute changes. A small
+    // stack: a thread's whole stack is RAM from the start, and this one only ticks.
+    std::thread::Builder::new()
+        .stack_size(32 * 1024)
+        .spawn(move || {
+            let tt = ticktimer_server::Ticktimer::new().unwrap();
+            loop {
+                tt.sleep_ms(1000).ok();
+                xous::send_message(conn, xous::Message::new_scalar(LauncherOp::Tick.to_usize().unwrap(), 0, 0, 0, 0))
+                    .ok();
+            }
+        })
+        .unwrap();
 
     let mut sys = System {
         screen,
@@ -722,6 +729,7 @@ fn main() -> ! {
                         let pos = sys.apps.iter().position(|a| a.name.to_lowercase() > key).unwrap_or(sys.apps.len());
                         sys.apps.insert(pos, App {
                             name: reg.name,
+                            server: reg.server_name,
                             conn: app_conn,
                             key_op: reg.key_op as usize,
                             focus_op: reg.focus_op as usize,
@@ -749,6 +757,48 @@ fn main() -> ! {
                         }
                     }
                     Err(e) => log::error!("couldn't connect to app server {}: {:?}", reg.server_name, e),
+                }
+            }
+            Some(LauncherOp::Unregister) => {
+                let buffer = unsafe { Buffer::from_memory_message(msg.body.memory_message().unwrap()) };
+                let Ok(reg) = buffer.to_original::<AppRegistration, _>() else {
+                    log::error!("malformed app unregistration");
+                    continue;
+                };
+                let Some(pos) =
+                    sys.apps.iter().position(|a| a.server == reg.server_name && a.key_op == reg.key_op as usize)
+                else {
+                    continue;
+                };
+                let app = sys.apps.remove(pos);
+                log::info!("unregistered app '{}'", app.name);
+                // apps are known by position: those after it move back, and the one removed goes
+                let mut gone = false;
+                let unshift = |i: &mut usize, gone: &mut bool| {
+                    if *i == pos {
+                        *gone = true;
+                    } else if *i > pos {
+                        *i -= 1;
+                    }
+                };
+                if let View::App(i) | View::Menu(_, MenuFor::App(i)) = &mut sys.view {
+                    unshift(i, &mut gone);
+                }
+                if let Some(mut i) = sys.paused {
+                    let mut paused_gone = false;
+                    unshift(&mut i, &mut paused_gone);
+                    sys.paused = if paused_gone { None } else { Some(i) };
+                }
+                if sys.selected > pos || sys.selected >= sys.apps.len() {
+                    sys.selected = sys.selected.saturating_sub(1);
+                }
+                if gone {
+                    sys.view = View::Home;
+                    if !sys.asking.active() {
+                        sys.go_home();
+                    }
+                } else if matches!(sys.view, View::Home) {
+                    sys.redraw();
                 }
             }
             Some(LauncherOp::Ready) => {
