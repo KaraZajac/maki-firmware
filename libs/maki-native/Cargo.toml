@@ -5,3 +5,8 @@ edition = "2021"
 description = "Native maki apps: the checks maki makes of an app's ELF before it installs or runs it"
 
 [dependencies]
+
+[features]
+default = ["alloc"]
+# frames (`draw`), which the loader's stub doesn't need
+alloc = []

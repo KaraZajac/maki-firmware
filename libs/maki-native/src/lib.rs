@@ -10,11 +10,50 @@
 #![no_std]
 #![forbid(unsafe_code)]
 
+#[cfg(feature = "alloc")]
 extern crate alloc;
 
+#[cfg(feature = "alloc")]
 pub mod draw;
+pub mod service;
 
-use alloc::vec::Vec;
+/// Between maki's app host (the loader) and the stub a native app starts in
+/// (`apps-baosec/maki-spawn`). The host creates a process from the stub and lends it, mutably,
+/// a buffer: a header, then the app's ELF. The stub checks the ELF, maps its segments, connects
+/// to the servers the app may use, writes its answer into the header and returns the buffer;
+/// then it confines itself and jumps to the app.
+pub mod load {
+    /// Where the stub is linked and starts.
+    pub const STUB_ADDRESS: usize = 0x2050_1000;
+    /// The stack the loader gives an app's process, out of its memory.
+    pub const STACK_KIB: u32 = 64;
+    /// The stub's one message: `lend_mut`, the header and the ELF.
+    pub const OP_LOAD: usize = 1;
+    /// The header: the app's memory in KiB, the ELF's length, the stack the loader gave the
+    /// process in KiB, and the stub's answer (u32s, little-endian).
+    pub const HEADER: usize = 16;
+    pub const AT_MEMORY_KIB: usize = 0;
+    pub const AT_ELF_LEN: usize = 4;
+    pub const AT_STACK_KIB: usize = 8;
+    pub const AT_ANSWER: usize = 12;
+
+    /// The stub's answers.
+    pub const LOADED: u32 = 0;
+    pub const NOT_ANSWERED: u32 = u32::MAX;
+    pub const BAD_REQUEST: u32 = 1;
+    pub const BAD_ELF: u32 = 2;
+    /// Its code, data and stack take more than its memory.
+    pub const NO_ROOM: u32 = 3;
+    pub const CANT_MAP: u32 = 4;
+    pub const CANT_CONNECT: u32 = 5;
+
+    /// The servers a native app may use, which the stub connects to before it confines itself:
+    /// the ticktimer and the log (Rust's std needs them) and maki's app service.
+    pub const TICKTIMER: [u8; 16] = *b"ticktimer-server";
+    pub const LOG: [u8; 16] = *b"xous-log-server ";
+    pub const APP_SERVICE: [u8; 16] = *b"maki app service";
+}
+
 use core::fmt;
 use core::ops::Range;
 
@@ -53,17 +92,20 @@ pub struct Segment {
     pub executable: bool,
 }
 
-/// An app's ELF, checked.
+/// An app's ELF, checked. No allocation: the loader's stub, which has none, reads it too.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Program {
     pub entry: u32,
-    pub segments: Vec<Segment>,
+    loads: [Option<Segment>; MAX_HEADERS],
 }
 
 impl Program {
+    /// The segments to map, in the ELF's order.
+    pub fn segments(&self) -> impl Iterator<Item = &Segment> { self.loads.iter().flatten() }
+
     /// Memory the segments take, in whole pages.
     pub fn pages(&self) -> u32 {
-        self.segments.iter().map(|s| (page_up(s.memory.end) - page_down(s.memory.start)) / PAGE).sum()
+        self.segments().map(|s| (page_up(s.memory.end) - page_down(s.memory.start)) / PAGE).sum()
     }
 }
 
@@ -131,7 +173,7 @@ pub fn check(elf: &[u8], memory_kib: u32) -> Result<Program, Error> {
     if phentsize != 32 || phnum == 0 || phnum > MAX_HEADERS {
         return Err(Error::Format("program headers"));
     }
-    let mut segments: Vec<Segment> = Vec::new();
+    let mut loads: [Option<Segment>; MAX_HEADERS] = Default::default();
     for i in 0..phnum {
         let at = phoff.checked_add(i * 32).ok_or(Error::Format("cut short"))?;
         let kind = u32_at(elf, at)?;
@@ -167,15 +209,24 @@ pub fn check(elf: &[u8], memory_kib: u32) -> Result<Program, Error> {
         }
         let memory = vaddr..end;
         // whole pages: two segments may not share one
-        if segments.iter().any(|s| page_down(s.memory.start) < page_up(end) && page_down(vaddr) < page_up(s.memory.end)) {
+        if loads
+            .iter()
+            .flatten()
+            .any(|s| page_down(s.memory.start) < page_up(end) && page_down(vaddr) < page_up(s.memory.end))
+        {
             return Err(Error::Layout("segments overlap"));
         }
-        segments.push(Segment { memory, file: offset as usize..file_end, writable: flags & PF_W != 0, executable: flags & PF_X != 0 });
+        loads[i] = Some(Segment {
+            memory,
+            file: offset as usize..file_end,
+            writable: flags & PF_W != 0,
+            executable: flags & PF_X != 0,
+        });
     }
-    if !segments.iter().any(|s| s.executable && s.memory.contains(&entry)) {
+    let program = Program { entry, loads };
+    if !program.segments().any(|s| s.executable && s.memory.contains(&entry)) {
         return Err(Error::Format("the entry point isn't in its code"));
     }
-    let program = Program { entry, segments };
     let pages = program.pages();
     if pages * PAGE > memory_kib.saturating_mul(1024) {
         return Err(Error::TooBig(pages));

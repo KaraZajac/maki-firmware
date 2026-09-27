@@ -46,8 +46,9 @@ fn typical() -> Vec<(u32, u32, u32, u32, u32, u32)> {
 fn a_typical_program_checks_out() {
     let p = check(&elf(0x10010, &typical(), 0x3000), 64).unwrap();
     assert_eq!(p.entry, 0x10010);
-    assert_eq!(p.segments.len(), 3);
-    assert_eq!(p.segments[2], Segment { memory: 0x12000..0x15000, file: 0x2800..0x2900, writable: true, executable: false });
+    let segments: Vec<_> = p.segments().collect();
+    assert_eq!(segments.len(), 3);
+    assert_eq!(*segments[2], Segment { memory: 0x12000..0x15000, file: 0x2800..0x2900, writable: true, executable: false });
     assert_eq!(p.pages(), 5);
     // 20 KiB of pages: not in 16
     assert_eq!(check(&elf(0x10010, &typical(), 0x3000), 16), Err(Error::TooBig(5)));
@@ -120,7 +121,7 @@ fn a_real_xous_program_checks_out() {
     let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../target/riscv32imac-unknown-xous-elf/release/maki-app-host");
     let Ok(bytes) = std::fs::read(path) else { return };
     let p = check(&bytes, 4096).unwrap();
-    assert_eq!(p.segments.iter().filter(|s| s.executable).count(), 1);
+    assert_eq!(p.segments().filter(|s| s.executable).count(), 1);
 }
 
 /// Whatever the bytes, the check answers: it never panics, and what it passes is inside the
@@ -145,7 +146,7 @@ fn nothing_panics_it() {
             b.truncate((rng() % b.len() as u64) as usize);
         }
         if let Ok(p) = check(&b, 1 << 20) {
-            for s in &p.segments {
+            for s in p.segments() {
                 assert!(s.file.end <= b.len());
                 assert!(APP_SPACE.start <= s.memory.start && s.memory.end <= APP_SPACE.end);
                 assert!(!(s.writable && s.executable));
