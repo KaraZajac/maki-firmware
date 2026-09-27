@@ -645,9 +645,11 @@ impl System {
                         self.go_home();
                     }
                     (Some(p), Some(i)) => {
+                        // back in front first: what the app does for its item (typing, say) it
+                        // may do only in front
+                        self.open_app(i);
                         let app = &self.apps[i];
                         xous::send_message(app.conn, xous::Message::new_scalar(app.menu_op, p, 0, 0, 0)).ok();
-                        self.open_app(i);
                     }
                 }
             }
