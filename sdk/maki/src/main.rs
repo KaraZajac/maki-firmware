@@ -39,10 +39,13 @@ maki: make apps for maki
       Install it on the maki plugged in, through maki desktop (which must be running): maki
       shows what it is and what it may do, and installs it if you say so there.
   maki run APP.maki [--press left,right*2,centre,menu:0,timeout,exit] [--shot OUT.png]
-                    [--frames DIR] [--scale N] [--verified] [--storage FILE]
+                    [--frames DIR] [--scale N] [--verified] [--storage FILE] [--motion X,Y,Z]
       Run it as maki would. Without --press, in this terminal: arrow keys, enter for the
-      centre, m for the menu (left and right together), q to leave. With --press, the presses
-      in order, then Exit; --shot saves the last frame, --frames every frame.
+      centre, m for the menu (left and right together), q to leave; y or n answers an ask,
+      and a scan takes what you type. With --press, the presses in order, then Exit (yes or
+      no answers an ask, msg:TEXT sends a message, qr:TEXT is the next scan, tilt:X;Y;Z moves
+      the accelerometer); --shot saves the last frame, --frames every frame. Apps' keys come
+      from the BIP39 test phrase, never anything real.
 
   The developer key is --key, else $MAKI_KEY, else ~/.config/maki/developer.key.";
 
@@ -54,7 +57,7 @@ struct Args {
 impl Args {
     fn parse(argv: &[String]) -> Result<Args, String> {
         const VALUED: &[&str] =
-            &["--key", "-o", "--manifest", "--code", "--icon", "--press", "--shot", "--frames", "--scale", "--storage", "--id", "--name"];
+            &["--key", "-o", "--manifest", "--code", "--icon", "--press", "--shot", "--frames", "--scale", "--storage", "--id", "--name", "--motion"];
         let mut positional = Vec::new();
         let mut flags = Vec::new();
         let mut it = argv.iter();
@@ -224,6 +227,7 @@ fn run(args: &Args) -> Result<(), String> {
         storage: args.value("--storage").map(PathBuf::from),
         sideloaded: true,
         developer: b.developer,
+        motion: args.value("--motion").map(|m| sim::parse_xyz(m).ok_or("--motion X,Y,Z in milli-g")).transpose()?.unwrap_or([0, 0, 1000]),
     };
     if let Some(dir) = &options.frames {
         std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
@@ -389,7 +393,7 @@ fn main_inner(argv: &[String]) -> Result<(), String> {
             install(Path::new(args.positional.get(1).ok_or("which bundle?")?))
         }
         Some("run") => {
-            args.only(&["--press", "--shot", "--frames", "--scale", "--verified", "--storage"])?;
+            args.only(&["--press", "--shot", "--frames", "--scale", "--verified", "--storage", "--motion"])?;
             run(&args)
         }
         Some("help") | None if args.has("--help") || args.has("-h") || args.positional.is_empty() => {

@@ -86,6 +86,10 @@ pub enum Press {
     Answer(Answer),
     /// A message from the computer: the app's answer is printed.
     Message(Vec<u8>),
+    /// What the camera sees at the app's next scan.
+    Qr(String),
+    /// The accelerometer from now on, in milli-g.
+    Tilt([i16; 3]),
 }
 
 /// `left,right*3,centre,menu:0,timeout,exit`
@@ -105,18 +109,26 @@ pub fn parse_presses(s: &str) -> Result<Vec<Press>, String> {
             "yes" => Press::Answer(Answer::Yes),
             "no" => Press::Answer(Answer::No),
             m if m.starts_with("msg:") => Press::Message(m[4..].as_bytes().to_vec()),
+            q if q.starts_with("qr:") => Press::Qr(q[3..].to_string()),
+            t if t.starts_with("tilt:") => Press::Tilt(parse_xyz(&t[5..]).ok_or_else(|| format!("tilt:X;Y;Z in milli-g, not {t}"))?),
             m if m.starts_with("menu:") => {
                 Press::Menu(m[5..].parse().map_err(|_| format!("bad menu item in {part}"))?)
             }
             other => {
                 return Err(format!(
-                    "no press \"{other}\": left, right, centre, timeout, menu:N, exit, yes or no for an ask, msg:TEXT for a message"
+                    "no press \"{other}\": left, right, centre, timeout, menu:N, exit, yes or no for an ask, msg:TEXT for a message, qr:TEXT for a scan, tilt:X;Y;Z"
                 ))
             }
         };
         out.extend(std::iter::repeat_n(press, times));
     }
     Ok(out)
+}
+
+/// "X;Y;Z", milli-g (semicolons: the presses are comma-separated).
+pub fn parse_xyz(s: &str) -> Option<[i16; 3]> {
+    let v: Vec<i16> = s.split([';', ',']).map(|p| p.trim().parse().ok()).collect::<Option<_>>()?;
+    v.try_into().ok()
 }
 
 pub struct Options {
@@ -131,6 +143,8 @@ pub struct Options {
     pub sideloaded: bool,
     /// The key the bundle is signed with: apps' keys depend on it, as on maki.
     pub developer: [u8; 32],
+    /// The accelerometer, milli-g: face up and still unless `--motion` says.
+    pub motion: [i16; 3],
 }
 
 /// The BIP39 test phrase, whose seed the simulator derives apps' keys from. Never for anything
@@ -154,6 +168,8 @@ struct Shared {
     seed: Option<[u8; 64]>,
     /// the message the app was given and hasn't answered
     message: Option<Vec<u8>>,
+    /// what the camera sees at the next scan
+    qr: Option<String>,
 }
 
 pub struct Sim(Rc<RefCell<Shared>>);
@@ -221,6 +237,7 @@ impl Sim {
             interactive,
             seed: None,
             message: None,
+            qr: None,
         })))
     }
 
@@ -329,6 +346,28 @@ impl Sim {
         }
     }
 
+    /// A scan in the terminal: type what the QR code says, then enter; Esc cancels.
+    fn interactive_scan(s: &mut Shared) -> Option<String> {
+        use crossterm::event::{read, Event as Term, KeyCode, KeyEventKind};
+        let mut text = String::new();
+        loop {
+            s.draw_terminal(&format!("scan: type the QR code's text, enter when done, esc cancels: {text}"));
+            let Ok(Term::Key(k)) = read() else { continue };
+            if k.kind != KeyEventKind::Press {
+                continue;
+            }
+            match k.code {
+                KeyCode::Enter => return Some(text),
+                KeyCode::Esc => return None,
+                KeyCode::Backspace => {
+                    text.pop();
+                }
+                KeyCode::Char(c) => text.push(c),
+                _ => {}
+            }
+        }
+    }
+
     fn interactive_menu(s: &mut Shared) -> u32 {
         use crossterm::event::{read, Event as Term, KeyCode, KeyEventKind};
         let mut items = s.menu.clone();
@@ -373,6 +412,14 @@ impl Platform for Sim {
                 }
                 Some(Press::Answer(a)) => {
                     eprintln!("script: {a:?}, but the app asked nothing: skipped");
+                    continue;
+                }
+                Some(Press::Qr(text)) => {
+                    s.qr = Some(text);
+                    continue;
+                }
+                Some(Press::Tilt(xyz)) => {
+                    s.options.motion = xyz;
                     continue;
                 }
                 Some(Press::Message(m)) => {
@@ -477,6 +524,31 @@ impl Platform for Sim {
         let (seed, id, developer) = (s.seed.unwrap(), s.manifest.id.clone(), s.options.developer);
         maki_seed::app_secret(&seed, &id, &developer, label)
     }
+
+    /// The next `qr:` press's text (scripted), or what's typed in (in the terminal).
+    fn scan_qr(&mut self) -> Option<String> {
+        let mut s = self.0.borrow_mut();
+        let scanned = if s.interactive {
+            Self::interactive_scan(&mut s)
+        } else {
+            // a qr: press waiting before the app's next event
+            match s.script.front() {
+                Some(Press::Qr(_)) => match s.script.pop_front() {
+                    Some(Press::Qr(text)) => Some(text),
+                    _ => None,
+                },
+                _ => s.qr.take(),
+            }
+        };
+        let line = format!("scanned: {scanned:?}");
+        if !s.interactive {
+            eprintln!("{line}");
+        }
+        s.logs.push(line);
+        scanned
+    }
+
+    fn motion(&mut self) -> Option<[i16; 3]> { Some(self.0.borrow().options.motion) }
 
     fn message(&mut self) -> Option<Vec<u8>> { self.0.borrow().message.clone() }
 

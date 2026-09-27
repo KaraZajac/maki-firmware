@@ -502,6 +502,17 @@ fn main() -> ! {
         });
     }
 
+    // The camera and the accelerometer: built with MAKI_DEMO_SENSORS, maki-link installs the
+    // SDK's Sensors example (it asks, with a page for each). Opened, its level shows what the
+    // accelerometer reads, and its centre scans a QR code (the emulator's camera shows one).
+    if option_env!("MAKI_DEMO_SENSORS").is_some() {
+        std::thread::spawn(|| {
+            let host = demo_host();
+            let r = demo_install(&host, include_bytes!("../../../libs/maki-wasm/tests/fixtures/sensors.maki"));
+            log::warn!("demo sensors install: result {} '{}'", r.result, r.reason);
+        });
+    }
+
     // The permissions, the same way: built with MAKI_DEMO_PERMS, maki-link installs Signer and
     // SSH (each asks the owner, with a page for each permission), then does what maki desktop's
     // SSH agent does: asks the SSH app (started without the screen) for its key, then to sign

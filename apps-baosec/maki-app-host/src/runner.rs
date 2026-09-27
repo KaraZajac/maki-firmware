@@ -92,6 +92,10 @@ struct Ctx {
     keys: maki_keys::Keys,
     /// for typing (the keyboard permission)
     usb: usb_bao1x::UsbHid,
+    /// the accelerometer (the motion permission), set up the first time an app reads it: None
+    /// until then, Some(None) if there's none
+    #[cfg(feature = "board-baosec")]
+    accel: RefCell<Option<Option<(bao1x_hal::i2c::I2c, bao1x_hal::lis2dh12::Lis2dh12)>>>,
     time_conn: xous::CID,
     shared: Arc<Mutex<Shared>>,
     rx: Receiver<ToRunner>,
@@ -99,6 +103,29 @@ struct Ctx {
 
 impl Ctx {
     fn unlocked(&self) -> bool { self.shared.lock().unwrap().unlocked }
+
+    /// x, y and z in milli-g.
+    #[cfg(feature = "board-baosec")]
+    fn motion(&self) -> Option<[i16; 3]> {
+        let mut accel = self.accel.borrow_mut();
+        if accel.is_none() {
+            let mut i2c = bao1x_hal::i2c::I2c::new();
+            *accel = Some(match bao1x_hal::lis2dh12::Lis2dh12::new(&mut i2c) {
+                Ok(driver) => Some((i2c, driver)),
+                Err(e) => {
+                    log::warn!("no accelerometer to read: {e:?}");
+                    None
+                }
+            });
+        }
+        let (i2c, driver) = accel.as_mut()?.as_mut()?;
+        let (x, y, z) = driver.read_accel_mg(i2c).ok()?;
+        let fit = |v: i32| v.clamp(i16::MIN as i32, i16::MAX as i32) as i16;
+        Some([fit(x), fit(y), fit(z)])
+    }
+
+    #[cfg(not(feature = "board-baosec"))]
+    fn motion(&self) -> Option<[i16; 3]> { None }
 
     fn keep(&self, id: String, version: u32, app: Arc<maki_wasm::Loaded>) {
         let mut loaded = self.loaded.borrow_mut();
@@ -152,6 +179,8 @@ struct RunState {
     opened_ms: Option<u64>,
     /// Typing into the computer: maki's bar says so meanwhile.
     typing: bool,
+    /// Presses until then aren't the app's: the one that cancelled a scan.
+    quiet_until: Option<Instant>,
     /// Messages from the computer the app hasn't been given yet, with when they came.
     inbox: VecDeque<(xous::MessageEnvelope, Vec<u8>, Instant)>,
     /// The one it was given, until it answers.
@@ -423,6 +452,7 @@ impl Platform for Device {
                     st.stopping = true;
                     return Event::Exit;
                 }
+                ToRunner::Key(s, _) if s == self.slot && self.state.borrow().quiet_until.is_some_and(|q| Instant::now() < q) => {}
                 ToRunner::Key(s, key) if s == self.slot && self.state.borrow().front => {
                     if self.state.borrow().info.is_some() {
                         if let Some(e) = self.info_key(key) {
@@ -536,6 +566,31 @@ impl Platform for Device {
             return None;
         }
         self.ctx.keys.app_secret(&self.id, &self.record.developer, label).ok()
+    }
+
+    /// maki's own scanner, for the app in front: the camera's view takes the screen until a QR
+    /// code is read or the owner presses a button.
+    fn scan_qr(&mut self) -> Option<String> {
+        if !self.state.borrow().front || !self.ctx.unlocked() {
+            return None;
+        }
+        #[cfg(feature = "board-baosec")]
+        let scanned = self.ctx.screen.gfx.acquire_qr().ok().and_then(|q| q.content);
+        #[cfg(not(feature = "board-baosec"))]
+        let scanned: Option<String> = None;
+        // the press that cancelled it reached the app too: it isn't the app's
+        self.state.borrow_mut().quiet_until = Some(Instant::now() + Duration::from_millis(500));
+        log::info!("{}: scanned {}", self.id, if scanned.is_some() { "a QR code" } else { "nothing" });
+        self.draw_frame();
+        scanned
+    }
+
+    /// For the app in front.
+    fn motion(&mut self) -> Option<[i16; 3]> {
+        if !self.state.borrow().front {
+            return None;
+        }
+        self.ctx.motion()
     }
 
     /// Only for the app in front, with "typing" in maki's bar while it does.
@@ -654,6 +709,7 @@ fn run(ctx: &Rc<Ctx>, slot: usize, message: Option<(xous::MessageEnvelope, Vec<u
         last: Canvas::default(),
         opened_ms: if headless { None } else { Some(opened) },
         typing: false,
+        quiet_until: None,
         inbox,
         current: None,
         headless,
@@ -731,6 +787,8 @@ pub fn runner(rx: Receiver<ToRunner>, shared: Arc<Mutex<Shared>>) {
         launcher: maki_launcher::Launcher::new(&xns).expect("couldn't connect to the launcher"),
         keys: maki_keys::Keys::new(&xns).expect("couldn't connect to maki-keys"),
         usb: usb_bao1x::UsbHid::new(),
+        #[cfg(feature = "board-baosec")]
+        accel: RefCell::new(None),
         time_conn: crate::time_conn(),
         shared,
         rx,

@@ -26,6 +26,10 @@ struct Record {
     /// the one being answered, and the answers
     current: Option<Vec<u8>>,
     replies: Vec<Vec<u8>>,
+    /// what the camera sees next (None: the owner cancels)
+    qr: Option<String>,
+    scans: usize,
+    motion: Option<[i16; 3]>,
 }
 
 /// The test platform's secret for a label: made up, different for each label.
@@ -77,6 +81,12 @@ impl Platform for Script {
         r.typed.push(text.into());
         true
     }
+    fn scan_qr(&mut self) -> Option<String> {
+        let mut r = self.0.borrow_mut();
+        r.scans += 1;
+        r.qr.clone()
+    }
+    fn motion(&mut self) -> Option<[i16; 3]> { self.0.borrow().motion }
     fn message(&mut self) -> Option<Vec<u8>> { self.0.borrow().current.clone() }
     fn reply(&mut self, reply: &[u8]) -> bool {
         let mut r = self.0.borrow_mut();
@@ -502,7 +512,6 @@ fn admit_says_what_maki_takes() {
     let refusals = [
         (Manifest { kind: Kind::Native, api: 0, firmware: "x".into(), ..m.clone() }, "native"),
         (Manifest { api: API_VERSION + 1, ..m.clone() }, "newer maki"),
-        (Manifest { permissions: vec![(Permission::Camera, "photos".into())], ..m.clone() }, "use the camera"),
         (Manifest { memory_kib: MAX_MEMORY_KIB + 1, ..m.clone() }, "memory"),
         (Manifest { storage_kib: MAX_STORAGE_KIB + 1, ..m.clone() }, "storage"),
         (Manifest { memory_kib: 32, ..m.clone() }, "can't start"),
@@ -547,6 +556,8 @@ fn gated_functions_need_their_permission() {
         ("type_text", "(param i32 i32) (result i32)"),
         ("link_read", "(param i32 i32) (result i32)"),
         ("link_reply", "(param i32 i32) (result i32)"),
+        ("camera_scan_qr", "(param i32 i32) (result i32)"),
+        ("motion_read", "(param i32) (result i32)"),
     ];
     assert_eq!(signatures.len(), GATED.len());
     for (name, signature) in signatures {
@@ -721,4 +732,36 @@ fn messages_come_with_an_event_and_get_one_answer_each() {
     let call = format!("(call $reply (i32.const 0) (i32.const {}))", MAX_MESSAGE + 1);
     let (_, r) = call_with(imports, "", &call, Record { current: Some(vec![1]), ..Default::default() }, with(&[Permission::Link]));
     assert_eq!(result_of(&r), TOO_BIG);
+}
+
+#[test]
+fn the_camera_scans_qr_codes_and_motion_reads_the_accelerometer() {
+    use maki_bundle::Permission;
+    let imports = r#"(import "maki" "camera_scan_qr" (func $scan (param i32 i32) (result i32)))"#;
+    let call = "(call $scan (i32.const 0) (i32.const 8))";
+    let wat_with = |imports: &str, call: &str| (imports.to_string(), call.to_string());
+    let (i, c) = wat_with(imports, call);
+    let (_, r) = call_with(&i, "", &c, Record { qr: Some("otpauth://totp/x".into()), ..Default::default() }, with(&[Permission::Camera]));
+    // its whole length, as far as it fits
+    assert_eq!((result_of(&r), r.scans), (16, 1));
+    let (_, r) = call_with(&i, "", &c, Record::default(), with(&[Permission::Camera]));
+    assert_eq!(result_of(&r), NOT_FOUND);
+
+    let imports = r#"(import "maki" "motion_read" (func $read (param i32) (result i32)))"#;
+    let (_, r) = call_with(imports, "", "(call $read (i32.const 0))", Record { motion: Some([12, -980, 1000]), ..Default::default() }, with(&[Permission::Motion]));
+    assert_eq!(result_of(&r), 0);
+    let (_, r) = call_with(imports, "", "(call $read (i32.const 0))", Record::default(), with(&[Permission::Motion]));
+    assert_eq!(result_of(&r), FAILED);
+    // what it read, laid out as the SDK reads it
+    let wat = r#"(module
+      (import "maki" "motion_read" (func $read (param i32) (result i32)))
+      (import "maki" "storage_set" (func $set (param i32 i32 i32 i32) (result i32)))
+      (memory (export "memory") 1)
+      (data (i32.const 100) "m")
+      (func (export "maki_main")
+        (drop (call $read (i32.const 0)))
+        (drop (call $set (i32.const 100) (i32.const 1) (i32.const 0) (i32.const 6)))))"#;
+    let record = Rc::new(RefCell::new(Record { motion: Some([12, -980, 1000]), ..Default::default() }));
+    run(&module(wat), Box::new(Script(record.clone())), with(&[Permission::Motion]));
+    assert_eq!(record.borrow().storage["m"], [12, 0, 0x2c, 0xfc, 0xe8, 0x03]);
 }

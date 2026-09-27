@@ -22,6 +22,8 @@ struct Record {
     inbox: VecDeque<Vec<u8>>,
     current: Option<Vec<u8>>,
     replies: Vec<Vec<u8>>,
+    qr: Option<String>,
+    motion: Option<[i16; 3]>,
 }
 
 struct Script(Rc<RefCell<Record>>);
@@ -64,6 +66,8 @@ impl Platform for Script {
         true
     }
     fn message(&mut self) -> Option<Vec<u8>> { self.0.borrow().current.clone() }
+    fn scan_qr(&mut self) -> Option<String> { self.0.borrow_mut().qr.take() }
+    fn motion(&mut self) -> Option<[i16; 3]> { self.0.borrow().motion }
     fn reply(&mut self, reply: &[u8]) -> bool {
         let mut r = self.0.borrow_mut();
         if r.current.take().is_none() {
@@ -305,4 +309,37 @@ fn the_ssh_app_is_an_agent_that_asks_before_signing() {
     assert_eq!(r.asks.len(), 4);
     // it keeps count of what it signed
     assert_eq!(r.storage["signed"], 3u32.to_le_bytes());
+}
+
+#[test]
+fn sensors_levels_and_scans() {
+    use maki_bundle::Permission;
+    let bytes = std::fs::read(format!("{}/tests/fixtures/sensors.maki", env!("CARGO_MANIFEST_DIR"))).unwrap();
+    let bundle = maki_bundle::read(&bytes).unwrap();
+    let asked: Vec<Permission> = bundle.manifest.permissions.iter().map(|(p, _)| *p).collect();
+    assert_eq!(asked, [Permission::Camera, Permission::Motion]);
+    let limits = admit(&bundle.manifest, bundle.code).unwrap();
+    let run_with = |motion: Option<[i16; 3]>, qr: Option<&str>, events: &[Event]| {
+        let record = Rc::new(RefCell::new(Record {
+            events: events.iter().copied().collect(),
+            motion,
+            qr: qr.map(String::from),
+            ..Default::default()
+        }));
+        let stop = run(bundle.code, Box::new(Script(record.clone())), limits);
+        assert_eq!(stop, Stop::Finished);
+        Rc::try_unwrap(record).ok().unwrap().into_inner()
+    };
+    // level and still, then tilted: the bubble moves, so the frames differ
+    let flat = run_with(Some([0, 0, 1000]), None, &[Event::Timeout]);
+    let tilted = run_with(Some([400, -300, 850]), None, &[Event::Timeout]);
+    assert_ne!(flat.frames[0], tilted.frames[0]);
+    // a scan shows what it read; a cancelled one says so, and neither is the same as before
+    let scanned = run_with(Some([0, 0, 1000]), Some("test://baomulator"), &[Event::Centre]);
+    let cancelled = run_with(Some([0, 0, 1000]), None, &[Event::Centre]);
+    assert_ne!(scanned.frames[1], flat.frames[0]);
+    assert_ne!(scanned.frames[1], cancelled.frames[1]);
+    // and without an accelerometer, it says so rather than stopping
+    let none = run_with(None, None, &[Event::Timeout]);
+    assert_eq!(none.frames.len(), 2);
 }

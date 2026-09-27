@@ -28,9 +28,10 @@
 //!
 //! Some functions need a permission, which the app's `maki.toml` asks for with a line saying
 //! why, and the owner sees before installing it: `ask` (maki's own ask screen), `keys`
-//! (secrets of the app's own from the recovery phrase), `keyboard` (typing into the computer)
-//! and `link` (messages with software on the computer, through maki desktop). maki refuses an
-//! app that calls one without asking for its permission.
+//! (secrets of the app's own from the recovery phrase), `keyboard` (typing into the computer),
+//! `link` (messages with software on the computer, through maki desktop), `camera` (QR codes)
+//! and `motion` (the accelerometer). maki refuses an app that calls one without asking for its
+//! permission.
 
 #![no_std]
 
@@ -70,6 +71,8 @@ mod sys {
         pub fn type_text(ptr: *const u8, len: usize) -> i32;
         pub fn link_read(ptr: *mut u8, cap: usize) -> i32;
         pub fn link_reply(ptr: *const u8, len: usize) -> i32;
+        pub fn camera_scan_qr(ptr: *mut u8, cap: usize) -> i32;
+        pub fn motion_read(ptr: *mut u8) -> i32;
     }
 }
 
@@ -391,6 +394,34 @@ pub mod link {
     /// Answers the message.
     pub fn reply(answer: &[u8]) -> Result<(), Error> {
         result(unsafe { sys::link_reply(answer.as_ptr(), answer.len()) }).map(|_| ())
+    }
+}
+
+/// QR codes through maki's camera (the `camera` permission), with maki's own scanner on screen,
+/// while the app is in front.
+pub mod camera {
+    use super::{result, sys};
+
+    /// Scans until a QR code is read, or the owner presses a button to cancel (None; the press
+    /// doesn't reach the app). The text is copied into `buf`; None if it doesn't fit, or isn't
+    /// UTF-8.
+    pub fn scan_qr(buf: &mut [u8]) -> Option<&str> {
+        let n = result(unsafe { sys::camera_scan_qr(buf.as_mut_ptr(), buf.len()) }).ok()? as usize;
+        core::str::from_utf8(buf.get(..n)?).ok()
+    }
+}
+
+/// The accelerometer (the `motion` permission), while the app is in front.
+pub mod motion {
+    use super::{result, sys};
+
+    /// x, y and z, in thousandths of a g (face up and still: about 0, 0, 1000). None if there's
+    /// nothing to read.
+    pub fn read() -> Option<(i16, i16, i16)> {
+        let mut b = [0u8; 6];
+        result(unsafe { sys::motion_read(b.as_mut_ptr()) }).ok()?;
+        let at = |i: usize| i16::from_le_bytes([b[i], b[i + 1]]);
+        Some((at(0), at(2), at(4)))
     }
 }
 

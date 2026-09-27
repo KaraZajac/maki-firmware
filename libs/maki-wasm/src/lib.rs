@@ -66,6 +66,8 @@ pub const GATED: &[(&str, Permission)] = &[
     ("type_text", Permission::Keyboard),
     ("link_read", Permission::Link),
     ("link_reply", Permission::Link),
+    ("camera_scan_qr", Permission::Camera),
+    ("motion_read", Permission::Motion),
 ];
 
 /// What `wait` hands the app.
@@ -171,6 +173,12 @@ pub trait Platform {
     fn message(&mut self) -> Option<Vec<u8>> { None }
     /// Answers that message. Whether there was one to answer.
     fn reply(&mut self, _reply: &[u8]) -> bool { false }
+    /// A QR code's text, from maki's own scanner (the camera permission), while the app is in
+    /// front: `None` if the owner cancelled (any button), or there's no camera.
+    fn scan_qr(&mut self) -> Option<String> { None }
+    /// The accelerometer (the motion permission), while the app is in front: x, y and z in
+    /// thousandths of a g. `None` if there's none to read.
+    fn motion(&mut self) -> Option<[i16; 3]> { None }
 }
 
 /// Permissions an app has: those its manifest asks for (each of which maki offers).
@@ -223,7 +231,7 @@ impl Limits {
 
 /// The permissions this host can give, beyond what every app has. The rest come with the
 /// functions that use them.
-pub const PERMISSIONS: &[Permission] = &[Permission::Ask, Permission::Link, Permission::Keys, Permission::Keyboard];
+pub const PERMISSIONS: &[Permission] = &Permission::ALL;
 
 /// Whether maki takes this app, and what it gives it if so: a WebAssembly app for a host API
 /// this maki has, asking only for permissions it offers and for no more than it gives an app,
@@ -681,6 +689,29 @@ fn link(linker: &mut Linker<State>) -> Result<(), Error> {
         }
         let reply = read(&c, ptr, len, MAX_MESSAGE, "link_reply")?;
         Ok(if c.data_mut().platform.reply(&reply) { 0 } else { NOT_FOUND })
+    })?;
+    // the camera permission: a QR code's text from maki's scanner, copied into the app's
+    // buffer as far as it fits (its whole length returned); NOT_FOUND if there was none
+    linker.func_wrap(M, "camera_scan_qr", |mut c: Caller<'_, State>, ptr: i32, cap: i32| -> Result<i32, Error> {
+        permitted(&c, Permission::Camera, "camera_scan_qr")?;
+        let text = c.data_mut().platform.scan_qr();
+        // the owner's time isn't the app's work
+        let fuel = c.data().limits.fuel;
+        c.set_fuel(fuel)?;
+        let Some(text) = text else { return Ok(NOT_FOUND) };
+        let n = text.len().min(cap.max(0) as usize);
+        write(&mut c, ptr, &text.as_bytes()[..n], "camera_scan_qr")?;
+        Ok(text.len() as i32)
+    })?;
+    // the motion permission: x, y and z (milli-g), three little-endian i16s
+    linker.func_wrap(M, "motion_read", |mut c: Caller<'_, State>, ptr: i32| -> Result<i32, Error> {
+        permitted(&c, Permission::Motion, "motion_read")?;
+        let Some(xyz) = c.data_mut().platform.motion() else { return Ok(FAILED) };
+        let mut bytes = [0u8; 6];
+        for (i, v) in xyz.iter().enumerate() {
+            bytes[i * 2..i * 2 + 2].copy_from_slice(&v.to_le_bytes());
+        }
+        write(&mut c, ptr, &bytes, "motion_read").map(|_| 0)
     })?;
     Ok(())
 }

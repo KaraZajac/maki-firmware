@@ -1,0 +1,14 @@
+id = "com.leviathan.maki.sensors"
+name = "Sensors"
+version = 1
+label = "1.0"
+api = 1
+storage = 1
+memory = 64
+backup = false
+description = "A spirit level from the accelerometer, and a QR code reader: the centre scans, and shows what the code says."
+icon = "icon.pbm"
+
+[permissions]
+camera = "To read QR codes when you press the centre."
+motion = "For the spirit level."

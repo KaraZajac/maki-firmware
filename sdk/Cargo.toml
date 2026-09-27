@@ -2,7 +2,7 @@
 # signs, inspects and simulates them. Apps build for wasm32-unknown-unknown; the tool for the
 # computer it runs on.
 [workspace]
-members = ["maki-app", "maki", "examples/hello", "examples/dice", "examples/tally", "examples/signer", "examples/ssh"]
+members = ["maki-app", "maki", "examples/hello", "examples/dice", "examples/tally", "examples/signer", "examples/ssh", "examples/sensors"]
 resolver = "2"
 
 [profile.release]

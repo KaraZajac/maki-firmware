@@ -6,9 +6,9 @@ you can install"). Anyone can build one and sideload it through maki desktop; ma
 owner what it is, where it's from and what it may do before installing it, and a sideloaded
 app carries a mark in maki's top bar for as long as it's installed.
 
-This directory has the Rust crate apps are written with (`maki-app`), five examples (Hello,
-Dice, Tally; Signer, which uses permissions; and SSH, maki's SSH key, which answers maki
-desktop's SSH agent), and the `maki` tool that packs, signs, checks and simulates them.
+This directory has the Rust crate apps are written with (`maki-app`), six examples (Hello,
+Dice, Tally; Signer and Sensors, which use permissions; and SSH, maki's SSH key, which answers
+maki desktop's SSH agent), and the `maki` tool that packs, signs, checks and simulates them.
 
 ## Quick start
 
@@ -36,7 +36,9 @@ printed), what it may do, and "install". Updates go the same way.
 In the simulator: left and right arrows are maki's left and right, enter is the centre, `m`
 opens the menu (on maki, left and right together), `q` leaves; when the app asks, `y` or `n`
 answers. `--press left,centre*3,menu:0` runs presses instead (with `yes` or `no` for each
-ask, and `msg:TEXT` to send the app a message, whose answer is printed), `--shot out.png` saves the last frame, `--storage file` keeps the app's storage between
+ask, `msg:TEXT` to send the app a message, whose answer is printed, `qr:TEXT` for what the
+camera sees at its next scan, and `tilt:X;Y;Z` to move the accelerometer, which `--motion
+X,Y,Z` sets to start with), `--shot out.png` saves the last frame, `--storage file` keeps the app's storage between
 runs. Typing is printed rather than typed, and an app's keys come from the BIP39 test phrase
 ("abandon" eleven times, then "about"): the keys maki would give it with that phrase, never
 anything you'd use for real.
@@ -125,6 +127,12 @@ function whose permission it didn't ask for):
   isn't running, maki starts it without the screen to answer, unless another app is open, and
   ends it once it's had nothing to do for 30 s; it can still `Ask` meanwhile, and the owner can
   open it. The SSH example is one: maki desktop's SSH agent sends it ssh's requests.
+- **`camera`**: `camera::scan_qr(&mut buf)` puts maki's own QR scanner on screen, while the app
+  is in front, and returns the code's text, or None if the owner pressed a button to cancel
+  (the press doesn't reach the app).
+- **`motion`**: `motion::read()` gives the accelerometer's x, y and z in thousandths of a g (face
+  up and still: about 0, 0, 1000), while the app is in front. Warned at install: it could pick up
+  typing nearby.
 
 Left and right pressed together are always maki's: they open the app's menu, which ends with
 App info (where it's from, its permissions, its storage, whether it's backed up, Remove) and
