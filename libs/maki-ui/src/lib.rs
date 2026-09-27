@@ -72,6 +72,15 @@ impl Screen {
 
     pub fn end(&self) { self.gfx.flush().ok(); }
 
+    /// Ends the QR scan an app has going, if any. While bao-video scans it draws nothing but the
+    /// camera's view, and the press that ends a scan also goes on as a press: anything that must
+    /// be seen before it's pressed (an ask) ends the scan first. bao-video ends a scan on any
+    /// key; a NUL is one nothing acts on (the launcher drops it).
+    pub fn end_scan(&self) {
+        let op = num_traits::ToPrimitive::to_usize(&ux_api::service::api::GfxOpcode::KeyPress).unwrap();
+        xous::send_message(self.gfx.conn(), xous::Message::new_scalar(op, 0, 0, 0, 0)).ok();
+    }
+
     /// Text in a band across the screen, light on dark; `highlight` for dark on light, as a
     /// selection is marked. Anything but fixed-width text ends in "…" if it runs long; callers
     /// lay fixed-width text out to fit (a site's end must never be cut).

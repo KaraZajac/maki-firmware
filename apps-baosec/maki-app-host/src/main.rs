@@ -501,6 +501,14 @@ fn main() -> ! {
                 }
                 1 => {
                     let focus = msg.body.scalar_message().and_then(|s| Focus::from_usize(s.arg1));
+                    {
+                        let mut sh = shared.lock().unwrap();
+                        if focus == Some(Focus::Foreground) {
+                            sh.front = Some(slot);
+                        } else if sh.front == Some(slot) {
+                            sh.front = None;
+                        }
+                    }
                     let m = match focus {
                         Some(Focus::Foreground) => ToRunner::Open(slot),
                         Some(Focus::Exited) => ToRunner::Exited(slot),

@@ -78,6 +78,10 @@ pub struct Shared {
     /// don't each ask maki-keys (which asks the PDDB); after a lock, the secret basis is closed
     /// anyway.
     pub unlocked: bool,
+    /// The slot the launcher has in front, as its last focus message said. The runner learns
+    /// of a change only between an app's calls; this is up to date even while it's busy in one
+    /// (a scan the launcher ended to ask something), so it never draws over what took the screen.
+    pub front: Option<usize>,
 }
 
 /// Apps compiled this session, by ID, with the version compiled: a few, for memory's sake.
@@ -219,7 +223,7 @@ struct Device {
 impl Device {
     fn draw_frame(&self) {
         let st = self.state.borrow();
-        if !st.front || st.info.is_some() {
+        if !st.front || st.info.is_some() || self.ctx.shared.lock().unwrap().front != Some(self.slot) {
             return;
         }
         let s = &self.ctx.screen;

@@ -18,8 +18,9 @@ use crate::ui::{H, Key, LINE, SMALL_LINE, Screen, W};
 /// on three lines, or two when there's a list to pick from.
 const SITE_WIDTH: usize = 15;
 const SITE_LINES: usize = 3;
-/// Presses this soon after an ask appears are ignored: one already on its way, meant for what
-/// was on screen before, mustn't answer it.
+/// Presses this soon after an ask appears, and until a tick has drawn it again after that, are
+/// ignored: one already on its way, meant for what was on screen before, mustn't answer it,
+/// nor one pressed while something else was still being drawn over it.
 const SETTLE_MS: u64 = 700;
 
 /// A line of a page: fixed-width, small prose, or the space between paragraphs.
@@ -156,8 +157,12 @@ pub(crate) struct Prompt {
     /// ticktimer milliseconds when it gives up. A deadline rather than a count of ticks: ticks
     /// queue up while the launcher is starved, and a burst of them would eat the owner's time.
     deadline_ms: u64,
-    /// and when it appeared
+    /// when it was first drawn
     shown_ms: u64,
+    /// whether a tick has drawn it again since, SETTLE_MS or more after. Presses count only
+    /// after that: until then it may not be on the screen (an app drawing as it was paused),
+    /// and presses queued before it appeared may still be arriving.
+    redrawn: bool,
 }
 
 impl Prompt {
@@ -259,15 +264,19 @@ impl Asking {
             if let Some((msg, req)) = self.queue.pop_front() {
                 let now = self.tt.elapsed_ms();
                 let stops = Stop::of(&req, screen);
-                let prompt = Prompt {
+                log::info!("showing the ask from {} ({} stops)", req.subject, stops.len());
+                let mut prompt = Prompt {
                     msg,
                     deadline_ms: now + req.timeout_s.max(1) as u64 * 1000,
                     shown_ms: now,
                     req,
                     stops,
                     selected: 0,
+                    redrawn: false,
                 };
                 prompt.draw(screen, now, linked);
+                // the settling starts once it's drawn, however long that took
+                prompt.shown_ms = self.tt.elapsed_ms();
                 self.current = Some(prompt);
             }
         }
@@ -295,9 +304,17 @@ impl Asking {
     pub(crate) fn key(&mut self, key: Key, screen: &Screen, linked: bool) -> Option<u32> {
         let now = self.tt.elapsed_ms();
         let p = self.current.as_mut()?;
-        if now < p.shown_ms + SETTLE_MS {
+        if !p.redrawn {
+            // not drawn again since it appeared (the tick is late): past the settling, this press
+            // shows it again rather than answering what may not have been on the screen
+            if now >= p.shown_ms + SETTLE_MS {
+                p.draw(screen, now, linked);
+                p.redrawn = true;
+            }
+            log::info!("{:?} ignored: the ask from {} has just appeared", key, p.req.subject);
             return None;
         }
+        log::info!("{:?} on stop {} of the ask from {}", key, p.selected, p.req.subject);
         let stops = p.stops.len();
         match key {
             Key::Left => p.selected = (p.selected + stops - 1) % stops,
@@ -322,6 +339,7 @@ impl Asking {
             return Some(ANSWER_TIMED_OUT);
         }
         p.draw(screen, now, linked);
+        p.redrawn |= now >= p.shown_ms + SETTLE_MS;
         None
     }
 

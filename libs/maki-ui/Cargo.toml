@@ -9,6 +9,8 @@ ux-api = { path = "../ux-api" }
 blitstr2 = { path = "../blitstr2" }
 bao1x-api = { path = "../bao1x-api" }
 xous-names = { package = "xous-api-names", version = "0.9.67" }
+xous = "0.9.66"
+num-traits = { version = "0.2.14", default-features = false }
 qrcode = { version = "0.12", default-features = false }
 
 [features]

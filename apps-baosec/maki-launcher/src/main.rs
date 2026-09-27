@@ -36,16 +36,27 @@ use xous_ipc::Buffer;
 /// (its countdown, and retries), otherwise at each minute, for the clock. RAM is short, and every
 /// wake-up of a process can page it back in at the expense of whatever is running.
 struct Pace {
-    fast: std::sync::Mutex<bool>,
+    state: std::sync::Mutex<PaceState>,
     wake: std::sync::Condvar,
 }
 
-static PACE: Pace = Pace { fast: std::sync::Mutex::new(false), wake: std::sync::Condvar::new() };
+struct PaceState {
+    /// what the main loop wants: a tick a second
+    wanted: bool,
+    /// the pace the tick thread last went to wait at
+    waiting: bool,
+}
 
+static PACE: Pace =
+    Pace { state: std::sync::Mutex::new(PaceState { wanted: false, waiting: false }), wake: std::sync::Condvar::new() };
+
+/// The pace the main loop wants. It notifies the tick thread until the thread waits at that
+/// pace, not just once: a notify can be lost while the thread is on its way into its wait (Xous's
+/// condvar tries a few times, then gives up), and the thread would sleep on to the next minute.
 fn set_pace(fast: bool) {
-    let mut f = PACE.fast.lock().unwrap();
-    if *f != fast {
-        *f = fast;
+    let mut state = PACE.state.lock().unwrap();
+    state.wanted = fast;
+    if state.waiting != fast {
         PACE.wake.notify_all();
     }
 }
@@ -459,6 +470,10 @@ impl System {
             return;
         }
         if let View::App(i) = self.view {
+            log::info!("pausing '{}' for an ask", self.apps[i].name);
+            // first its QR scan, if it has one going: the ask would be hidden under it, and the
+            // press that ends the scan would reach the ask
+            self.screen.end_scan();
             set_focus(&self.apps[i], Focus::Background);
             self.paused = Some(i);
         }
@@ -724,11 +739,12 @@ fn main() -> ! {
         .stack_size(32 * 1024)
         .spawn(move || loop {
             // (the clock is read without the lock held: the main loop takes it for every message)
-            let fast = *PACE.fast.lock().unwrap();
+            let fast = PACE.state.lock().unwrap().wanted;
             let wait = if fast { std::time::Duration::from_secs(1) } else { until_next_minute(time_conn) };
-            let now = PACE.fast.lock().unwrap();
-            if *now == fast {
-                drop(PACE.wake.wait_timeout(now, wait).unwrap());
+            let mut state = PACE.state.lock().unwrap();
+            if state.wanted == fast {
+                state.waiting = fast;
+                drop(PACE.wake.wait_timeout(state, wait).unwrap());
             }
             xous::send_message(conn, xous::Message::new_scalar(LauncherOp::Tick.to_usize().unwrap(), 0, 0, 0, 0)).ok();
         })

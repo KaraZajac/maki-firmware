@@ -5434,8 +5434,10 @@ version = "0.1.0"
 dependencies = [
  "bao1x-api 0.1.4",
  "blitstr2",
+ "num-traits",
  "qrcode",
  "ux-api",
+ "xous 0.9.70 (registry+https://github.com/rust-lang/crates.io-index)",
  "xous-api-names",
 ]
 
