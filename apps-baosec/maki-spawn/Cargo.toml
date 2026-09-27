@@ -1,0 +1,9 @@
+[package]
+name = "maki-spawn"
+version = "0.1.0"
+edition = "2021"
+description = "The stub a native maki app starts in: it loads the app's ELF, connects it to what it may use, confines itself and jumps to it"
+
+[dependencies]
+xous = "0.9.70"
+maki-native = { path = "../../libs/maki-native", default-features = false }

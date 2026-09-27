@@ -72,6 +72,7 @@ members = [
   "services/early_settings",
   "apps/app-loader",
   "apps/app-loader/spawn",
+  "apps-baosec/maki-spawn",
   "apps/ball",
   "apps/hello",
   "apps/mtxchat",

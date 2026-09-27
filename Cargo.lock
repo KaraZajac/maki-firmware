@@ -5423,6 +5423,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "maki-spawn"
+version = "0.1.0"
+dependencies = [
+ "maki-native",
+ "xous",
+]
+
+[[package]]
 name = "maki-store"
 version = "0.1.0"
 dependencies = [
