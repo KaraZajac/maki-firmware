@@ -269,11 +269,16 @@ pub fn start_keyboard_service() {
     std::thread::spawn(move || {
         keyboard_service();
     });
+    // Keys typed at the log server's serial console, pressed as if on the buttons: for testing
+    // on a badge, never in maki's own builds, since anything that can reach the bouncer could
+    // then answer maki's asks (RESEARCH.md, 5.2).
+    #[cfg(feature = "key-injection")]
     std::thread::spawn(move || {
         keyboard_bouncer();
     });
 }
 
+#[cfg(feature = "key-injection")]
 fn keyboard_bouncer() {
     // private server that has no dependencies but a "well-known-name" for the log server
     // to forward keystrokes into.
@@ -533,6 +538,11 @@ fn keyboard_service() {
                 // for now we don't implement this feature.
                 unimplemented!()
             }),
+            // only from this process (the bouncer, in builds that have one): a key from anywhere
+            // else would be a press nobody made, able to answer maki's asks
+            Some(KeyboardOpcode::InjectKey) if msg.sender.pid().map(|p| p.get() as u32) != Some(xous::process::id()) => {
+                log::warn!("refused a key injected by {:?}", msg.sender.pid());
+            }
             Some(KeyboardOpcode::InjectKey) => msg_scalar_unpack!(msg, k, _, _, _, {
                 // key substitutions to help things work better
                 // 1b5b317e = home

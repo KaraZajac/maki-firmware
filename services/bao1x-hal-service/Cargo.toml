@@ -53,6 +53,8 @@ board-baosor = ["bao1x-hal/board-baosor"]
 board-dabao = ["bao1x-hal/board-dabao"]
 
 accel-kbd = []
+# the serial console's keys pressed as if on the buttons (keyboard_bouncer): testing only
+key-injection = []
 oem-baosec-lite = ["bao1x-hal/oem-baosec-lite"]
 
 with-duart = ["bao1x-hal/debug-print-duart"]
