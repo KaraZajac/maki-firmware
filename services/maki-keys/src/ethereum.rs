@@ -54,14 +54,11 @@ impl Eth {
         self.incoming.clear();
     }
 
-    fn account(&mut self, entropy: Option<Vec<u8>>, index: u32) -> Result<Account, u32> {
+    fn account(&mut self, seed: Option<[u8; 64]>, index: u32) -> Result<Account, u32> {
         if let Some(a) = self.accounts.iter().find(|a| a.index == index) {
             return Ok(a.clone());
         }
-        let Some(mut entropy) = entropy else { return Err(RESULT_NO_PHRASE) };
-        let words = maki_seed::to_words(&entropy);
-        entropy.zeroize();
-        let mut seed = maki_seed::seed(&words, "");
+        let Some(mut seed) = seed else { return Err(RESULT_NO_PHRASE) };
         let account = Account::from_seed(&seed, index);
         seed.zeroize();
         let account = account.map_err(|_| RESULT_FAILED)?;
@@ -70,11 +67,11 @@ impl Eth {
     }
 
     /// `KeysOp::EthAccount`: the address, once the owner lets the site connect if asked to ask.
-    pub(crate) fn share_account(&mut self, mut msg: xous::MessageEnvelope, entropy: Option<Vec<u8>>) {
+    pub(crate) fn share_account(&mut self, mut msg: xous::MessageEnvelope, seed: Option<[u8; 64]>) {
         let Some(mem) = msg.body.memory_message_mut() else { return };
         let mut buffer = unsafe { Buffer::from_memory_message_mut(mem) };
         let Ok(mut req) = buffer.to_original::<EthRequest, _>() else { return };
-        let account = match self.account(entropy, req.index) {
+        let account = match self.account(seed, req.index) {
             Ok(a) => a,
             Err(result) => {
                 req.result = result;
@@ -111,11 +108,11 @@ impl Eth {
     }
 
     /// `KeysOp::EthMessage`: a message, signed once the owner has read it.
-    pub(crate) fn sign_message(&mut self, mut msg: xous::MessageEnvelope, entropy: Option<Vec<u8>>) {
+    pub(crate) fn sign_message(&mut self, mut msg: xous::MessageEnvelope, seed: Option<[u8; 64]>) {
         let Some(mem) = msg.body.memory_message_mut() else { return };
         let mut buffer = unsafe { Buffer::from_memory_message_mut(mem) };
         let Ok(mut req) = buffer.to_original::<EthMessage, _>() else { return };
-        let account = match self.account(entropy, req.index) {
+        let account = match self.account(seed, req.index) {
             Ok(a) => a,
             Err(result) => {
                 req.result = result;
@@ -145,7 +142,7 @@ impl Eth {
 
     /// `KeysOp::EthSign`: a piece of a transaction. The last one is checked, shown, and signed
     /// if the owner says so.
-    pub(crate) fn sign_piece(&mut self, mut msg: xous::MessageEnvelope, entropy: impl FnOnce() -> Option<Vec<u8>>) {
+    pub(crate) fn sign_piece(&mut self, mut msg: xous::MessageEnvelope, seed: impl FnOnce() -> Option<[u8; 64]>) {
         let Some(mem) = msg.body.memory_message_mut() else { return };
         let mut buffer = unsafe { Buffer::from_memory_message_mut(mem) };
         let Ok(mut req) = buffer.to_original::<Chunk, _>() else { return };
@@ -180,7 +177,7 @@ impl Eth {
             return;
         }
         let bytes = std::mem::take(&mut self.incoming);
-        let account = match self.account(entropy(), req.index) {
+        let account = match self.account(seed(), req.index) {
             Ok(a) => a,
             Err(result) => return reply(req, result, String::new()),
         };

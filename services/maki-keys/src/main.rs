@@ -110,16 +110,33 @@ fn open(key: &[u8; 32], blob: &[u8]) -> Option<Vec<u8>> {
     cipher.decrypt(Nonce::from_slice(nonce), Payload { msg: sealed, aad: BACKUP_MAGIC }).ok()
 }
 
-/// The backup key, from the phrase: words, seed, then HKDF (maki_seed::backup_key).
-fn backup_key(store: &Store, basis: &str) -> Option<[u8; 32]> {
-    let Some(mut entropy) = store.entropy(basis) else {
-        log::warn!("backup key: no entropy in {}", basis);
-        return None;
-    };
-    log::debug!("backup key: {} bytes of entropy", entropy.len());
-    let words = maki_seed::to_words(&entropy);
-    entropy.zeroize();
-    let mut seed = maki_seed::seed(&words, "");
+/// The BIP39 seed, made once per unlock and kept until Lock: PBKDF2 over the phrase is slow on
+/// maki's core, and the wallet, the Ethereum account, the passkeys' keys and the backup key all
+/// start from it.
+struct SeedCache(Option<[u8; 64]>);
+
+impl SeedCache {
+    fn get(&mut self, store: &Store, state: State) -> Option<[u8; 64]> {
+        if self.0.is_none() {
+            let lock = store.lock().filter(|_| state == State::Unlocked)?;
+            let mut entropy = store.entropy(&lock.basis)?;
+            let words = maki_seed::to_words(&entropy);
+            entropy.zeroize();
+            self.0 = Some(maki_seed::seed(&words, ""));
+        }
+        self.0
+    }
+
+    fn forget(&mut self) {
+        if let Some(mut s) = self.0.take() {
+            s.zeroize();
+        }
+    }
+}
+
+/// The backup key, from the seed (maki_seed::backup_key).
+fn backup_key(seed: Option<[u8; 64]>) -> Option<[u8; 32]> {
+    let mut seed = seed?;
     let key = maki_seed::backup_key(&seed);
     seed.zeroize();
     Some(key)
@@ -473,13 +490,9 @@ fn main() -> ! {
     let mut incoming_total: u32 = 0;
     let mut btc = bitcoin::Btc::new();
     let mut eth = ethereum::Eth::new();
+    let mut seed = SeedCache(None);
     // bumped when a restore writes to the FIDO store behind the vault's back
     let generation = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
-    // the phrase's entropy, while unlocked
-    let entropy = |store: &Store, state: State| match (state, store.lock()) {
-        (State::Unlocked, Some(lock)) => store.entropy(&lock.basis),
-        _ => None,
-    };
 
     loop {
         let mut msg = xous::receive_message(sid).unwrap();
@@ -504,7 +517,7 @@ fn main() -> ! {
                     (State::Unlocked, Some(lock)) => {
                         if req.offset == 0 || sealed.is_none() {
                             let planted = option_env!("MAKI_DEMO_BACKUP").is_some() && passkeys::plant_demo(&store.pddb, &lock.basis);
-                            sealed = backup_key(&store, &lock.basis).and_then(|mut key| {
+                            sealed = backup_key(seed.get(&store, state)).and_then(|mut key| {
                                 let mut plain = gather(&store, &lock.basis);
                                 let blob = seal(&key, &plain);
                                 log::debug!("backup: {} bytes of records, sealed {:?}", plain.len(), blob.as_ref().map(|b| b.len()));
@@ -569,7 +582,7 @@ fn main() -> ! {
                 }
                 // the last piece: open it, then ask on a thread, so status keeps being answered
                 let blob = std::mem::take(&mut incoming);
-                let opened = backup_key(&store, &basis).and_then(|mut key| {
+                let opened = backup_key(seed.get(&store, state)).and_then(|mut key| {
                     let plain = open(&key, &blob);
                     key.zeroize();
                     plain
@@ -662,15 +675,9 @@ fn main() -> ! {
                     buffer.replace(req).ok();
                 }
             }
-            Some(KeysOp::EthAccount) => {
-                let e = entropy(&store, state);
-                eth.share_account(msg, e)
-            }
-            Some(KeysOp::EthMessage) => {
-                let e = entropy(&store, state);
-                eth.sign_message(msg, e)
-            }
-            Some(KeysOp::EthSign) => eth.sign_piece(msg, || entropy(&store, state)),
+            Some(KeysOp::EthAccount) => eth.share_account(msg, seed.get(&store, state)),
+            Some(KeysOp::EthMessage) => eth.sign_message(msg, seed.get(&store, state)),
+            Some(KeysOp::EthSign) => eth.sign_piece(msg, || seed.get(&store, state)),
             Some(KeysOp::EthSigned) => eth.signed_piece(&mut msg),
             // nothing of the wallet's before the PIN
             Some(KeysOp::BtcAccount | KeysOp::BtcAddress) if state != State::Unlocked => {
@@ -691,15 +698,9 @@ fn main() -> ! {
                     buffer.replace(req).ok();
                 }
             }
-            Some(KeysOp::BtcAccount) => {
-                let e = entropy(&store, state);
-                btc.share_account(msg, e)
-            }
-            Some(KeysOp::BtcAddress) => {
-                let e = entropy(&store, state);
-                btc.address(msg, e)
-            }
-            Some(KeysOp::BtcSign) => btc.sign_piece(msg, || entropy(&store, state)),
+            Some(KeysOp::BtcAccount) => btc.share_account(msg, seed.get(&store, state)),
+            Some(KeysOp::BtcAddress) => btc.address(msg, seed.get(&store, state)),
+            Some(KeysOp::BtcSign) => btc.sign_piece(msg, || seed.get(&store, state)),
             Some(KeysOp::BtcSigned) => btc.signed_piece(&mut msg),
             Some(KeysOp::FidoStoreChanged) => {
                 generation.fetch_add(1, Ordering::SeqCst);
@@ -716,16 +717,14 @@ fn main() -> ! {
                 let mut buffer = unsafe { Buffer::from_memory_message_mut(mem) };
                 let Ok(mut req) = buffer.to_original::<FidoSecret, _>() else { continue };
                 req.keys.clear();
-                req.result = match entropy(&store, state) {
-                    _ if fido.is_none() || msg.sender.pid() != fido => RESULT_NOT_NOW,
+                let authorized = fido.is_some() && msg.sender.pid() == fido;
+                req.result = match if authorized { seed.get(&store, state) } else { None } {
+                    _ if !authorized => RESULT_NOT_NOW,
                     None if state == State::Unlocked => RESULT_NO_PHRASE,
                     None => RESULT_NOT_NOW,
-                    Some(mut e) => {
-                        let words = maki_seed::to_words(&e);
-                        e.zeroize();
-                        let mut seed = maki_seed::seed(&words, "");
-                        let keys = maki_seed::fido_keys(&seed);
-                        seed.zeroize();
+                    Some(mut s) => {
+                        let keys = maki_seed::fido_keys(&s);
+                        s.zeroize();
                         req.keys.extend_from_slice(&keys.encryption);
                         req.keys.extend_from_slice(&keys.authentication);
                         req.keys.extend_from_slice(&keys.cred_random);
@@ -742,6 +741,10 @@ fn main() -> ! {
                 xous::return_scalar(msg.sender, (msg.sender.pid() == screen) as usize).ok();
             }
             Some(op @ (KeysOp::NewPhrase | KeysOp::RestorePhrase)) => {
+                // whatever was derived before comes from another phrase, if any
+                seed.forget();
+                btc.forget();
+                eth.forget();
                 let Some(mem) = msg.body.memory_message_mut() else { continue };
                 let mut buffer = unsafe { Buffer::from_memory_message_mut(mem) };
                 let Ok(mut req) = buffer.to_original::<PhraseRequest, _>() else { continue };
@@ -855,6 +858,7 @@ fn main() -> ! {
                             }
                             btc.forget();
                             eth.forget();
+                            seed.forget();
                             state = State::Unset;
                             (RESULT_WIPED, 0)
                         }
@@ -877,6 +881,7 @@ fn main() -> ! {
                             }
                             btc.forget();
                             eth.forget();
+                            seed.forget();
                             log::info!("locked");
                             true
                         }

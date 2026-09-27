@@ -72,16 +72,13 @@ impl Btc {
         self.incoming.clear();
     }
 
-    /// The account on `n`, from the phrase's entropy (None: locked, or no phrase yet).
-    fn account(&mut self, entropy: Option<Vec<u8>>, n: u8) -> Result<Account, u32> {
+    /// The account on `n`, from the seed (None: locked, or no phrase yet).
+    fn account(&mut self, seed: Option<[u8; 64]>, n: u8) -> Result<Account, u32> {
         let slot = n.min(1) as usize;
         if let Some(a) = &self.accounts[slot] {
             return Ok(a.clone());
         }
-        let Some(mut entropy) = entropy else { return Err(RESULT_NO_PHRASE) };
-        let words = maki_seed::to_words(&entropy);
-        entropy.zeroize();
-        let mut seed = maki_seed::seed(&words, "");
+        let Some(mut seed) = seed else { return Err(RESULT_NO_PHRASE) };
         let account = Account::from_seed(&seed, network(n));
         seed.zeroize();
         let account = account.map_err(|_| RESULT_FAILED)?;
@@ -90,11 +87,11 @@ impl Btc {
     }
 
     /// `KeysOp::BtcAccount`: the zpub and descriptor, once the owner agrees if asked to ask.
-    pub(crate) fn share_account(&mut self, mut msg: xous::MessageEnvelope, entropy: Option<Vec<u8>>) {
+    pub(crate) fn share_account(&mut self, mut msg: xous::MessageEnvelope, seed: Option<[u8; 64]>) {
         let Some(mem) = msg.body.memory_message_mut() else { return };
         let mut buffer = unsafe { Buffer::from_memory_message_mut(mem) };
         let Ok(mut req) = buffer.to_original::<Wallet, _>() else { return };
-        let account = match self.account(entropy, req.network) {
+        let account = match self.account(seed, req.network) {
             Ok(a) => a,
             Err(result) => {
                 req.result = result;
@@ -125,11 +122,11 @@ impl Btc {
     }
 
     /// `KeysOp::BtcAddress`: an address, compared on screen first if asked to ask.
-    pub(crate) fn address(&mut self, mut msg: xous::MessageEnvelope, entropy: Option<Vec<u8>>) {
+    pub(crate) fn address(&mut self, mut msg: xous::MessageEnvelope, seed: Option<[u8; 64]>) {
         let Some(mem) = msg.body.memory_message_mut() else { return };
         let mut buffer = unsafe { Buffer::from_memory_message_mut(mem) };
         let Ok(mut req) = buffer.to_original::<Wallet, _>() else { return };
-        let address = match self.account(entropy, req.network) {
+        let address = match self.account(seed, req.network) {
             Ok(a) => a.address(req.change, req.index).map_err(|_| RESULT_FAILED),
             Err(result) => Err(result),
         };
@@ -163,7 +160,7 @@ impl Btc {
 
     /// `KeysOp::BtcSign`: a piece of a PSBT. The last one is checked, shown, and signed if the
     /// owner says so.
-    pub(crate) fn sign_piece(&mut self, mut msg: xous::MessageEnvelope, entropy: impl FnOnce() -> Option<Vec<u8>>) {
+    pub(crate) fn sign_piece(&mut self, mut msg: xous::MessageEnvelope, seed: impl FnOnce() -> Option<[u8; 64]>) {
         let Some(mem) = msg.body.memory_message_mut() else { return };
         let mut buffer = unsafe { Buffer::from_memory_message_mut(mem) };
         let Ok(mut req) = buffer.to_original::<Chunk, _>() else { return };
@@ -199,7 +196,7 @@ impl Btc {
             return;
         }
         let bytes = std::mem::take(&mut self.incoming);
-        let account = match self.account(entropy(), req.network) {
+        let account = match self.account(seed(), req.network) {
             Ok(a) => a,
             Err(result) => return reply(req, result, String::new()),
         };
