@@ -599,6 +599,17 @@ pub enum SysCall {
     ///     * **ProcessNotFound**: There's no such process
     TerminateChild(PID),
 
+    /// Whether a process this one created is still running: a loader keeping an eye on an app
+    /// it started, which may have ended itself or been ended for a fault. Nothing changes.
+    ///
+    /// ## Arguments
+    ///     * **pid**: The process to look for
+    ///
+    /// ## Returns
+    /// Returns Scalar1(1) while it runs, and Scalar1(0) once it's gone, whatever has the PID
+    /// since.
+    ChildRunning(PID),
+
     /// This syscall does not exist. It captures all possible
     /// arguments so detailed analysis can be performed.
     Invalid(usize, usize, usize, usize, usize, usize, usize),
@@ -659,6 +670,7 @@ pub enum SysCallNumber {
     PlatformSpecific = 46,
     ConfineSelf = 47,
     TerminateChild = 48,
+    ChildRunning = 49,
 }
 
 impl SysCallNumber {
@@ -717,6 +729,7 @@ impl SysCallNumber {
             46 => PlatformSpecific,
             47 => ConfineSelf,
             48 => TerminateChild,
+            49 => ChildRunning,
             _ => Invalid,
         }
     }
@@ -974,6 +987,9 @@ impl SysCall {
                 [SysCallNumber::PlatformSpecific as usize, *a1, *a2, *a3, *a4, *a5, *a6, *a7]
             }
             SysCall::ConfineSelf(budget) => [SysCallNumber::ConfineSelf as usize, *budget, 0, 0, 0, 0, 0, 0],
+            SysCall::ChildRunning(pid) => {
+                [SysCallNumber::ChildRunning as usize, pid.get() as usize, 0, 0, 0, 0, 0, 0]
+            }
             SysCall::TerminateChild(pid) => {
                 [SysCallNumber::TerminateChild as usize, pid.get() as usize, 0, 0, 0, 0, 0, 0]
             }
@@ -1134,6 +1150,7 @@ impl SysCall {
             SysCallNumber::PlatformSpecific => SysCall::PlatformSpecific(a1, a2, a3, a4, a5, a6, a7),
             SysCallNumber::ConfineSelf => SysCall::ConfineSelf(a1),
             SysCallNumber::TerminateChild => SysCall::TerminateChild(pid_from_usize(a1)?),
+            SysCallNumber::ChildRunning => SysCall::ChildRunning(pid_from_usize(a1)?),
             SysCallNumber::Invalid => SysCall::Invalid(a1, a2, a3, a4, a5, a6, a7),
         })
     }
@@ -1982,6 +1999,14 @@ pub fn confine_self(page_budget: usize) -> core::result::Result<(), Error> {
 /// Ends a process this one created (`SysCall::TerminateChild`).
 pub fn terminate_child(pid: PID) -> core::result::Result<(), Error> {
     rsyscall(SysCall::TerminateChild(pid)).map(|_| ())
+}
+
+/// Whether a process this one created is still running (`SysCall::ChildRunning`).
+pub fn child_running(pid: PID) -> core::result::Result<bool, Error> {
+    match rsyscall(SysCall::ChildRunning(pid))? {
+        Result::Scalar1(running) => Ok(running != 0),
+        _ => Err(Error::InternalError),
+    }
 }
 
 /// Perform a raw syscall and return the result. This will transform

@@ -1360,9 +1360,12 @@ fn a_process_ends_only_what_it_created() {
             app_pid_send.send(app).unwrap();
             tried_recv.recv().unwrap();
             assert_eq!(xous_kernel::terminate_child(xous_kernel::current_pid().unwrap()), Err(Error::ProcessNotChild));
+            assert_eq!(xous_kernel::child_running(app), Ok(true));
+            assert_eq!(xous_kernel::child_running(xous_kernel::current_pid().unwrap()), Ok(false));
             xous_kernel::terminate_child(app).unwrap();
             // and it's gone
             assert!(xous_kernel::terminate_child(app).is_err());
+            assert_eq!(xous_kernel::child_running(app), Ok(false));
         },
     ))
     .unwrap();
@@ -1372,6 +1375,8 @@ fn a_process_ends_only_what_it_created() {
         move || {
             let app = app_pid_recv.recv().unwrap();
             assert_eq!(xous_kernel::terminate_child(app), Err(Error::ProcessNotChild));
+            // running, but not its child
+            assert_eq!(xous_kernel::child_running(app), Ok(false));
             tried_send.send(()).unwrap();
         },
     ))

@@ -1237,6 +1237,9 @@ pub fn handle_inner(pid: PID, tid: TID, in_irq: bool, call: SysCall) -> SysCallR
         SysCall::TerminateChild(target) => {
             SystemServices::with_mut(|ss| ss.terminate_child(pid, target)).map(|_| xous_kernel::Result::Ok)
         }
+        SysCall::ChildRunning(target) => {
+            Ok(xous_kernel::Result::Scalar1(SystemServices::with(|ss| ss.child_running(pid, target)) as usize))
+        }
         SysCall::ConfineSelf(budget) => SystemServices::with_mut(|ss| {
             let process = ss.get_process_mut(pid)?;
             let already = process.confined;

@@ -2278,6 +2278,12 @@ impl SystemServices {
         result
     }
 
+    /// Whether `target_pid` is a process `caller` created that's still running
+    /// (`SysCall::ChildRunning`): gone, or someone else's since, it isn't.
+    pub fn child_running(&self, caller: PID, target_pid: PID) -> bool {
+        target_pid != caller && self.get_process(target_pid).is_ok_and(|p| !p.free() && p.owner == caller)
+    }
+
     /// Releases a process: its servers (with tombstones in their clients' connections), what
     /// they hold for it, its memory and interrupts, and its slot. Returns its parent. Leaves
     /// whichever address space it last needed active.
