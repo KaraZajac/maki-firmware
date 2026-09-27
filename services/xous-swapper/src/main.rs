@@ -596,55 +596,69 @@ fn swap_handler(
                 panic!("No space was reserved for the hard OOM manager to run!");
             }
             // recover the RPT from kernel
-            let mut alloc_heap =
-                ss.hard_oom_alloc_heap.take().expect("Hard OOM, but no pre-allocated storage for handler!");
-            alloc_heap.clear();
-            assert!(alloc_heap.len() == 0);
             let rpt = unsafe {
                 core::slice::from_raw_parts(SWAP_RPT_VADDR as *const SwapAlloc, ss.sram_size / PAGE_SIZE)
             };
-            for (_i, &entry) in rpt.iter().enumerate() {
-                // filter out invalid, wired, or kernel/swapper candidates
-                if (!entry.is_wired() && entry.is_valid() && entry.raw_pid() != 1 && entry.raw_pid() != 2)
-                // report_full_rpt is used to force the heap to reserve all the data we might need in a future oom
-                    || ss.report_full_rpt
-                {
-                    //  writeln!(DebugUart {}, "Pushing {:x?}", entry).ok();
-                    alloc_heap.push(entry);
-                }
-            }
-            // Inside the interrupt context, evict pages. No progress on any other process is made until this
-            // loop is done. The loop is "inside-out" compared to the EvictPage call -- we can't make calls to
-            // the kernel that would cause us to re-enter the swap context, because that would overwrite the
-            // stored thread `sepc`. The syscalls used here are all "simple calls" that don't require re-entry
-            // into the swapper context to handle.
             let target_pages = pages_to_free;
             let mut errs: usize = 0;
             let mut wired: usize = 0;
-
-            while pages_to_free > 0 {
-                if let Some(candidate) = alloc_heap.pop() {
-                    if candidate.is_wired()
-                        || !candidate.is_valid()
-                        || candidate.raw_pid() == 1
-                        || candidate.raw_pid() == 2
+            if let Some(mut alloc_heap) = ss.hard_oom_alloc_heap.take() {
+                alloc_heap.clear();
+                assert!(alloc_heap.len() == 0);
+                for (_i, &entry) in rpt.iter().enumerate() {
+                    // filter out invalid, wired, or kernel/swapper candidates
+                    if (!entry.is_wired() && entry.is_valid() && entry.raw_pid() != 1 && entry.raw_pid() != 2)
+                    // report_full_rpt is used to force the heap to reserve all the data we might need in a future oom
+                        || ss.report_full_rpt
                     {
+                        //  writeln!(DebugUart {}, "Pushing {:x?}", entry).ok();
+                        alloc_heap.push(entry);
+                    }
+                }
+                // Inside the interrupt context, evict pages. No progress on any other process is made until this
+                // loop is done. The loop is "inside-out" compared to the EvictPage call -- we can't make calls to
+                // the kernel that would cause us to re-enter the swap context, because that would overwrite the
+                // stored thread `sepc`. The syscalls used here are all "simple calls" that don't require re-entry
+                // into the swapper context to handle.
+
+                while pages_to_free > 0 {
+                    if let Some(candidate) = alloc_heap.pop() {
+                        if candidate.is_wired()
+                            || !candidate.is_valid()
+                            || candidate.raw_pid() == 1
+                            || candidate.raw_pid() == 2
+                        {
+                            wired += 1;
+                        } else {
+                            // errors are ignored because the correct behavior on error is to try another page
+                            write_to_swap_inner(ss, candidate, &mut errs, &mut pages_to_free).ok();
+                        }
+                    } else {
+                        writeln!(
+                            DebugUart {},
+                            "Ran out of swappable candidates before we could free the requested number of pages!"
+                        )
+                        .ok();
+                        break;
+                    }
+                }
+                // put the alloc heap back into the shared state
+                ss.hard_oom_alloc_heap = Some(alloc_heap);
+            } else {
+                // The heap is made at boot, but a boot racing for RAM can get here first. The
+                // handler can't allocate, and mustn't panic (a panic makes syscalls that let
+                // other processes run mid-OOM): evict in table order, not oldest first.
+                for &entry in rpt.iter() {
+                    if pages_to_free == 0 {
+                        break;
+                    }
+                    if entry.is_wired() || !entry.is_valid() || entry.raw_pid() == 1 || entry.raw_pid() == 2 {
                         wired += 1;
                     } else {
-                        // errors are ignored because the correct behavior on error is to try another page
-                        write_to_swap_inner(ss, candidate, &mut errs, &mut pages_to_free).ok();
+                        write_to_swap_inner(ss, entry, &mut errs, &mut pages_to_free).ok();
                     }
-                } else {
-                    writeln!(
-                        DebugUart {},
-                        "Ran out of swappable candidates before we could free the requested number of pages!"
-                    )
-                    .ok();
-                    break;
                 }
             }
-            // put the alloc heap back into the shared state
-            ss.hard_oom_alloc_heap = Some(alloc_heap);
             writeln!(
                 DebugUart {},
                 "Exiting HARD OOM swap free loop: freed {} pages; {} requests rejected, {} wired",
@@ -703,11 +717,6 @@ fn main() {
     let mut sss = Box::new(SharedStateStorage { inner: None });
     sss.init();
 
-    // init the log, but this is mostly unused.
-    log_server::init_wait().unwrap();
-    log::set_max_level(log::LevelFilter::Info);
-    log::info!("my PID is {}", xous::process::id());
-
     // wait for the share storage to become initialized, happens inside the handler
     // on the first call the kernel makes back. Usually it's done by now (by an alloc
     // advisory), but this check just ensures that happens.
@@ -717,7 +726,9 @@ fn main() {
     // measure memory at boot
     get_free_pages();
     let total_ram = sss.inner.as_ref().unwrap().sram_size;
-    // Binary heap for storing the view of the memory allocations.
+    // Binary heap for storing the view of the memory allocations. Made before anything else,
+    // the log server included: a boot with many processes can run out of RAM, and call the hard
+    // OOM handler, before the log server is up, and the handler can't allocate this itself.
     sss.inner.as_mut().unwrap().hard_oom_alloc_heap = Some(BinaryHeap::with_capacity(total_ram / PAGE_SIZE));
 
     // Do a single invocation at boot with 0 pages to free, to ensure that the page maps are set up,
@@ -732,6 +743,11 @@ fn main() {
     // restore the normal parameters
     sss.inner.as_mut().unwrap().report_full_rpt = false;
     sss.inner.as_mut().unwrap().pages_to_free = HARD_OOM_PAGE_TARGET + HARD_OOM_RESERVED_PAGES;
+
+    // init the log, but this is mostly unused.
+    log_server::init_wait().unwrap();
+    log::set_max_level(log::LevelFilter::Info);
+    log::info!("my PID is {}", xous::process::id());
 
     // This thread is for testing
     #[cfg(feature = "swap-userspace-testing")]
