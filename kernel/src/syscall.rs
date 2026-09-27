@@ -918,6 +918,19 @@ pub fn handle_inner(pid: PID, tid: TID, in_irq: bool, call: SysCall) -> SysCallR
                     }
                 }
             }
+            // maki: freed addresses are used again, lowest first. The search for a new mapping
+            // carried on from the last one found, so a process that maps and frees buffers (a
+            // memory message each time it calls a server) walked through all 256 MiB of its
+            // default area, and every 4 MiB it reached cost a page table that's never freed:
+            // up to 64 pages of RAM, wired, per process.
+            if result.is_ok() {
+                ArchProcess::with_inner_mut(|p| {
+                    let area = p.mem_default_base..p.mem_default_base + 0x1000_0000;
+                    if area.contains(&virt) && virt < p.mem_default_last {
+                        p.mem_default_last = virt;
+                    }
+                });
+            }
             result
         }),
         SysCall::IncreaseHeap(delta, flags) => {
