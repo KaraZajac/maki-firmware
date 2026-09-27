@@ -105,7 +105,7 @@ fn describe(stop: &Stop) -> String {
         Stop::Finished => "finished".into(),
         Stop::Exited => "stopped: it waited again after being told to exit".into(),
         Stop::NotResponding => "stopped: not responding (it worked too long without waiting)".into(),
-        Stop::Aborted(why) => format!("stopped: {why}"),
+        Stop::Aborted(why) | Stop::Failed(why) => format!("stopped: {why}"),
         Stop::Crashed(why) => format!("crashed: {why}"),
     }
 }

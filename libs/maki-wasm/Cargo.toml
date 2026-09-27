@@ -5,6 +5,8 @@ edition = "2021"
 description = "maki's app host core: runs .maki WebAssembly apps with wasmi, giving them only maki's functions"
 
 [dependencies]
+# native apps' ELF, which `admit` checks too
+maki-native = { path = "../maki-native", default-features = false }
 # Untrusted code: every module validated; "can't happen" paths panic instead of being undefined
 # behaviour (extra-checks); a plain dispatch loop rather than tail calls, which depend on the
 # optimiser for their stack use. Neither wat nor memory64: modules come compiled and 32-bit.

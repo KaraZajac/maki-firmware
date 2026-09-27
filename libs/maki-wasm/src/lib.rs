@@ -11,13 +11,13 @@
 //! asks for that permission, and maki refuses one that imports them without.
 
 mod canvas;
+mod session;
 
-use std::collections::BTreeMap;
 use std::time::Duration;
 
 pub use canvas::{Canvas, Color, Style, HEIGHT, MAX_BLIT, TOP, WIDTH};
-use ed25519_dalek::Signer;
 use maki_bundle::{Kind, Manifest, Permission};
+pub use session::{Session, REFUSED};
 use wasmi::{Caller, Config, Engine, Error, Extern, Linker, Memory, Module, Store, StoreLimits, StoreLimitsBuilder};
 
 /// The functions this host offers apps.
@@ -37,10 +37,10 @@ pub const MAX_VALUE: usize = 16 * 1024;
 /// An app's own menu items, before App info and Exit.
 pub const MAX_MENU_ITEMS: usize = 6;
 pub const MAX_MENU_ITEM: usize = 24;
-const MAX_TEXT: usize = 1024;
-const MAX_LOG: usize = 256;
-const MAX_RANDOM: usize = 4096;
-const MAX_QR: usize = 1024;
+pub const MAX_TEXT: usize = 1024;
+pub const MAX_LOG: usize = 256;
+pub const MAX_RANDOM: usize = 4096;
+pub const MAX_QR: usize = 1024;
 /// A secret's label: the app's name for one of its secrets.
 pub const MAX_LABEL: usize = 32;
 /// The most an app has signed at once.
@@ -53,6 +53,10 @@ pub const MAX_MESSAGE: usize = 4096;
 pub const MAX_QUESTION: usize = 64;
 pub const MAX_DETAIL: usize = 128;
 pub const MAX_ANSWER_LABEL: usize = 16;
+/// The most `menu`'s text can be: every item, and a newline after each.
+pub const MENU_TEXT: usize = (MAX_MENU_ITEM + 1) * MAX_MENU_ITEMS;
+/// The most `ask`'s text can be: "question\ndetail\nyes\nno".
+pub const ASK_TEXT: usize = MAX_QUESTION + MAX_DETAIL + 2 * MAX_ANSWER_LABEL + 3;
 /// How long an ask waits, if the app doesn't say, and the most it may.
 pub const ASK_TIMEOUT_S: u32 = 30;
 pub const MAX_ASK_TIMEOUT_S: u32 = 120;
@@ -233,10 +237,46 @@ impl Limits {
 /// functions that use them.
 pub const PERMISSIONS: &[Permission] = &Permission::ALL;
 
-/// Whether maki takes this app, and what it gives it if so: a WebAssembly app for a host API
-/// this maki has, asking only for permissions it offers and for no more than it gives an app,
-/// whose code passes `check`. What's wrong if not, for the owner or developer to read.
-pub fn admit(manifest: &Manifest, code: &[u8]) -> Result<Limits, String> { load(manifest, code).map(|l| l.limits) }
+/// Whether maki takes this app, and what it gives it if so: asking only for permissions it
+/// offers and for no more than it gives an app, and either a WebAssembly app for a host API this
+/// maki has whose code passes `check`, or a native app built for this firmware's app service
+/// whose ELF the loader maps, its code, data and stack within its memory. What's wrong if not,
+/// for the owner or developer to read.
+pub fn admit(manifest: &Manifest, code: &[u8]) -> Result<Limits, String> {
+    match manifest.kind {
+        Kind::Wasm => load(manifest, code).map(|l| l.limits),
+        Kind::Native => admit_native(manifest, code),
+    }
+}
+
+fn admit_native(manifest: &Manifest, elf: &[u8]) -> Result<Limits, String> {
+    use maki_native::{load::STACK_KIB, service::FIRMWARE};
+    if manifest.firmware != FIRMWARE {
+        return Err(format!(
+            "it's built for other firmware ({}; this maki runs {FIRMWARE})",
+            if manifest.firmware.is_empty() { "unnamed" } else { &manifest.firmware }
+        ));
+    }
+    let limits = limits(manifest)?;
+    let program = maki_native::check(elf, manifest.memory_kib).map_err(|e| e.to_string())?;
+    let needs = (program.pages() + STACK_KIB / 4) * 4;
+    if needs > manifest.memory_kib {
+        return Err(format!("its code, data and {STACK_KIB} KiB of stack take {needs} KiB, more than its memory"));
+    }
+    Ok(limits)
+}
+
+/// What an app gets, given what its manifest asks for: permissions this maki offers, memory
+/// and storage within what it gives.
+fn limits(manifest: &Manifest) -> Result<Limits, String> {
+    if let Some((p, _)) = manifest.permissions.iter().find(|(p, _)| !PERMISSIONS.contains(p)) {
+        return Err(format!("it asks to {}, which this maki doesn't offer yet", p.title().to_lowercase()));
+    }
+    let mut limits = Limits::for_app(manifest.memory_kib, manifest.storage_kib)?;
+    let asked: Vec<Permission> = manifest.permissions.iter().map(|(p, _)| *p).collect();
+    limits.granted = Granted::of(&asked);
+    Ok(limits)
+}
 
 /// An app maki has taken (see `admit`), its code checked and compiled once, ready to run each
 /// time it's opened.
@@ -250,17 +290,12 @@ pub struct Loaded {
 /// What `admit` checks, keeping the compiled code to run.
 pub fn load(manifest: &Manifest, code: &[u8]) -> Result<Loaded, String> {
     if manifest.kind != Kind::Wasm {
-        return Err("it's a native app, and maki doesn't take those yet".into());
+        return Err("it's a native app: maki runs those in a process of their own".into());
     }
     if manifest.api > API_VERSION {
         return Err(format!("it needs a newer maki (host API {}; this maki has {API_VERSION})", manifest.api));
     }
-    if let Some((p, _)) = manifest.permissions.iter().find(|(p, _)| !PERMISSIONS.contains(p)) {
-        return Err(format!("it asks to {}, which this maki doesn't offer yet", p.title().to_lowercase()));
-    }
-    let mut limits = Limits::for_app(manifest.memory_kib, manifest.storage_kib)?;
-    let asked: Vec<Permission> = manifest.permissions.iter().map(|(p, _)| *p).collect();
-    limits.granted = Granted::of(&asked);
+    let limits = limits(manifest)?;
     let loaded = compile(code, limits)?;
     instantiate(&loaded, Box::new(Nothing))?;
     Ok(loaded)
@@ -289,34 +324,16 @@ pub enum Stop {
     Aborted(String),
     /// It trapped, or passed a maki function something it can't take: what happened.
     Crashed(String),
+    /// maki couldn't run it (a native app's process couldn't be started, say): why.
+    Failed(String),
 }
 
 struct State {
-    platform: Box<dyn Platform>,
-    canvas: Canvas,
+    session: Session,
     memory: Option<Memory>,
     limiter: StoreLimits,
-    limits: Limits,
-    /// Stored keys and the length of each value, read on first use, for the quota.
-    sizes: Option<BTreeMap<String, usize>>,
-    started: u64,
-    exit_sent: bool,
     exited: bool,
     aborted: Option<String>,
-}
-
-impl State {
-    fn sizes(&mut self) -> &mut BTreeMap<String, usize> {
-        if self.sizes.is_none() {
-            let mut sizes = BTreeMap::new();
-            for key in self.platform.storage_keys() {
-                let len = self.platform.storage_get(&key).map(|v| v.len()).unwrap_or(0);
-                sizes.insert(key, len);
-            }
-            self.sizes = Some(sizes);
-        }
-        self.sizes.as_mut().unwrap()
-    }
 }
 
 fn engine() -> Engine {
@@ -365,67 +382,33 @@ fn color(v: i32) -> Result<Color, Error> { Color::from_i32(v).ok_or_else(|| trap
 
 fn style(v: i32) -> Result<Style, Error> { Style::from_i32(v).ok_or_else(|| trap(format_args!("no text style {v}"))) }
 
-fn key_ok(key: &str) -> bool { !key.is_empty() && key.len() <= MAX_KEY && !key.chars().any(|c| c.is_control()) }
 
 /// A gated function called without its permission. `compile` refuses apps that import one
 /// they didn't ask for, so this is a second line.
 fn permitted(c: &Caller<'_, State>, p: Permission, what: &str) -> Result<(), Error> {
-    if c.data().limits.granted.has(p) {
+    if c.data().session.permitted(p) {
         Ok(())
     } else {
         Err(trap(format_args!("{what} needs the {} permission", p.name())))
     }
 }
 
-/// A secret's label, or `None` if it's not one (control characters).
-fn label(c: &Caller<'_, State>, ptr: i32, len: i32, what: &str) -> Result<Option<String>, Error> {
-    let label = read_str(c, ptr, len, MAX_LABEL, what)?;
-    Ok((!label.chars().any(|ch| ch.is_control())).then_some(label))
-}
 
-/// "question\ndetail\nyes\nno", the last three optional, as `ask` takes it.
-fn parse_ask(text: &str, timeout_s: i32) -> Option<Ask> {
-    let parts: Vec<&str> = text.split('\n').collect();
-    if parts.len() > 4 || parts.iter().any(|p| p.chars().any(|ch| ch.is_control())) {
-        return None;
-    }
-    let part = |i: usize| parts.get(i).copied().unwrap_or("").to_string();
-    let ask = Ask {
-        question: part(0),
-        detail: part(1),
-        yes: part(2),
-        no: part(3),
-        timeout_s: if timeout_s <= 0 { ASK_TIMEOUT_S } else { (timeout_s as u32).clamp(5, MAX_ASK_TIMEOUT_S) },
-    };
-    let fits = !ask.question.trim().is_empty()
-        && ask.question.len() <= MAX_QUESTION
-        && ask.detail.len() <= MAX_DETAIL
-        && ask.yes.len() <= MAX_ANSWER_LABEL
-        && ask.no.len() <= MAX_ANSWER_LABEL;
-    fits.then_some(ask)
-}
-
-/// The app's Ed25519 key for `label`: its secret for that label is the key's seed.
-fn signing_key(platform: &mut dyn Platform, label: &str) -> Option<ed25519_dalek::SigningKey> {
-    let mut secret = platform.app_secret(label)?;
-    let key = ed25519_dalek::SigningKey::from_bytes(&secret);
-    zeroize::Zeroize::zeroize(&mut secret);
-    Some(key)
-}
-
-/// maki's functions, as the `maki` import module.
+/// maki's functions, as the `maki` import module: each reads its arguments from the app's
+/// memory, calls the `Session`, and writes back what it returns. A function the app hasn't
+/// the permission for traps (maki refuses an app that imports one without).
 fn link(linker: &mut Linker<State>) -> Result<(), Error> {
     const M: &str = "maki";
     linker.func_wrap(M, "screen_width", || WIDTH as i32)?;
     linker.func_wrap(M, "screen_height", || HEIGHT as i32)?;
     linker.func_wrap(M, "clear", |mut c: Caller<'_, State>, col: i32| -> Result<(), Error> {
         let col = color(col)?;
-        c.data_mut().canvas.clear(col);
+        c.data_mut().session.canvas.clear(col);
         Ok(())
     })?;
     linker.func_wrap(M, "pixel", |mut c: Caller<'_, State>, x: i32, y: i32, col: i32| -> Result<(), Error> {
         let col = color(col)?;
-        c.data_mut().canvas.pixel(x, y, col);
+        c.data_mut().session.canvas.pixel(x, y, col);
         Ok(())
     })?;
     linker.func_wrap(
@@ -433,7 +416,7 @@ fn link(linker: &mut Linker<State>) -> Result<(), Error> {
         "line",
         |mut c: Caller<'_, State>, x0: i32, y0: i32, x1: i32, y1: i32, col: i32| -> Result<(), Error> {
             let col = color(col)?;
-            c.data_mut().canvas.line(x0, y0, x1, y1, col);
+            c.data_mut().session.canvas.line(x0, y0, x1, y1, col);
             Ok(())
         },
     )?;
@@ -442,7 +425,7 @@ fn link(linker: &mut Linker<State>) -> Result<(), Error> {
         "rect",
         |mut c: Caller<'_, State>, x: i32, y: i32, w: i32, h: i32, col: i32, filled: i32| -> Result<(), Error> {
             let col = color(col)?;
-            c.data_mut().canvas.rect(x, y, w, h, col, filled != 0);
+            c.data_mut().session.canvas.rect(x, y, w, h, col, filled != 0);
             Ok(())
         },
     )?;
@@ -452,7 +435,7 @@ fn link(linker: &mut Linker<State>) -> Result<(), Error> {
         |mut c: Caller<'_, State>, x: i32, y: i32, ptr: i32, len: i32, sty: i32, col: i32| -> Result<i32, Error> {
             let (sty, col) = (style(sty)?, color(col)?);
             let s = read_str(&c, ptr, len, MAX_TEXT, "text")?;
-            Ok(c.data_mut().canvas.text(x, y, &s, sty, col))
+            Ok(c.data_mut().session.canvas.text(x, y, &s, sty, col))
         },
     )?;
     linker.func_wrap(M, "text_width", |c: Caller<'_, State>, ptr: i32, len: i32, sty: i32| -> Result<i32, Error> {
@@ -472,7 +455,7 @@ fn link(linker: &mut Linker<State>) -> Result<(), Error> {
                 return Err(trap(format_args!("blit: {w}x{h} is bigger than {MAX_BLIT}x{MAX_BLIT}")));
             }
             let rows = read(&c, ptr, (w + 7) / 8 * h, usize::MAX, "blit")?;
-            c.data_mut().canvas.blit(x, y, w, h, &rows, col);
+            c.data_mut().session.canvas.blit(x, y, w, h, &rows, col);
             Ok(())
         },
     )?;
@@ -481,46 +464,33 @@ fn link(linker: &mut Linker<State>) -> Result<(), Error> {
         "qr",
         |mut c: Caller<'_, State>, x: i32, y: i32, ptr: i32, len: i32, size: i32| -> Result<i32, Error> {
             let data = read(&c, ptr, len, MAX_QR, "qr")?;
-            Ok(c.data_mut().canvas.qr(x, y, &data, size).unwrap_or(TOO_BIG))
+            Ok(c.data_mut().session.canvas.qr(x, y, &data, size).unwrap_or(TOO_BIG))
         },
     )?;
-    linker.func_wrap(M, "present", |mut c: Caller<'_, State>| {
-        let State { platform, canvas, .. } = c.data_mut();
-        platform.present(canvas);
-    })?;
+    linker.func_wrap(M, "present", |mut c: Caller<'_, State>| c.data_mut().session.present())?;
     linker.func_wrap(M, "wait", |mut c: Caller<'_, State>, timeout_ms: i32| -> Result<i32, Error> {
         let st = c.data_mut();
-        if st.exit_sent {
+        let Some(event) = st.session.wait(timeout_ms) else {
             st.exited = true;
             return Err(trap("waited after being told to exit"));
-        }
-        let timeout = (timeout_ms >= 0).then(|| Duration::from_millis(timeout_ms as u64));
-        let event = st.platform.wait(timeout);
-        st.exit_sent = event == Event::Exit;
-        let fuel = st.limits.fuel;
+        };
+        let fuel = st.session.limits.fuel;
         c.set_fuel(fuel)?;
-        Ok(event.code())
+        Ok(event)
     })?;
     linker.func_wrap(M, "menu", |mut c: Caller<'_, State>, ptr: i32, len: i32| -> Result<i32, Error> {
-        let s = read_str(&c, ptr, len, (MAX_MENU_ITEM + 1) * MAX_MENU_ITEMS, "menu")?;
-        let items: Vec<String> = if s.is_empty() { vec![] } else { s.split('\n').map(String::from).collect() };
-        if items.len() > MAX_MENU_ITEMS
-            || items.iter().any(|i| i.trim().is_empty() || i.len() > MAX_MENU_ITEM || i.chars().any(|c| c.is_control()))
-        {
-            return Ok(INVALID);
-        }
-        c.data_mut().platform.set_menu(&items);
-        Ok(0)
+        let s = read_str(&c, ptr, len, MENU_TEXT, "menu")?;
+        Ok(c.data_mut().session.menu(&s))
     })?;
     linker.func_wrap(
         M,
         "storage_get",
         |mut c: Caller<'_, State>, kptr: i32, klen: i32, vptr: i32, vcap: i32| -> Result<i32, Error> {
             let key = read_str(&c, kptr, klen, MAX_KEY, "storage_get")?;
-            if !key_ok(&key) {
-                return Ok(INVALID);
-            }
-            let Some(value) = c.data_mut().platform.storage_get(&key) else { return Ok(NOT_FOUND) };
+            let value = match c.data_mut().session.storage_get(&key) {
+                Ok(v) => v,
+                Err(code) => return Ok(code),
+            };
             let n = value.len().min(vcap.max(0) as usize);
             write(&mut c, vptr, &value[..n], "storage_get")?;
             Ok(value.len() as i32)
@@ -531,78 +501,46 @@ fn link(linker: &mut Linker<State>) -> Result<(), Error> {
         "storage_set",
         |mut c: Caller<'_, State>, kptr: i32, klen: i32, vptr: i32, vlen: i32| -> Result<i32, Error> {
             let key = read_str(&c, kptr, klen, MAX_KEY, "storage_set")?;
-            if !key_ok(&key) {
+            if !session::key_ok(&key) {
                 return Ok(INVALID);
             }
             if vlen as u32 as usize > MAX_VALUE {
                 return Ok(TOO_BIG);
             }
             let value = read(&c, vptr, vlen, MAX_VALUE, "storage_set")?;
-            let st = c.data_mut();
-            let quota = st.limits.storage;
-            let sizes = st.sizes();
-            let used: usize = sizes.iter().map(|(k, v)| k.len() + v).sum();
-            let old = sizes.get(&key).map(|v| key.len() + v).unwrap_or(0);
-            if used - old + key.len() + value.len() > quota {
-                return Ok(FULL);
-            }
-            if st.platform.storage_set(&key, &value).is_err() {
-                return Ok(FAILED);
-            }
-            st.sizes().insert(key, value.len());
-            Ok(0)
+            Ok(c.data_mut().session.storage_set(&key, &value))
         },
     )?;
     linker.func_wrap(M, "storage_delete", |mut c: Caller<'_, State>, kptr: i32, klen: i32| -> Result<i32, Error> {
         let key = read_str(&c, kptr, klen, MAX_KEY, "storage_delete")?;
-        if !key_ok(&key) {
-            return Ok(INVALID);
-        }
-        let st = c.data_mut();
-        st.sizes();
-        if !st.platform.storage_delete(&key) {
-            return Ok(NOT_FOUND);
-        }
-        st.sizes().remove(&key);
-        Ok(0)
+        Ok(c.data_mut().session.storage_delete(&key))
     })?;
     linker.func_wrap(
         M,
         "storage_key",
         |mut c: Caller<'_, State>, index: i32, ptr: i32, cap: i32| -> Result<i32, Error> {
-            let Some(key) = c.data_mut().sizes().keys().nth(index.max(0) as usize).cloned() else {
-                return Ok(NOT_FOUND);
+            let key = match c.data_mut().session.storage_key(index) {
+                Ok(k) => k,
+                Err(code) => return Ok(code),
             };
-            if index < 0 {
-                return Ok(NOT_FOUND);
-            }
             let n = key.len().min(cap.max(0) as usize);
             write(&mut c, ptr, &key.as_bytes()[..n], "storage_key")?;
             Ok(key.len() as i32)
         },
     )?;
-    linker.func_wrap(M, "millis", |c: Caller<'_, State>| -> i64 {
-        let st = c.data();
-        st.platform.millis().saturating_sub(st.started) as i64
-    })?;
-    linker.func_wrap(M, "unix_time", |c: Caller<'_, State>| -> i64 {
-        c.data().platform.unix_time().map(|(t, _)| t as i64).unwrap_or(-1)
-    })?;
-    linker.func_wrap(M, "time_verified", |c: Caller<'_, State>| -> i32 {
-        matches!(c.data().platform.unix_time(), Some((_, true))) as i32
-    })?;
+    linker.func_wrap(M, "millis", |c: Caller<'_, State>| -> i64 { c.data().session.millis() })?;
+    linker.func_wrap(M, "unix_time", |c: Caller<'_, State>| -> i64 { c.data().session.unix_time() })?;
+    linker.func_wrap(M, "time_verified", |c: Caller<'_, State>| -> i32 { c.data().session.time_verified() })?;
     linker.func_wrap(M, "random", |mut c: Caller<'_, State>, ptr: i32, len: i32| -> Result<(), Error> {
         let len = len as u32 as usize;
-        if len > MAX_RANDOM {
+        let Ok(buf) = c.data_mut().session.random(len) else {
             return Err(trap(format_args!("random: {len} bytes is more than {MAX_RANDOM}")));
-        }
-        let mut buf = vec![0u8; len];
-        c.data_mut().platform.random(&mut buf);
+        };
         write(&mut c, ptr, &buf, "random")
     })?;
     linker.func_wrap(M, "log", |mut c: Caller<'_, State>, ptr: i32, len: i32| -> Result<(), Error> {
         let line = read_str(&c, ptr, len.min(MAX_LOG as i32), MAX_LOG, "log")?;
-        c.data_mut().platform.log(&line);
+        c.data_mut().session.log(&line);
         Ok(())
     })?;
     linker.func_wrap(M, "abort", |mut c: Caller<'_, State>, ptr: i32, len: i32| -> Result<(), Error> {
@@ -610,28 +548,25 @@ fn link(linker: &mut Linker<State>) -> Result<(), Error> {
         c.data_mut().aborted = Some(message);
         Err(trap("aborted"))
     })?;
-    // the ask permission: "question\ndetail\nyes\nno" (the last three optional), and how long
-    // to wait (0 or less: 30 s; at most 120). 0 yes, 1 no, 2 no answer.
     linker.func_wrap(M, "ask", |mut c: Caller<'_, State>, ptr: i32, len: i32, timeout_s: i32| -> Result<i32, Error> {
         permitted(&c, Permission::Ask, "ask")?;
-        let most = MAX_QUESTION + MAX_DETAIL + 2 * MAX_ANSWER_LABEL + 3;
-        let text = read_str(&c, ptr, len, most, "ask")?;
-        let Some(ask) = parse_ask(&text, timeout_s) else { return Ok(INVALID) };
-        let answer = c.data_mut().platform.ask(&ask);
+        let text = read_str(&c, ptr, len, ASK_TEXT, "ask")?;
+        let answer = c.data_mut().session.ask(&text, timeout_s);
         // the owner's time isn't the app's work
-        let fuel = c.data().limits.fuel;
+        let fuel = c.data().session.limits.fuel;
         c.set_fuel(fuel)?;
-        Ok(answer.code())
+        Ok(answer)
     })?;
-    // the keys permission: the app's 32-byte secret for a label, and the Ed25519 key made from
-    // it, which maki holds and signs with, so the app needn't carry the key itself
     linker.func_wrap(
         M,
         "key_secret",
         |mut c: Caller<'_, State>, lptr: i32, llen: i32, out: i32| -> Result<i32, Error> {
             permitted(&c, Permission::Keys, "key_secret")?;
-            let Some(label) = label(&c, lptr, llen, "key_secret")? else { return Ok(INVALID) };
-            let Some(mut secret) = c.data_mut().platform.app_secret(&label) else { return Ok(FAILED) };
+            let label = read_str(&c, lptr, llen, MAX_LABEL, "key_secret")?;
+            let mut secret = match c.data_mut().session.key_secret(&label) {
+                Ok(s) => s,
+                Err(code) => return Ok(code),
+            };
             let written = write(&mut c, out, &secret, "key_secret");
             zeroize::Zeroize::zeroize(&mut secret);
             written.map(|_| 0)
@@ -642,9 +577,11 @@ fn link(linker: &mut Linker<State>) -> Result<(), Error> {
         "key_public",
         |mut c: Caller<'_, State>, lptr: i32, llen: i32, out: i32| -> Result<i32, Error> {
             permitted(&c, Permission::Keys, "key_public")?;
-            let Some(label) = label(&c, lptr, llen, "key_public")? else { return Ok(INVALID) };
-            let Some(key) = signing_key(c.data_mut().platform.as_mut(), &label) else { return Ok(FAILED) };
-            write(&mut c, out, &key.verifying_key().to_bytes(), "key_public").map(|_| 0)
+            let label = read_str(&c, lptr, llen, MAX_LABEL, "key_public")?;
+            match c.data_mut().session.key_public(&label) {
+                Ok(key) => write(&mut c, out, &key, "key_public").map(|_| 0),
+                Err(code) => Ok(code),
+            }
         },
     )?;
     linker.func_wrap(
@@ -652,32 +589,31 @@ fn link(linker: &mut Linker<State>) -> Result<(), Error> {
         "key_sign",
         |mut c: Caller<'_, State>, lptr: i32, llen: i32, mptr: i32, mlen: i32, out: i32| -> Result<i32, Error> {
             permitted(&c, Permission::Keys, "key_sign")?;
-            let Some(label) = label(&c, lptr, llen, "key_sign")? else { return Ok(INVALID) };
+            let label = read_str(&c, lptr, llen, MAX_LABEL, "key_sign")?;
             if mlen as u32 as usize > MAX_SIGN {
                 return Ok(TOO_BIG);
             }
             let message = read(&c, mptr, mlen, MAX_SIGN, "key_sign")?;
-            let Some(key) = signing_key(c.data_mut().platform.as_mut(), &label) else { return Ok(FAILED) };
-            write(&mut c, out, &key.sign(&message).to_bytes(), "key_sign").map(|_| 0)
+            match c.data_mut().session.key_sign(&label, &message) {
+                Ok(sig) => write(&mut c, out, &sig, "key_sign").map(|_| 0),
+                Err(code) => Ok(code),
+            }
         },
     )?;
-    // the keyboard permission: printable ASCII, newlines and tabs
     linker.func_wrap(M, "type_text", |mut c: Caller<'_, State>, ptr: i32, len: i32| -> Result<i32, Error> {
         permitted(&c, Permission::Keyboard, "type_text")?;
         if len as u32 as usize > MAX_TYPE {
             return Ok(TOO_BIG);
         }
         let text = read_str(&c, ptr, len, MAX_TYPE, "type_text")?;
-        if !text.chars().all(|ch| ch == '\n' || ch == '\t' || (' '..='~').contains(&ch)) {
-            return Ok(INVALID);
-        }
-        Ok(if c.data_mut().platform.type_text(&text) { 0 } else { FAILED })
+        Ok(c.data_mut().session.type_text(&text))
     })?;
-    // the link permission: the message the last Message event brought, copied into the app's
-    // buffer as far as it fits (its whole length returned), and the app's answer to it
     linker.func_wrap(M, "link_read", |mut c: Caller<'_, State>, ptr: i32, cap: i32| -> Result<i32, Error> {
         permitted(&c, Permission::Link, "link_read")?;
-        let Some(message) = c.data_mut().platform.message() else { return Ok(NOT_FOUND) };
+        let message = match c.data_mut().session.link_read() {
+            Ok(m) => m,
+            Err(code) => return Ok(code),
+        };
         let n = message.len().min(cap.max(0) as usize);
         write(&mut c, ptr, &message[..n], "link_read")?;
         Ok(message.len() as i32)
@@ -688,25 +624,28 @@ fn link(linker: &mut Linker<State>) -> Result<(), Error> {
             return Ok(TOO_BIG);
         }
         let reply = read(&c, ptr, len, MAX_MESSAGE, "link_reply")?;
-        Ok(if c.data_mut().platform.reply(&reply) { 0 } else { NOT_FOUND })
+        Ok(c.data_mut().session.link_reply(&reply))
     })?;
-    // the camera permission: a QR code's text from maki's scanner, copied into the app's
-    // buffer as far as it fits (its whole length returned); NOT_FOUND if there was none
     linker.func_wrap(M, "camera_scan_qr", |mut c: Caller<'_, State>, ptr: i32, cap: i32| -> Result<i32, Error> {
         permitted(&c, Permission::Camera, "camera_scan_qr")?;
-        let text = c.data_mut().platform.scan_qr();
+        let text = c.data_mut().session.scan_qr();
         // the owner's time isn't the app's work
-        let fuel = c.data().limits.fuel;
+        let fuel = c.data().session.limits.fuel;
         c.set_fuel(fuel)?;
-        let Some(text) = text else { return Ok(NOT_FOUND) };
+        let text = match text {
+            Ok(t) => t,
+            Err(code) => return Ok(code),
+        };
         let n = text.len().min(cap.max(0) as usize);
         write(&mut c, ptr, &text.as_bytes()[..n], "camera_scan_qr")?;
         Ok(text.len() as i32)
     })?;
-    // the motion permission: x, y and z (milli-g), three little-endian i16s
     linker.func_wrap(M, "motion_read", |mut c: Caller<'_, State>, ptr: i32| -> Result<i32, Error> {
         permitted(&c, Permission::Motion, "motion_read")?;
-        let Some(xyz) = c.data_mut().platform.motion() else { return Ok(FAILED) };
+        let xyz = match c.data_mut().session.motion() {
+            Ok(v) => v,
+            Err(code) => return Ok(code),
+        };
         let mut bytes = [0u8; 6];
         for (i, v) in xyz.iter().enumerate() {
             bytes[i * 2..i * 2 + 2].copy_from_slice(&v.to_le_bytes());
@@ -783,16 +722,10 @@ fn instantiate(loaded: &Loaded, platform: Box<dyn Platform>) -> Result<(Store<St
     let Loaded { engine, module, limits } = loaded;
     let limits = *limits;
     let mut t = now();
-    let started = platform.millis();
     let state = State {
-        platform,
-        canvas: Canvas::default(),
+        session: Session::new(platform, limits),
         memory: None,
         limiter: StoreLimitsBuilder::new().memory_size(limits.memory).instances(1).memories(1).tables(4).build(),
-        limits,
-        sizes: None,
-        started,
-        exit_sent: false,
         exited: false,
         aborted: None,
     };

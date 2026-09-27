@@ -765,3 +765,22 @@ fn the_camera_scans_qr_codes_and_motion_reads_the_accelerometer() {
     run(&module(wat), Box::new(Script(record.clone())), with(&[Permission::Motion]));
     assert_eq!(record.borrow().storage["m"], [12, 0, 0x2c, 0xfc, 0xe8, 0x03]);
 }
+
+/// A native app's requests go straight to a `Session`, whatever their size (no WebAssembly
+/// memory bounds them): too long a menu or ask is refused before it's split up.
+#[test]
+fn a_session_refuses_text_too_long_before_splitting_it() {
+    let record = Rc::new(RefCell::new(Record::default()));
+    let mut session = Session::new(Box::new(Script(record.clone())), with(&[maki_bundle::Permission::Ask]));
+    assert_eq!(session.menu(&"Go\n".repeat(200_000)), INVALID);
+    assert_eq!(session.ask(&"Sure?\n".repeat(200_000), 30), TOO_BIG);
+    session.log(&"é".repeat(10_000));
+    {
+        let r = record.borrow();
+        assert!(r.menu.is_empty() && r.asks.is_empty());
+        assert!(r.logs[0].len() <= MAX_LOG && r.logs[0].chars().all(|c| c == 'é'));
+    }
+    // within the bounds, as before
+    assert_eq!(session.menu(&["Go"; MAX_MENU_ITEMS].join("\n")), 0);
+    assert_eq!(record.borrow().menu.len(), MAX_MENU_ITEMS);
+}

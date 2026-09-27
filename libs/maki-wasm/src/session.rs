@@ -1,0 +1,275 @@
+//! maki's functions for an app, whatever runs it: the WebAssembly host's imports call these,
+//! and so does the app service a native app talks to. Each takes and returns plain values and
+//! keeps the same rules: the limits, what it checks of what it's given, and the permissions.
+
+use std::collections::BTreeMap;
+use std::time::Duration;
+
+use ed25519_dalek::Signer;
+use maki_bundle::Permission;
+
+use crate::*;
+
+/// What a function returns to an app without the permission it needs. A WebAssembly app can't
+/// import it at all (maki refuses the app); a native app, which can call anything, gets this.
+pub const REFUSED: i32 = -6;
+
+/// One app's run: what it runs on, what it draws, what it may use.
+pub struct Session {
+    pub platform: Box<dyn Platform>,
+    pub canvas: Canvas,
+    pub limits: Limits,
+    /// Stored keys and the length of each value, read on first use, for the quota.
+    sizes: Option<BTreeMap<String, usize>>,
+    started: u64,
+    /// A wait returned Exit: waiting again means the app didn't.
+    pub exit_sent: bool,
+}
+
+impl Session {
+    pub fn new(platform: Box<dyn Platform>, limits: Limits) -> Session {
+        let started = platform.millis();
+        Session { platform, canvas: Canvas::default(), limits, sizes: None, started, exit_sent: false }
+    }
+
+    fn sizes(&mut self) -> &mut BTreeMap<String, usize> {
+        if self.sizes.is_none() {
+            let mut sizes = BTreeMap::new();
+            for key in self.platform.storage_keys() {
+                let len = self.platform.storage_get(&key).map(|v| v.len()).unwrap_or(0);
+                sizes.insert(key, len);
+            }
+            self.sizes = Some(sizes);
+        }
+        self.sizes.as_mut().unwrap()
+    }
+
+    pub fn permitted(&self, p: Permission) -> bool { self.limits.granted.has(p) }
+
+    fn needs(&self, p: Permission) -> Result<(), i32> { if self.permitted(p) { Ok(()) } else { Err(REFUSED) } }
+
+    pub fn present(&mut self) { self.platform.present(&self.canvas) }
+
+    /// The next event's code (`Event::code`), or `None` if the app was told to exit already:
+    /// it should have returned.
+    pub fn wait(&mut self, timeout_ms: i32) -> Option<i32> {
+        if self.exit_sent {
+            return None;
+        }
+        let timeout = (timeout_ms >= 0).then(|| Duration::from_millis(timeout_ms as u64));
+        let event = self.platform.wait(timeout);
+        self.exit_sent = event == Event::Exit;
+        Some(event.code())
+    }
+
+    /// The app's own menu items, a line each (none: empty).
+    pub fn menu(&mut self, text: &str) -> i32 {
+        // before it's split: a native app's text is as long as it likes
+        if text.len() > MENU_TEXT {
+            return INVALID;
+        }
+        let items: Vec<String> = if text.is_empty() { vec![] } else { text.split('\n').map(String::from).collect() };
+        if items.len() > MAX_MENU_ITEMS
+            || items.iter().any(|i| i.trim().is_empty() || i.len() > MAX_MENU_ITEM || i.chars().any(|c| c.is_control()))
+        {
+            return INVALID;
+        }
+        self.platform.set_menu(&items);
+        0
+    }
+
+    pub fn storage_get(&mut self, key: &str) -> Result<Vec<u8>, i32> {
+        if !key_ok(key) {
+            return Err(INVALID);
+        }
+        self.platform.storage_get(key).ok_or(NOT_FOUND)
+    }
+
+    pub fn storage_set(&mut self, key: &str, value: &[u8]) -> i32 {
+        if !key_ok(key) {
+            return INVALID;
+        }
+        if value.len() > MAX_VALUE {
+            return TOO_BIG;
+        }
+        let quota = self.limits.storage;
+        let sizes = self.sizes();
+        let used: usize = sizes.iter().map(|(k, v)| k.len() + v).sum();
+        let old = sizes.get(key).map(|v| key.len() + v).unwrap_or(0);
+        if used - old + key.len() + value.len() > quota {
+            return FULL;
+        }
+        if self.platform.storage_set(key, value).is_err() {
+            return FAILED;
+        }
+        self.sizes().insert(key.to_string(), value.len());
+        0
+    }
+
+    pub fn storage_delete(&mut self, key: &str) -> i32 {
+        if !key_ok(key) {
+            return INVALID;
+        }
+        self.sizes();
+        if !self.platform.storage_delete(key) {
+            return NOT_FOUND;
+        }
+        self.sizes().remove(key);
+        0
+    }
+
+    /// The stored key at `index`, in order.
+    pub fn storage_key(&mut self, index: i32) -> Result<String, i32> {
+        if index < 0 {
+            return Err(NOT_FOUND);
+        }
+        self.sizes().keys().nth(index as usize).cloned().ok_or(NOT_FOUND)
+    }
+
+    /// Milliseconds since the app started.
+    pub fn millis(&self) -> i64 { self.platform.millis().saturating_sub(self.started) as i64 }
+
+    /// Unix seconds, or -1 if maki's clock isn't set.
+    pub fn unix_time(&self) -> i64 { self.platform.unix_time().map(|(t, _)| t as i64).unwrap_or(-1) }
+
+    pub fn time_verified(&self) -> i32 { matches!(self.platform.unix_time(), Some((_, true))) as i32 }
+
+    pub fn random(&mut self, len: usize) -> Result<Vec<u8>, i32> {
+        if len > MAX_RANDOM {
+            return Err(TOO_BIG);
+        }
+        let mut buf = vec![0u8; len];
+        self.platform.random(&mut buf);
+        Ok(buf)
+    }
+
+    pub fn log(&mut self, line: &str) {
+        let mut end = line.len().min(MAX_LOG);
+        while !line.is_char_boundary(end) {
+            end -= 1;
+        }
+        self.platform.log(&line[..end]);
+    }
+
+    /// The ask permission: "question\ndetail\nyes\nno" (the last three optional), and how long
+    /// to wait (0 or less: 30 s; at most 120). 0 yes, 1 no, 2 no answer.
+    pub fn ask(&mut self, text: &str, timeout_s: i32) -> i32 {
+        if let Err(e) = self.needs(Permission::Ask) {
+            return e;
+        }
+        if text.len() > ASK_TEXT {
+            return TOO_BIG;
+        }
+        let Some(ask) = parse_ask(text, timeout_s) else { return INVALID };
+        self.platform.ask(&ask).code()
+    }
+
+    fn label_ok(label: &str) -> bool { label.len() <= MAX_LABEL && !label.chars().any(|ch| ch.is_control()) }
+
+    /// The keys permission: the app's 32-byte secret for a label.
+    pub fn key_secret(&mut self, label: &str) -> Result<[u8; 32], i32> {
+        self.needs(Permission::Keys)?;
+        if !Self::label_ok(label) {
+            return Err(INVALID);
+        }
+        self.platform.app_secret(label).ok_or(FAILED)
+    }
+
+    /// The Ed25519 key made from the app's secret for a label: its public half.
+    pub fn key_public(&mut self, label: &str) -> Result<[u8; 32], i32> {
+        self.needs(Permission::Keys)?;
+        if !Self::label_ok(label) {
+            return Err(INVALID);
+        }
+        let key = signing_key(self.platform.as_mut(), label).ok_or(FAILED)?;
+        Ok(key.verifying_key().to_bytes())
+    }
+
+    /// A signature by that key, which maki holds, so the app needn't carry it.
+    pub fn key_sign(&mut self, label: &str, message: &[u8]) -> Result<[u8; 64], i32> {
+        self.needs(Permission::Keys)?;
+        if !Self::label_ok(label) {
+            return Err(INVALID);
+        }
+        if message.len() > MAX_SIGN {
+            return Err(TOO_BIG);
+        }
+        let key = signing_key(self.platform.as_mut(), label).ok_or(FAILED)?;
+        Ok(key.sign(message).to_bytes())
+    }
+
+    /// The keyboard permission: printable ASCII, newlines and tabs.
+    pub fn type_text(&mut self, text: &str) -> i32 {
+        if let Err(e) = self.needs(Permission::Keyboard) {
+            return e;
+        }
+        if text.len() > MAX_TYPE {
+            return TOO_BIG;
+        }
+        if !text.chars().all(|ch| ch == '\n' || ch == '\t' || (' '..='~').contains(&ch)) {
+            return INVALID;
+        }
+        if self.platform.type_text(text) { 0 } else { FAILED }
+    }
+
+    /// The link permission: the message the last Message event brought.
+    pub fn link_read(&mut self) -> Result<Vec<u8>, i32> {
+        self.needs(Permission::Link)?;
+        self.platform.message().ok_or(NOT_FOUND)
+    }
+
+    /// And the app's answer to it.
+    pub fn link_reply(&mut self, reply: &[u8]) -> i32 {
+        if let Err(e) = self.needs(Permission::Link) {
+            return e;
+        }
+        if reply.len() > MAX_MESSAGE {
+            return TOO_BIG;
+        }
+        if self.platform.reply(reply) { 0 } else { NOT_FOUND }
+    }
+
+    /// The camera permission: a QR code's text from maki's scanner.
+    pub fn scan_qr(&mut self) -> Result<String, i32> {
+        self.needs(Permission::Camera)?;
+        self.platform.scan_qr().ok_or(NOT_FOUND)
+    }
+
+    /// The motion permission: x, y and z, in milli-g.
+    pub fn motion(&mut self) -> Result<[i16; 3], i32> {
+        self.needs(Permission::Motion)?;
+        self.platform.motion().ok_or(FAILED)
+    }
+}
+
+pub(crate) fn key_ok(key: &str) -> bool { !key.is_empty() && key.len() <= MAX_KEY && !key.chars().any(|c| c.is_control()) }
+
+/// "question\ndetail\nyes\nno", the last three optional, as `ask` takes it.
+fn parse_ask(text: &str, timeout_s: i32) -> Option<Ask> {
+    let parts: Vec<&str> = text.split('\n').collect();
+    if parts.len() > 4 || parts.iter().any(|p| p.chars().any(|ch| ch.is_control())) {
+        return None;
+    }
+    let part = |i: usize| parts.get(i).copied().unwrap_or("").to_string();
+    let ask = Ask {
+        question: part(0),
+        detail: part(1),
+        yes: part(2),
+        no: part(3),
+        timeout_s: if timeout_s <= 0 { ASK_TIMEOUT_S } else { (timeout_s as u32).clamp(5, MAX_ASK_TIMEOUT_S) },
+    };
+    let fits = !ask.question.trim().is_empty()
+        && ask.question.len() <= MAX_QUESTION
+        && ask.detail.len() <= MAX_DETAIL
+        && ask.yes.len() <= MAX_ANSWER_LABEL
+        && ask.no.len() <= MAX_ANSWER_LABEL;
+    fits.then_some(ask)
+}
+
+/// The app's Ed25519 key for `label`: its secret for that label is the key's seed.
+fn signing_key(platform: &mut dyn Platform, label: &str) -> Option<ed25519_dalek::SigningKey> {
+    let mut secret = platform.app_secret(label)?;
+    let key = ed25519_dalek::SigningKey::from_bytes(&secret);
+    zeroize::Zeroize::zeroize(&mut secret);
+    Some(key)
+}

@@ -792,7 +792,7 @@ fn run(ctx: &Rc<Ctx>, slot: usize, message: Option<(xous::MessageEnvelope, Vec<u
     let why = match &stop {
         Stop::Finished | Stop::Exited => None,
         Stop::NotResponding => Some("it stopped responding".to_string()),
-        Stop::Aborted(why) => Some(why.clone()),
+        Stop::Aborted(why) | Stop::Failed(why) => Some(why.clone()),
         Stop::Crashed(why) => Some(format!("it crashed: {why}")),
     };
     if st.front {
