@@ -25,6 +25,10 @@ pub enum HostOp {
     /// Memory message (mutable lend) carrying an `AppMessage`, answered with the app's answer
     /// (the link permission). The host starts the app without the screen if it isn't running.
     Message = 5,
+    /// Memory message (mutable lend) carrying a `StoreUpdate`: a piece of one of the maki store's
+    /// records (a root or a revocation list), in order. The last is checked and, if it's newer
+    /// and signed as it must be, kept. Empty (`total` 0): just what maki has.
+    StoreUpdate = 6,
 }
 
 /// Each installed app's key, focus and menu opcodes: `APP_OPS + 4 * slot` and on.
@@ -96,6 +100,26 @@ pub struct AppMessage {
     pub result: u32,
 }
 
+/// A piece of a store record, and on the way back what maki has: the root's version, and the
+/// revocation list's version and expiry (0 for none).
+#[derive(Debug, Clone, Default, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
+pub struct StoreUpdate {
+    pub total: u32,
+    pub offset: u32,
+    pub data: Vec<u8>,
+    /// Set by the host: whether this was the last piece.
+    pub done: bool,
+    pub result: u32,
+    /// Why maki refused it.
+    pub reason: String,
+    pub root_version: u32,
+    pub revocations_version: u32,
+    pub revocations_expires: u64,
+}
+
+/// The biggest store record maki takes.
+pub const MAX_STORE_RECORD: usize = 64 * 1024;
+
 /// The most apps maki keeps.
 pub const MAX_APPS: usize = 32;
 
@@ -157,6 +181,17 @@ impl AppHost {
             return failed;
         }
         buf.to_original::<AppMessage, _>().unwrap_or(failed)
+    }
+
+    /// Hands over a piece of a store record; the last is checked and kept if it's newer.
+    pub fn store_update(&self, total: u32, offset: u32, data: Vec<u8>) -> StoreUpdate {
+        let failed = StoreUpdate { result: RESULT_FAILED, done: true, ..Default::default() };
+        let request = StoreUpdate { total, offset, data, result: RESULT_FAILED, ..Default::default() };
+        let mut buf = Buffer::new(8192);
+        if buf.replace(request).is_err() || buf.lend_mut(self.conn, HostOp::StoreUpdate.to_u32().unwrap()).is_err() {
+            return failed;
+        }
+        buf.to_original::<StoreUpdate, _>().unwrap_or(failed)
     }
 
     pub fn set_time_state(&self, state: u8) {

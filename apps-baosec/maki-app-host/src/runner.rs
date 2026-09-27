@@ -248,7 +248,26 @@ impl Device {
                 "back",
             ),
             InfoPage::From => {
-                if self.sideloaded {
+                let revoked = self.ctx.store.revocations().and_then(|r| {
+                    r.check(&self.id, self.record.version, &self.record.developer).map(String::from)
+                });
+                if let Some(why) = revoked {
+                    let words: Vec<String> = why.split_whitespace().map(String::from).collect();
+                    // three short lines of why, the most App info shows
+                    let mut lines = vec![String::new()];
+                    for w in words {
+                        let last = lines.last_mut().unwrap();
+                        if last.len() + w.len() + 1 > 20 && !last.is_empty() {
+                            lines.push(w);
+                        } else {
+                            if !last.is_empty() {
+                                last.push(' ');
+                            }
+                            last.push_str(&w);
+                        }
+                    }
+                    ("Revoked", "by the maki store".into(), lines, "back")
+                } else if self.sideloaded {
                     ("Where from", "Sideloaded".into(), vec!["nobody has reviewed it".into()], "back")
                 } else {
                     ("Where from", "maki store".into(), vec!["reviewed".into()], "back")
@@ -696,6 +715,25 @@ fn run(ctx: &Rc<Ctx>, slot: usize, message: Option<(xous::MessageEnvelope, Vec<u
     if headless && !may_link {
         refuse(RESULT_REFUSED);
         return None;
+    }
+    // revoked by the store since it was installed: never in the background, and opened only if
+    // the owner says so, each time
+    let revoked = ctx
+        .store
+        .revocations()
+        .and_then(|r| r.check(&info.id, manifest.version, &record.developer).map(String::from));
+    if let Some(why) = revoked {
+        log::warn!("{} is revoked: {why}", info.id);
+        if headless {
+            refuse(RESULT_REFUSED);
+            return None;
+        }
+        let answer =
+            ctx.launcher.review(&info.name, "Revoked by the store", &why, Vec::new(), "open anyway", "don't", ASK_TIMEOUT_S);
+        if !matches!(answer, Ok(Answer::Allowed(_))) {
+            ctx.launcher.home().ok();
+            return None;
+        }
     }
     log::info!("{} ready to run ({} ms){}", info.id, crate::tt().elapsed_ms() - started, if headless { ", for a message" } else { "" });
     let limits = app.limits;

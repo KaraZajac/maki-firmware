@@ -26,7 +26,7 @@ fn owner_says(ask: impl FnOnce(&Launcher) -> Result<Answer, xous::Error>) -> u32
     }
 }
 
-fn page(p: display::Page) -> Page { Page { heading: p.heading, value: p.value, mono: p.mono } }
+fn page(p: display::Page) -> Page { Page { heading: p.heading, value: p.value, mono: p.mono, prose: String::new() } }
 
 pub(crate) struct Eth {
     /// derived at first use while unlocked, by index

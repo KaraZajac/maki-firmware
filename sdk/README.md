@@ -150,6 +150,25 @@ Exit. An app can't draw over maki's bar.
 - Updates must be signed with the same developer key and have a higher version. Lose the key
   and you can't update your app: back it up.
 
+## The maki store
+
+Apps in the maki store are reviewed, built from their source by the store, and stamped: the
+store's catalogue key signs a stamp naming the bundle you signed (its hash, ID, version,
+developer key and permissions), which goes in the bundle after your signature. maki checks the
+stamp against the store's root before it says "maki store" on the install screen; everything
+else is sideloaded. An app from the store updates only from the store, and a stamped bundle is
+still yours: an update needs your key as well as a new stamp.
+
+The store builds each app from its source before stamping it: `maki reproduce APP.maki DIR`
+builds the app in DIR and checks that the bundle holds what that makes (its manifest, icon and
+code). Builds come out the same wherever they're made, given the same Rust: pin it with a
+`rust-toolchain.toml` beside your `maki.toml` so the store builds with yours.
+
+`maki inspect` says whether a bundle is stamped. The `maki store` commands are the store's own
+side (its keys, roots, stamps, revocation lists and index; `maki store` lists them), and
+DEVELOPMENT.md in the BAOKEY repo ("The maki store") says how they're used. Until the store
+opens, maki trusts a development store, which stamps these examples.
+
 ## Other languages
 
 Anything that compiles to wasm32 works: export `memory` and a `maki_main` taking and returning

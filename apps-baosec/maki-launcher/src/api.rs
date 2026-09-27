@@ -89,6 +89,8 @@ pub struct Page {
     pub value: String,
     /// in fixed-width type across as many lines as it takes: an address
     pub mono: String,
+    /// in maki's small type, words wrapped to fit, after `mono`: what something means, in words
+    pub prose: String,
 }
 
 /// The owner's decision on an `AskRequest`.

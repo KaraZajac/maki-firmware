@@ -12,7 +12,7 @@ use blitstr2::GlyphStyle;
 use xous_ipc::Buffer;
 
 use crate::api::{ANSWER_ALLOWED, ANSWER_DENIED, ANSWER_TIMED_OUT, ASK_APP_SIDELOADED, AskRequest};
-use crate::ui::{H, Key, LINE, SMALL_LINE, Screen};
+use crate::ui::{H, Key, LINE, SMALL_LINE, Screen, W};
 
 /// An ask shows its site in fixed-width type (8 pixels a character), 15 characters to a line,
 /// on three lines, or two when there's a list to pick from.
@@ -22,13 +22,67 @@ const SITE_LINES: usize = 3;
 /// was on screen before, mustn't answer it.
 const SETTLE_MS: u64 = 700;
 
+/// A line of a page: fixed-width, small prose, or the space between paragraphs.
+enum Row {
+    Mono(String),
+    Small(String),
+    Gap,
+}
+
+impl Row {
+    fn height(&self) -> isize {
+        match self {
+            Row::Mono(_) => LINE,
+            Row::Small(_) => SMALL_LINE,
+            Row::Gap => 4,
+        }
+    }
+}
+
 /// One thing an ask offers: the centre does it.
 enum Stop {
     /// a screen of what's being decided; the centre moves on
-    Page { heading: String, value: String, lines: Vec<String> },
+    Page { heading: String, value: String, rows: Vec<Row> },
     Choice(usize),
     Yes,
     No,
+}
+
+/// How wide a line of prose may be: the screen, less the text's margins, and a little room in
+/// case the display's text runs wider than the glyphs add up to.
+const PROSE_WIDTH: isize = W - 8;
+
+/// Prose in maki's small type, in lines that fit across the screen: at its own line breaks, then
+/// between words (a word too long for a line breaks where it has to).
+fn prose_lines(text: &str) -> Vec<String> {
+    let width = |s: &str| -> isize {
+        let w: isize = s.chars().filter_map(|c| blitstr2::small_glyph(c).ok()).map(|g| g.wide as isize + g.kern as isize).sum();
+        (w - 1).max(0)
+    };
+    let mut out = Vec::new();
+    for paragraph in text.split('\n') {
+        let mut line = String::new();
+        for word in paragraph.split(' ').filter(|w| !w.is_empty()) {
+            let trial = if line.is_empty() { word.to_string() } else { format!("{line} {word}") };
+            if width(&trial) <= PROSE_WIDTH {
+                line = trial;
+                continue;
+            }
+            if !line.is_empty() {
+                out.push(std::mem::take(&mut line));
+            }
+            for c in word.chars() {
+                line.push(c);
+                if width(&line) > PROSE_WIDTH && line.chars().count() > 1 {
+                    line.pop();
+                    out.push(std::mem::take(&mut line));
+                    line.push(c);
+                }
+            }
+        }
+        out.push(line);
+    }
+    out
 }
 
 /// Fixed-width text in lines that fit across the screen: at its own line breaks, then every
@@ -51,24 +105,37 @@ impl Stop {
     /// The stops of an ask, in order.
     fn of(req: &AskRequest, screen: &Screen) -> Vec<Stop> {
         let mut stops = Vec::new();
-        // lines of fixed-width text between the value and the bottom line, and without a value
+        // the space for text between the heading (or the value) and the bottom line
         let top = screen.bar + 4;
         let bottom = H - SMALL_LINE - 2;
-        let with_value = ((bottom - top - LINE - 2) / LINE).max(1) as usize;
-        let without = ((bottom - top) / LINE).max(1) as usize;
         for page in &req.pages {
-            let lines = mono_lines(&page.mono);
-            let first = if page.value.is_empty() { without } else { with_value };
-            let (now, mut rest) = lines.split_at(lines.len().min(first));
-            stops.push(Stop::Page { heading: page.heading.clone(), value: page.value.clone(), lines: now.to_vec() });
-            // what doesn't fit goes on screens of its own, under the same heading
-            let mut n = 2;
-            while !rest.is_empty() {
-                let (now, later) = rest.split_at(rest.len().min(without));
-                stops.push(Stop::Page { heading: format!("{} ({})", page.heading, n), value: String::new(), lines: now.to_vec() });
-                rest = later;
-                n += 1;
+            let mut rows: Vec<Row> = mono_lines(&page.mono).into_iter().map(Row::Mono).collect();
+            if !page.prose.is_empty() {
+                if !rows.is_empty() {
+                    rows.push(Row::Gap);
+                }
+                // an empty line between paragraphs is a gap, not a whole line
+                rows.extend(prose_lines(&page.prose).into_iter().map(|l| if l.is_empty() { Row::Gap } else { Row::Small(l) }));
             }
+            // as many rows as fit a screen, the value taking room on the first; what doesn't
+            // fit goes on screens of its own, under the same heading
+            let mut room = bottom - top - if page.value.is_empty() { 0 } else { LINE + 2 };
+            let mut screen_rows = Vec::new();
+            let mut n = 1;
+            for row in rows {
+                if row.height() > room && !screen_rows.is_empty() {
+                    let heading = if n == 1 { page.heading.clone() } else { format!("{} ({})", page.heading, n) };
+                    let value = if n == 1 { page.value.clone() } else { String::new() };
+                    stops.push(Stop::Page { heading, value, rows: std::mem::take(&mut screen_rows) });
+                    n += 1;
+                    room = bottom - top;
+                }
+                room -= row.height();
+                screen_rows.push(row);
+            }
+            let heading = if n == 1 { page.heading.clone() } else { format!("{} ({})", page.heading, n) };
+            let value = if n == 1 { page.value.clone() } else { String::new() };
+            stops.push(Stop::Page { heading, value, rows: screen_rows });
         }
         if req.choices.is_empty() {
             stops.push(Stop::Yes);
@@ -105,13 +172,20 @@ impl Prompt {
         let countdown = format!("{}s", self.remaining_s(now_ms));
         let mut y = screen.bar + 4;
 
-        if let Stop::Page { heading, value, lines } = &self.stops[self.selected] {
+        if let Stop::Page { heading, value, rows } = &self.stops[self.selected] {
             screen.titled_bar(heading, &countdown, linked);
             if !value.is_empty() {
                 screen.text(y, LINE, GlyphStyle::Bold, false, false, value);
                 y += LINE + 2;
             }
-            screen.text(y, LINE * lines.len() as isize + 2, GlyphStyle::Monospace, false, false, &lines.join("\n"));
+            for row in rows {
+                match row {
+                    Row::Mono(line) => screen.text(y, LINE, GlyphStyle::Monospace, false, false, line),
+                    Row::Small(line) => screen.text(y, SMALL_LINE, GlyphStyle::Small, false, false, line),
+                    Row::Gap => {}
+                }
+                y += row.height();
+            }
             screen.action_bar("next", true);
             screen.end();
             return;

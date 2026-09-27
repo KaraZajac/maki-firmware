@@ -1,7 +1,8 @@
 //! A host stand-in for maki: the real protocol logic behind a TCP socket.
 //!
 //!     cargo run -p maki-proto --features fake --example fake_maki -- \
-//!         [ADDR] [--deny | --ask] [--totp SITE=BASE32]... [--clock-verified] [--phrase "WORDS"]
+//!         [ADDR] [--deny | --ask] [--totp SITE=BASE32]... [--clock-verified] [--phrase "WORDS"] \
+//!         [--store-root FILE]
 //!
 //! ADDR defaults to 127.0.0.1:7878. Logins and TOTP secrets live in memory; SAVE_LOGIN adds to them.
 //! The Bitcoin wallet comes from `--phrase`, or else the BIP39 test phrase ("abandon" eleven times,
@@ -13,6 +14,8 @@
 //! maki's own screen. State survives reconnects, like a badge that stays plugged in. Installed apps
 //! answer APP_MESSAGE as on maki: each runs (with maki's own host code) without a screen, its
 //! asks answered as above, its keys from the phrase, until it's had nothing to do for a while.
+//! The maki store's records are checked as maki does, starting from the root the firmware
+//! carries, or the one in `--store-root` (a test store's).
 
 use std::io::{BufRead, Read, Write};
 use std::net::{TcpListener, TcpStream};
@@ -23,8 +26,8 @@ use hmac::{Hmac, Mac};
 use maki_btc::psbt::Psbt;
 use maki_btc::{display, wallet, Account, Network};
 use maki_proto::device::{
-    reply, AppEntry, Approval, Apps, Ask, Backup, Bitcoin, Device, Ethereum, Handled, Platform, TimeState, BACKUP_PIECE,
-    PSBT_PIECE, TX_PIECE,
+    reply, AppEntry, Approval, Apps, Ask, Backup, Bitcoin, Device, Ethereum, Handled, Platform, StoreState, TimeState,
+    BACKUP_PIECE, PSBT_PIECE, TX_PIECE,
 };
 use maki_proto::frame::{self, Deframer};
 use maki_proto::site;
@@ -68,13 +71,43 @@ struct Store {
     /// the backup being read out, and one coming in
     sealed: Vec<u8>,
     incoming: Vec<u8>,
-    /// installed apps by ID: the bundle, and whether its data goes in the backup
-    apps: std::collections::BTreeMap<String, (Vec<u8>, bool)>,
+    /// installed apps by ID
+    apps: std::collections::BTreeMap<String, Installed>,
     /// a bundle coming in
     app_incoming: Vec<u8>,
     /// each app's storage, by ID
     app_data: std::collections::BTreeMap<String, std::collections::BTreeMap<String, Vec<u8>>>,
+    /// the maki store's root maki trusts (set at start), its revocation list, and a record
+    /// coming in
+    store_root: Option<maki_store::Root>,
+    revocations: Option<maki_store::SignedRevocations>,
+    store_incoming: Vec<u8>,
 }
+
+#[derive(Clone)]
+struct Installed {
+    bundle: Vec<u8>,
+    /// whether its data goes in the backup
+    backup: bool,
+    /// its stamp checked out
+    from_store: bool,
+}
+
+impl Store {
+    fn root(&self) -> &maki_store::Root { self.store_root.as_ref().expect("the store root is set at start") }
+
+    fn store_state(&self) -> StoreState {
+        let list = self.revocations.as_ref().map(|r| &r.list);
+        StoreState {
+            root: self.root().version,
+            revocations: list.map(|l| l.version).unwrap_or(0),
+            revocations_expires: list.map(|l| l.expires).unwrap_or(0),
+        }
+    }
+}
+
+/// The store root the firmware carries: the development store's until the real one opens.
+const FIRST_ROOT: &[u8] = include_bytes!("../../maki-store/dev-store/roots/1.bin");
 
 /// Where an app's answer to a message goes.
 type ReplyTo = std::sync::mpsc::Sender<(Approval, Vec<u8>)>;
@@ -170,7 +203,9 @@ fn app_message(
     seed: [u8; 64],
     policy: Policy,
 ) -> (Approval, Vec<u8>) {
-    let Some((bundle, _)) = store.lock().unwrap().apps.get(app).cloned() else { return (Approval::NoMatch, Vec::new()) };
+    let Some(Installed { bundle, .. }) = store.lock().unwrap().apps.get(app).cloned() else {
+        return (Approval::NoMatch, Vec::new());
+    };
     let b = maki_bundle::read(&bundle).expect("installed bundles read");
     if !b.manifest.permissions.iter().any(|(p, _)| *p == maki_bundle::Permission::Link) {
         return (Approval::Refused, Vec::new());
@@ -413,8 +448,8 @@ fn approve(policy: Policy, prompt: &str) -> Approval {
 }
 
 /// What maki's app host does with a bundle that's all arrived: checks it as the host does, then
-/// asks the owner.
-fn finish_install(bundle: Vec<u8>, store: &Mutex<Store>, policy: Policy) -> (u8, Vec<u8>) {
+/// asks the owner. `now`: verified unix seconds, for the store's stamp.
+fn finish_install(bundle: Vec<u8>, store: &Mutex<Store>, policy: Policy, now: Option<u64>) -> (u8, Vec<u8>) {
     let refused = |why: &str| {
         println!("  install refused: {why}");
         reply::app_install(true, Approval::Refused, why)
@@ -427,33 +462,127 @@ fn finish_install(bundle: Vec<u8>, store: &Mutex<Store>, policy: Policy) -> (u8,
         return refused(&format!("maki won't install it: {e}"));
     }
     let m = &b.manifest;
-    let installed = store.lock().unwrap().apps.get(&m.id).map(|(old, _)| old.clone());
-    if let Some(old) = installed {
-        let old = maki_bundle::read(&old).expect("installed bundles read");
-        if let Err(e) = maki_bundle::may_update(&old.developer, old.manifest.version, &b) {
+    let from_store = match b.stamp {
+        None => false,
+        Some(raw) => {
+            let checked = {
+                let st = store.lock().unwrap();
+                maki_store::SignedStamp::decode(raw).and_then(|stamp| stamp.check(st.root(), now, &b))
+            };
+            if let Err(e) = checked {
+                return refused(&format!("its maki store stamp doesn't check out: {e}"));
+            }
+            true
+        }
+    };
+    let revoked = {
+        let st = store.lock().unwrap();
+        st.revocations.as_ref().and_then(|r| r.list.check(&m.id, m.version, &b.developer).map(String::from))
+    };
+    if let Some(why) = revoked {
+        return refused(&format!("the maki store revoked it: {why}"));
+    }
+    let installed = store.lock().unwrap().apps.get(&m.id).cloned();
+    if let Some(old) = &installed {
+        let old_b = maki_bundle::read(&old.bundle).expect("installed bundles read");
+        if let Err(e) = maki_bundle::may_update(&old_b.developer, old_b.manifest.version, &b) {
             return refused(&e);
         }
     }
+    let replacing = if installed.as_ref().is_some_and(|old| old.from_store) && !from_store {
+        ", replacing the store's app"
+    } else {
+        ""
+    };
     let a = approve(
         policy,
-        &format!("install {} {} (sideloaded, developer {})?", m.name, m.label, maki_bundle::fingerprint(&b.developer)),
+        &format!(
+            "install {} {} ({}{replacing}, developer {})?",
+            m.name,
+            m.label,
+            if from_store { "from the maki store" } else { "sideloaded" },
+            maki_bundle::fingerprint(&b.developer)
+        ),
     );
     if a == Approval::Approved {
-        store.lock().unwrap().apps.insert(m.id.clone(), (bundle.clone(), m.backup));
+        // the owner's choice of backup survives updates
+        let backup = installed.map(|old| old.backup).unwrap_or(m.backup);
+        store.lock().unwrap().apps.insert(m.id.clone(), Installed { bundle: bundle.clone(), backup, from_store });
     }
     reply::app_install(true, a, "")
 }
 
-fn app_entry(bundle: &[u8], backup: bool) -> AppEntry {
-    let b = maki_bundle::read(bundle).expect("installed bundles read");
+/// What maki's app host does with a store record: its pieces in order, then checked against the
+/// root maki trusts and kept if it's newer. Nobody's asked. `total` 0 just asks what maki has.
+fn store_update(store: &Mutex<Store>, total: u32, offset: u32, data: Vec<u8>, now: Option<u64>) -> (u8, Vec<u8>) {
+    let mut st = store.lock().unwrap();
+    let mut done = true;
+    let (status, reason) = if total == 0 {
+        (Approval::Approved, String::new())
+    } else {
+        if offset == 0 {
+            st.store_incoming.clear();
+        }
+        if offset as usize != st.store_incoming.len() {
+            st.store_incoming.clear();
+            (Approval::Refused, "pieces out of order".to_string())
+        } else {
+            st.store_incoming.extend_from_slice(&data);
+            if st.store_incoming.len() < total as usize {
+                done = false;
+                (Approval::Approved, String::new())
+            } else {
+                let record = std::mem::take(&mut st.store_incoming);
+                match take_store_record(&mut st, &record, now) {
+                    Ok(()) => (Approval::Approved, String::new()),
+                    Err(why) => {
+                        println!("  store record refused: {why}");
+                        (Approval::Refused, why)
+                    }
+                }
+            }
+        }
+    };
+    reply::store_update(done, status, st.store_state(), &reason)
+}
+
+/// A newer root, signed by the threshold of the current root's keys and of its own, or a newer
+/// revocation list, signed by the catalogue key while that's current: as maki's app host takes
+/// them.
+fn take_store_record(st: &mut Store, bytes: &[u8], now: Option<u64>) -> Result<(), String> {
+    if let Ok(root) = maki_store::SignedRoot::decode(bytes) {
+        let next = root.replaces(st.root()).map_err(|e| format!("the store's root: {e}"))?.clone();
+        println!("  maki store root {} taken", next.version);
+        st.store_root = Some(next);
+        return Ok(());
+    }
+    let list = maki_store::SignedRevocations::decode(bytes).map_err(|e| format!("not a store record: {e}"))?;
+    list.replaces(st.root(), now, st.revocations.as_ref()).map_err(|e| format!("the revocation list: {e}"))?;
+    println!("  maki store revocation list {} taken ({} entries)", list.list.version, list.list.entries.len());
+    st.revocations = Some(list);
+    Ok(())
+}
+
+/// Verified time, unix seconds, or `None` unless the clock is verified: the store's checks take
+/// nothing less.
+fn verified_now(device: &Mutex<Device<Host>>) -> Option<u64> {
+    let d = device.lock().unwrap();
+    if d.state() != TimeState::Verified {
+        return None;
+    }
+    d.platform().utc_ms().map(|ms| ms / 1000)
+}
+
+fn app_entry(app: &Installed) -> AppEntry {
+    let b = maki_bundle::read(&app.bundle).expect("installed bundles read");
     AppEntry {
         id: b.manifest.id.clone(),
         name: b.manifest.name.clone(),
         version: b.manifest.version,
         label: b.manifest.label.clone(),
         developer: b.developer.to_vec(),
-        from_store: false,
-        backup,
+        from_store: app.from_store,
+        backup: app.backup,
         used: 0,
         icon: b.icon.map(|i| i.iter().flat_map(|w| w.to_le_bytes()).collect()).unwrap_or_default(),
     }
@@ -505,6 +634,12 @@ fn main() {
         Policy::Approve
     };
     let store = Arc::new(Mutex::new(Store::default()));
+    let first_root = match args.windows(2).find(|w| w[0] == "--store-root") {
+        Some(w) => std::fs::read(&w[1]).expect("--store-root FILE"),
+        None => FIRST_ROOT.to_vec(),
+    };
+    let first_root = maki_store::SignedRoot::decode(&first_root).and_then(|r| r.trust_first().cloned());
+    store.lock().unwrap().store_root = Some(first_root.expect("the first store root checks out"));
     let running = Arc::new(Mutex::new(std::collections::BTreeMap::new()));
     let phrase = args.windows(2).find(|w| w[0] == "--phrase").map(|w| w[1].clone()).unwrap_or(TEST_PHRASE.into());
     let wallet = Arc::new(Mutex::new(Wallet::new(&phrase)));
@@ -597,7 +732,7 @@ fn main() {
                     }
                     Handled::Apps(Apps::List { index }) => {
                         let st = store.lock().unwrap();
-                        let entry = st.apps.values().nth(index as usize).map(|(b, backup)| app_entry(b, *backup));
+                        let entry = st.apps.values().nth(index as usize).map(app_entry);
                         let (kind, body) = reply::app_list(Approval::Approved, st.apps.len() as u32, entry.as_ref());
                         writer.lock().unwrap().write_all(&frame::encode(kind, packet.id, &body)).ok();
                     }
@@ -627,8 +762,9 @@ fn main() {
                             Some(true) => {
                                 let bundle = std::mem::take(&mut store.lock().unwrap().app_incoming);
                                 let (writer, store, id) = (writer.clone(), store.clone(), packet.id);
+                                let now = verified_now(&device);
                                 std::thread::spawn(move || {
-                                    let (kind, body) = finish_install(bundle, &store, policy);
+                                    let (kind, body) = finish_install(bundle, &store, policy, now);
                                     writer.lock().unwrap().write_all(&frame::encode(kind, id, &body)).ok();
                                 });
                             }
@@ -644,10 +780,15 @@ fn main() {
                             writer.lock().unwrap().write_all(&frame::encode(kind, id, &body)).ok();
                         });
                     }
+                    Handled::Apps(Apps::StoreUpdate { total, offset, data }) => {
+                        let (kind, body) = store_update(&store, total, offset, data, verified_now(&device));
+                        println!("  0x{:02x}#{} -> store update ({} bytes)", packet.kind, packet.id, body.len());
+                        writer.lock().unwrap().write_all(&frame::encode(kind, packet.id, &body)).ok();
+                    }
                     Handled::Apps(Apps::Remove { id: app }) => {
                         let (writer, store, id) = (writer.clone(), store.clone(), packet.id);
                         std::thread::spawn(move || {
-                            let name = store.lock().unwrap().apps.get(&app).map(|(b, _)| app_entry(b, false).name);
+                            let name = store.lock().unwrap().apps.get(&app).map(|a| app_entry(a).name);
                             let (kind, body) = match name {
                                 None => reply::app_remove(Approval::NoMatch),
                                 Some(name) => {

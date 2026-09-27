@@ -12,7 +12,7 @@ use std::sync::{Arc, Mutex};
 
 use maki_app_host_api as app_host;
 use maki_proto::device::{
-    reply, AppEntry, Apps, Approval, Ask, Backup, Bitcoin, Device, Ethereum, Handled, Platform, TimeState,
+    reply, AppEntry, Apps, Approval, Ask, Backup, Bitcoin, Device, Ethereum, Handled, Platform, StoreState, TimeState,
 };
 use maki_proto::frame::{self, Deframer};
 use num_traits::ToPrimitive;
@@ -87,6 +87,21 @@ fn app_install(host: Option<app_host::AppHost>, total: u32, offset: u32, data: V
     let Some(host) = host else { return reply::app_install(true, Approval::Unavailable, "") };
     let r = host.install(total, offset, data);
     reply::app_install(r.done, app_approval(r.result), &r.reason)
+}
+
+/// A piece of a store record, or (`total` 0) a question, handed to the app host, which checks
+/// and keeps records itself without asking the owner.
+fn store_update(host: Option<app_host::AppHost>, total: u32, offset: u32, data: Vec<u8>) -> (u8, Vec<u8>) {
+    let Some(host) = host else {
+        return reply::store_update(true, Approval::Unavailable, StoreState::default(), "");
+    };
+    let r = host.store_update(total, offset, data);
+    let state = StoreState {
+        root: r.root_version,
+        revocations: r.revocations_version,
+        revocations_expires: r.revocations_expires,
+    };
+    reply::store_update(r.done, app_approval(r.result), state, &r.reason)
 }
 
 /// The installed app at `index`, and how many there are.
@@ -325,6 +340,18 @@ fn demo_host() -> app_host::AppHost {
     let host = app_host::AppHost::new(&xns).expect("the app host");
     log::warn!("demo: installing");
     host
+}
+
+/// A store record handed to the app host as maki desktop would, a piece at a time.
+fn demo_store_update(host: &app_host::AppHost, bytes: &[u8]) -> app_host::StoreUpdate {
+    let mut r = app_host::StoreUpdate::default();
+    for (i, piece) in bytes.chunks(4096).enumerate() {
+        r = host.store_update(bytes.len() as u32, (i * 4096) as u32, piece.to_vec());
+        if r.done {
+            break;
+        }
+    }
+    r
 }
 
 /// A bundle handed to the app host as maki desktop would, a piece at a time.
@@ -566,6 +593,62 @@ fn main() -> ! {
         });
     }
 
+    // The maki store: built with MAKI_DEMO_STORE, maki-link does what maki desktop does with
+    // the development store (libs/maki-store/dev-store) once linked. It sets maki's clock and
+    // calls it verified (standing in for the Roughtime sync, which needs the desktop's network),
+    // hands over root 2, which replaces the catalogue key, installs Sensors from the store
+    // (stamped: "maki store") and Tally sideloaded, then hands over the revocation list, which
+    // revokes Tally: maki warns before opening it, and won't install it again.
+    if option_env!("MAKI_DEMO_STORE").is_some() {
+        let time_state = time_state.clone();
+        std::thread::spawn(move || {
+            let host = demo_host();
+            // a day after the development store was made
+            const DEMO_UTC_MS: u64 = 1_790_600_000_000;
+            #[cfg(feature = "board-baosec")]
+            {
+                use bao1x_hal_service::api::{TimeOp, TIME_SERVER_PUBLIC};
+                let conn = xous::connect(xous::SID::from_bytes(TIME_SERVER_PUBLIC).unwrap()).unwrap();
+                time_scalar(conn, TimeOp::SetUtcTimeMs, (DEMO_UTC_MS >> 32) as usize, DEMO_UTC_MS as u32 as usize);
+            }
+            time_state.store(TimeState::Verified as u32, Ordering::SeqCst);
+            host.set_time_state(TimeState::Verified as u8);
+            let xns = xous_names::XousNames::new().unwrap();
+            maki_launcher::Launcher::new(&xns).unwrap().set_time_state(TimeState::Verified as u8).ok();
+            log::warn!("demo store: clock set and called verified");
+
+            let r = demo_store_update(&host, include_bytes!("../../../libs/maki-store/dev-store/roots/2.bin"));
+            log::warn!("demo store root 2: result {} '{}', root now {}", r.result, r.reason, r.root_version);
+            let bundles: [(&str, &[u8]); 2] = [
+                (
+                    "sensors from the store",
+                    include_bytes!("../../../libs/maki-store/dev-store/apps/com.leviathan.maki.sensors/1.maki"),
+                ),
+                ("tally sideloaded", include_bytes!("../../../libs/maki-wasm/tests/fixtures/tally.maki")),
+            ];
+            for (name, bytes) in bundles {
+                let r = demo_install(&host, bytes);
+                log::warn!("demo store install {name}: result {} '{}'", r.result, r.reason);
+            }
+            let r = demo_store_update(&host, include_bytes!("../../../libs/maki-store/dev-store/revocations.bin"));
+            log::warn!(
+                "demo store revocations: result {} '{}', list {} until {}",
+                r.result,
+                r.reason,
+                r.revocations_version,
+                r.revocations_expires
+            );
+            // the same list again: nothing newer
+            let r = demo_store_update(&host, include_bytes!("../../../libs/maki-store/dev-store/revocations.bin"));
+            log::warn!("demo store revocations again: result {} '{}'", r.result, r.reason);
+            let r = demo_install(&host, include_bytes!("../../../libs/maki-wasm/tests/fixtures/tally.maki"));
+            log::warn!("demo store install tally again: result {} '{}'", r.result, r.reason);
+            let list = host.list();
+            let names: Vec<String> = list.apps.iter().map(|a| format!("{} store: {}", a.id, a.from_store)).collect();
+            log::warn!("demo store list: {:?}", names);
+        });
+    }
+
     // The emulator again: built with MAKI_DEMO_BTC, once maki is unlocked with a phrase, go
     // through what the desktop's wallet section does, as maki-link would for it: share the
     // account, show an address, and sign a PSBT, then check the signature against the one maki's
@@ -684,6 +767,9 @@ fn main() -> ! {
                             }
                         }
                         Handled::Apps(Apps::List { index }) => app_list(app_host::AppHost::try_new(&xns), index),
+                        Handled::Apps(Apps::StoreUpdate { total, offset, data }) => {
+                            store_update(app_host::AppHost::try_new(&xns), total, offset, data)
+                        }
                         // pieces go straight to the host; the last one waits for the owner
                         Handled::Apps(Apps::Install { total, offset, data })
                             if offset as usize + data.len() < total as usize =>
@@ -708,7 +794,7 @@ fn main() -> ! {
                                     }
                                     Apps::Remove { id } => Work::AppRemove { id: packet.id, app: id },
                                     Apps::Message { id, message } => Work::AppMessage { id: packet.id, app: id, message },
-                                    Apps::List { .. } => unreachable!(),
+                                    Apps::List { .. } | Apps::StoreUpdate { .. } => unreachable!(),
                                 };
                                 match to_vault.send(work) {
                                     Ok(()) => continue,

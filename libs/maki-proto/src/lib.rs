@@ -48,6 +48,9 @@ pub mod kind {
     pub const APP_REMOVE: u8 = 0x52;
     /// A message for an app with the link permission, answered with the app's reply.
     pub const APP_MESSAGE: u8 = 0x53;
+    /// A piece of a maki store record (a new root, a revocation list), checked and kept by
+    /// maki; or, with nothing, what maki has.
+    pub const STORE_UPDATE: u8 = 0x54;
     pub const REPLY: u8 = 0x80;
     pub const ERROR: u8 = 0x7f;
 }

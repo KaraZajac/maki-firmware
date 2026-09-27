@@ -5214,6 +5214,7 @@ dependencies = [
  "maki-bundle",
  "maki-keys-api",
  "maki-launcher",
+ "maki-store",
  "maki-ui",
  "maki-wasm",
  "num-derive 0.4.2",
@@ -5399,6 +5400,7 @@ dependencies = [
  "maki-bundle",
  "maki-eth",
  "maki-seed",
+ "maki-store",
  "maki-wasm",
  "roughtime",
  "sha1",
@@ -5414,6 +5416,16 @@ dependencies = [
  "serde_json",
  "sha2 0.10.8",
  "zeroize",
+]
+
+[[package]]
+name = "maki-store"
+version = "0.1.0"
+dependencies = [
+ "ed25519-dalek-compat",
+ "maki-bundle",
+ "serde_json",
+ "sha2 0.10.8",
 ]
 
 [[package]]

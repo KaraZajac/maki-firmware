@@ -1,0 +1,107 @@
+{
+  "apps": [
+    {
+      "backup": true,
+      "bytes": 9417,
+      "description": "Rolls one to three dice with maki's random number generator, and counts the rolls.",
+      "developer": "3d0dae13e118a151f2d3714323fb9ed0a2addd8a758de416f5452dcc3ced84fa",
+      "icon": "/////////////////////////////////////////////////////////////////////////////////////////////////////////////wMAAMD///9/AAAAAP7//x8AAAAA+P//DwAAAADw//8P+P//H/D//wf/////4P//h//////h//+H/////+H//4O////9wf//ww/+f/DD///DB/w/4MP//8MH/D/gw///wwP4H8DD///DB/w/4MP//8MH/D/gw///ww/+f/DD///Dv////cP//8P/////w///w/8//P/D///D/x/4/8P//8P/D/D/w///w/8P8P/D///D/w/w/8P//8P/D/D/w///w/8f+P/D///D/z/8/8P//8P/////w///w7////3D///DD/5/8MP//8MH/D/gw///wwf8P+DD///DA/gfwMP//8MH/D/gw///wwf8P+DD///DD/5/8MP//4O////9wf//h//////h//+H/////+H//wf/////4P//D/j//x/w//8PAAAAAPD//x8AAAAA+P//fwAAAAD+////AwAAwP////////////////////////////////////////////////////////////////////////////////////////////////////////////8=",
+      "id": "com.leviathan.maki.dice",
+      "label": "1.0",
+      "memory_kib": 64,
+      "name": "Dice",
+      "path": "apps/com.leviathan.maki.dice/1.maki",
+      "permissions": [],
+      "sha256": "1800468adca8155f84234da774cfea9a9e380cedbc98d6d58161642f58835955",
+      "storage_kib": 1,
+      "version": 1
+    },
+    {
+      "backup": false,
+      "bytes": 10182,
+      "description": "A spirit level from the accelerometer, and a QR code reader: the centre scans, and shows what the code says.",
+      "developer": "3d0dae13e118a151f2d3714323fb9ed0a2addd8a758de416f5452dcc3ced84fa",
+      "icon": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAQAAAAAAAP7/AAAAAADA//8HAAAAAPD//x8AAAAA/P//fwAAAAD+A4D/AAAAgH8AAPwDAADAHwAA8AcAAOAHAADADwAA8AMAAIAfAAD4AQAAAD8AAPwAAAAAfgAAfAAAAAB8AAA+AAAAAPgAAB8AAAAA8AEADwAAAADgAYAPAAAAAOADgAcAAEAAwAPABwAA+APAB8ADAAD8B4AHwAMAAP4PgAfgAwAA/g+AD+ABAAD+DwAP4AEAAP8fAA/gAQAA/w8AD+ABAAD/DwAP4AEAAP8PAA/gAQAA/QcAD/ABAPD/AwAf4AEAAEEAAA/gAQAAAQAAD+ABAAABAAAP4AEAAAEAAA/gAQAAAAAAD+ABAAAAAAAP4AMAAAAAgA/AAwAAAACAB8ADAAAAAIAHwAcAAAAAwAeABwAAAADAA4APAAAAAOADAA8AAAAA4AEAHwAAAADwAQA+AAAAAPgAAHwAAAAAfAAA/AAAAAB+AAD4AQAAAD8AAPADAACAHwAA4AcAAMAPAADAHwAA8AcAAIB/AAD8AwAAAP4DgP8AAAAA/P//fwAAAADw//8fAAAAAMD//wcAAAAAAP7/AAAAAAAAAAEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+      "id": "com.leviathan.maki.sensors",
+      "label": "1.0",
+      "memory_kib": 64,
+      "name": "Sensors",
+      "path": "apps/com.leviathan.maki.sensors/1.maki",
+      "permissions": [
+        {
+          "name": "camera",
+          "reason": "To read QR codes when you press the centre."
+        },
+        {
+          "name": "motion",
+          "reason": "For the spirit level."
+        }
+      ],
+      "sha256": "79dbd6926117c9f33ede7e1cc6ebcaf377a330ef91777c4c63265ae22a458654",
+      "storage_kib": 1,
+      "version": 1
+    },
+    {
+      "backup": false,
+      "bytes": 11125,
+      "description": "Shows its own key from your recovery phrase, signs a test message once you say so on maki, and types a line into the computer.",
+      "developer": "3d0dae13e118a151f2d3714323fb9ed0a2addd8a758de416f5452dcc3ced84fa",
+      "icon": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAgD8AAAAAAADw/wEAAAAAAPj/AwAAAAAA/v8PAAAAAAD//x8AAAAAAP//HwAAAACA/+A/AAAAAMA/gH8AAAAAwB8AfwAAAADADwB+AAAAAOAPAP7///8D4AcA/P///wPgBwD8////A+AHAPz///8D4AcA/P///wPgBwD8////A+APAP7///8DwA8AfgDw8AHAHwB/APDwAcA/gH8A8PABgP/gPwDw8AEA//8fAPDwAQD//x8A8PABAP7/DwDw8AEA+P8DAPDwAQDw/wEAAPABAIA/AAAA8AEAAAAAAADwAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+      "id": "com.leviathan.maki.signer",
+      "label": "1.0",
+      "memory_kib": 64,
+      "name": "Signer",
+      "path": "apps/com.leviathan.maki.signer/1.maki",
+      "permissions": [
+        {
+          "name": "ask",
+          "reason": "To ask you before it signs anything."
+        },
+        {
+          "name": "keys",
+          "reason": "For a signing key of its own."
+        },
+        {
+          "name": "keyboard",
+          "reason": "To type a test line into your computer."
+        }
+      ],
+      "sha256": "f1df05729605c3cc8a0aa44176982f7e419bce140f2cda54d941d7bd2bbccf42",
+      "storage_kib": 1,
+      "version": 1
+    },
+    {
+      "backup": false,
+      "bytes": 29911,
+      "description": "An SSH key from your recovery phrase, for ssh and git through maki desktop's SSH agent. Every sign-in and signature waits for your yes on maki.",
+      "developer": "3d0dae13e118a151f2d3714323fb9ed0a2addd8a758de416f5452dcc3ced84fa",
+      "icon": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAADw////////D/D///////8P8P///////w/w////////D/D///////8P8P///////w/w////////D/D///////8PMAAAAAAAAAwwAAAAAAAADDAAAAAAAAAMMAAAAAAAAAwwAAAAAAAADDAAAAAAAAAMMAAAAAAAAAwwAAAAAAAADDDAAQAAAAAMMIADAAAAAAwwAAcAAAAADDAADgAAAAAMMAAcAAAAAAwwADgAAAAADDAAcAAAAAAMMADgAAAAAAwwAOAAAAAADDAAcAAAAAAMMAA4AAAAAAwwABwAAAAADDAADgAAAAAMMAAHAAAAAAwwgAPw/w8ADDDAAfD/DwAMMAAA8P8PAAwwAAAAAAAADDAAAAAAAAAMMAAAAAAAAAwwAAAAAAAADDAAAAAAAAAMMAAAAAAAAAwwAAAAAAAADDAAAAAAAAAMMAAAAAAAAAzw////////D/D///////8PAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+      "id": "com.leviathan.maki.ssh",
+      "label": "1.0",
+      "memory_kib": 64,
+      "name": "SSH",
+      "path": "apps/com.leviathan.maki.ssh/1.maki",
+      "permissions": [
+        {
+          "name": "ask",
+          "reason": "To ask you before every sign-in and signature."
+        },
+        {
+          "name": "link",
+          "reason": "To answer maki desktop's SSH agent, which ssh and git talk to."
+        },
+        {
+          "name": "keys",
+          "reason": "For your SSH key, made from your recovery phrase and never leaving maki."
+        }
+      ],
+      "sha256": "71e56ec53a70267add969bfa2154cfddc644884e8602e887803803fd4328a6a9",
+      "storage_kib": 1,
+      "version": 1
+    }
+  ],
+  "expires": 2105896832,
+  "format": 1,
+  "root": 2,
+  "version": 8
+}

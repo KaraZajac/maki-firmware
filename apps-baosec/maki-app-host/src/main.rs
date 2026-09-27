@@ -77,21 +77,6 @@ pub(crate) fn clock_text(_: xous::CID, _: bool) -> String { String::from("--:--"
 
 fn key_op(slot: usize) -> u32 { (APP_OPS + slot * 4) as u32 }
 
-/// Words in lines of at most `width` characters, for the ask's fixed-width lines.
-fn wrap(text: &str, width: usize) -> String {
-    let mut lines: Vec<String> = Vec::new();
-    for word in text.split_whitespace() {
-        match lines.last_mut() {
-            Some(l) if l.chars().count() + 1 + word.chars().count() <= width => {
-                l.push(' ');
-                l.push_str(word);
-            }
-            _ => lines.push(word.to_string()),
-        }
-    }
-    lines.join("\n")
-}
-
 /// Takes an app off the home screen and out of storage.
 pub(crate) fn remove_app(store: &Store, launcher: &maki_launcher::Launcher, shared: &Mutex<Shared>, id: &str) {
     store.remove(id);
@@ -208,8 +193,23 @@ fn install(w: &Worker, bytes: Vec<u8>) -> (u32, String) {
     };
     log::info!("{}: code checked ({} ms)", b.manifest.id, tt().elapsed_ms() - start);
     let m = &b.manifest;
+    // from the maki store: its stamp, checked against the root maki trusts, with verified time
+    let from_store = match b.stamp {
+        None => false,
+        Some(raw) => {
+            let checked = maki_store::SignedStamp::decode(raw)
+                .and_then(|stamp| stamp.check(&store.store_root(), verified_now(shared), &b));
+            if let Err(e) = checked {
+                return (RESULT_REFUSED, format!("its maki store stamp doesn't check out: {e}"));
+            }
+            true
+        }
+    };
+    if let Some(why) = store.revocations().as_ref().and_then(|r| r.check(&m.id, m.version, &b.developer)) {
+        return (RESULT_REFUSED, format!("the maki store revoked it: {why}"));
+    }
     let installed = store.record(&m.id);
-    log::info!("{}: installed before: {}", m.id, installed.is_some());
+    log::info!("{}: installed before: {}, from the store: {from_store}", m.id, installed.is_some());
     match &installed {
         Some(old) => {
             if let Err(e) = maki_bundle::may_update(&old.developer, old.version, &b) {
@@ -229,33 +229,57 @@ fn install(w: &Worker, bytes: Vec<u8>) -> (u32, String) {
             heading: if installed.is_some() { "Update".into() } else { "Install".into() },
             value: m.name.clone(),
             mono: format!("{version}\n{}", m.id),
+            prose: String::new(),
         },
-        Page {
-            heading: "Where from".into(),
-            value: "Sideloaded".into(),
-            mono: wrap("Nobody has reviewed it. Install apps only from people you trust.", 15),
+        if from_store {
+            Page {
+                heading: "Where from".into(),
+                value: "maki store".into(),
+                mono: String::new(),
+                prose: "Reviewed, and built from its source by the store.".into(),
+            }
+        } else {
+            Page {
+                heading: "Where from".into(),
+                value: "Sideloaded".into(),
+                mono: String::new(),
+                prose: "Nobody has reviewed it. Install apps only from people you trust.".into(),
+            }
         },
         Page {
             heading: "Developer key".into(),
             value: String::new(),
             mono: {
                 let f = maki_bundle::fingerprint(&b.developer);
-                format!("{}\n{}\n\n{}", &f[..14], &f[15..], wrap("maki desktop shows it too, to compare.", 15))
+                format!("{}\n{}", &f[..14], &f[15..])
             },
+            prose: "maki desktop shows it too, to compare.".into(),
         },
     ];
+    // an app from the store updates only from the store: anything else says so first
+    if installed.as_ref().is_some_and(|old| old.from_store) && !from_store {
+        pages.insert(
+            1,
+            Page {
+                heading: "Replacing".into(),
+                value: "the store's app".into(),
+                mono: String::new(),
+                prose: "This version isn't from the maki store: nobody has reviewed it.".into(),
+            },
+        );
+    }
     for (p, reason) in &m.permissions {
-        let mut mono = wrap(p.warning(), 15);
+        let mut prose = p.warning().to_string();
         if !reason.is_empty() {
-            mono.push_str("\n\n");
-            mono.push_str(&wrap(&format!("The developer says: {reason}"), 15));
+            prose.push_str(&format!("\n\nThe developer says: \"{reason}\""));
         }
-        pages.push(Page { heading: "It asks to".into(), value: p.title().into(), mono });
+        pages.push(Page { heading: "It asks to".into(), value: p.title().into(), mono: String::new(), prose });
     }
     pages.push(Page {
         heading: "It needs".into(),
         value: String::new(),
         mono: format!("{} KiB storage\n{} KiB memory\nbackup: {}", m.storage_kib, m.memory_kib, if m.backup { "yes" } else { "no" }),
+        prose: String::new(),
     });
     let (question, yes) = if installed.is_some() { ("Update app?", "update") } else { ("Install app?", "install") };
     log::info!("asking the owner to install {}", m.id);
@@ -285,7 +309,7 @@ fn install(w: &Worker, bytes: Vec<u8>) -> (u32, String) {
         version: m.version,
         // the owner's choice survives updates, and restores
         backup,
-        from_store: false,
+        from_store,
         developer: b.developer,
         name: m.name.clone(),
         label: m.label.clone(),
@@ -300,6 +324,33 @@ fn install(w: &Worker, bytes: Vec<u8>) -> (u32, String) {
     to_runner.send(ToRunner::Loaded(m.id.clone(), m.version, loaded)).ok();
     sync_home(&store, &launcher, shared);
     (RESULT_OK, String::new())
+}
+
+/// A store record from maki desktop: a newer root, signed by `threshold` of the keys of the root
+/// maki trusts and of its own, or a newer revocation list, signed by the catalogue key while
+/// that's current (`now`: verified unix seconds). Kept if it is; why not, if not.
+fn take_store_record(store: &Store, bytes: &[u8], now: Option<u64>) -> Result<(), String> {
+    if let Ok(root) = maki_store::SignedRoot::decode(bytes) {
+        root.replaces(&store.store_root()).map_err(|e| format!("the store's root: {e}"))?;
+        store.put_store_root(bytes).map_err(|e| format!("couldn't keep the store's root: {e:?}"))?;
+        log::info!("maki store root {} taken", root.root.version);
+        return Ok(());
+    }
+    let list = maki_store::SignedRevocations::decode(bytes).map_err(|e| format!("not a store record: {e}"))?;
+    list.replaces(&store.store_root(), now, store.signed_revocations().as_ref())
+        .map_err(|e| format!("the revocation list: {e}"))?;
+    store.put_revocations(bytes).map_err(|e| format!("couldn't keep the revocation list: {e:?}"))?;
+    log::info!("maki store revocation list {} taken ({} entries)", list.list.version, list.list.entries.len());
+    Ok(())
+}
+
+/// Verified time, unix seconds, or `None` if maki's clock isn't verified: the store's checks
+/// take nothing less.
+fn verified_now(shared: &Mutex<Shared>) -> Option<u64> {
+    if shared.lock().unwrap().time_state != 2 {
+        return None;
+    }
+    utc_ms(time_conn()).map(|ms| ms / 1000)
 }
 
 /// Asks the owner, then removes the app and its data.
@@ -424,8 +475,9 @@ fn main() -> ! {
         })
         .unwrap();
 
-    // the bundle coming in
+    // the bundle coming in, and a store record
     let mut incoming: Vec<u8> = Vec::new();
+    let mut store_incoming: Vec<u8> = Vec::new();
     loop {
         let mut msg = xous::receive_message(sid).unwrap();
         let op = msg.body.id();
@@ -563,6 +615,60 @@ fn main() -> ! {
                     Some(slot) => {
                         to_runner.send(ToRunner::Message(slot, msg, req.message)).ok();
                     }
+                }
+            }
+            Some(HostOp::StoreUpdate) => {
+                let request = {
+                    let buffer = unsafe { Buffer::from_memory_message(msg.body.memory_message().unwrap()) };
+                    buffer.to_original::<StoreUpdate, _>()
+                };
+                let Ok(mut req) = request else { continue };
+                req.done = true;
+                // kept in the secret basis: nothing to read or write while locked
+                if !shared.lock().unwrap().unlocked {
+                    req.result = RESULT_LOCKED;
+                } else if req.total == 0 {
+                    // just what maki has
+                    req.result = RESULT_OK;
+                } else {
+                    if req.offset == 0 {
+                        store_incoming.clear();
+                    }
+                    let fits = req.offset as usize == store_incoming.len()
+                        && req.total as usize <= MAX_STORE_RECORD
+                        && req.offset as usize + req.data.len() <= req.total as usize;
+                    if !fits {
+                        store_incoming.clear();
+                        req.result = RESULT_REFUSED;
+                        req.reason = "pieces out of order".into();
+                    } else {
+                        store_incoming.extend_from_slice(&req.data);
+                        if store_incoming.len() < req.total as usize {
+                            req.done = false;
+                            req.result = RESULT_OK;
+                        } else {
+                            let record = std::mem::take(&mut store_incoming);
+                            match take_store_record(&Store::new(), &record, verified_now(&shared)) {
+                                Ok(()) => req.result = RESULT_OK,
+                                Err(why) => {
+                                    req.result = RESULT_REFUSED;
+                                    req.reason = why;
+                                }
+                            }
+                        }
+                    }
+                }
+                req.data.clear();
+                if req.result != RESULT_LOCKED {
+                    let store = Store::new();
+                    req.root_version = store.store_root().version;
+                    let list = store.revocations();
+                    req.revocations_version = list.as_ref().map(|l| l.version).unwrap_or(0);
+                    req.revocations_expires = list.as_ref().map(|l| l.expires).unwrap_or(0);
+                }
+                if let Some(mem) = msg.body.memory_message_mut() {
+                    let mut buffer = unsafe { Buffer::from_memory_message_mut(mem) };
+                    buffer.replace(req).ok();
                 }
             }
             Some(HostOp::TimeState) => {

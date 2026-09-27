@@ -41,6 +41,9 @@ const SECTION_MANIFEST: u8 = 1;
 const SECTION_CODE: u8 = 2;
 const SECTION_ICON: u8 = 3;
 const SECTION_SIGNATURE: u8 = 255;
+/// The maki store's stamp (`maki_store`), after the developer's signature and not covered by it:
+/// the store adds it to the bundle the developer signed.
+const SECTION_STAMP: u8 = 254;
 const SIGNATURE_LEN: usize = 32 + 64;
 
 const FIELD_ID: u8 = 1;
@@ -185,8 +188,11 @@ pub struct Bundle<'a> {
     pub icon: Option<[u32; ICON_WORDS]>,
     /// The developer's Ed25519 public key.
     pub developer: [u8; 32],
-    /// SHA-256 of the whole bundle, signature included: what the store stamps.
+    /// SHA-256 of the bundle as its developer signed it, signature included (and the store's
+    /// stamp not): what the store stamps.
     pub hash: [u8; 32],
+    /// The store's stamp, if it has one (`maki_store::SignedStamp`, unchecked here).
+    pub stamp: Option<&'a [u8]>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -196,7 +202,8 @@ pub enum Error {
     /// A format this maki doesn't read, probably newer.
     Format(u8),
     Truncated,
-    /// Sections missing, repeated, out of order or unknown, or bytes after the signature.
+    /// Sections missing, repeated, out of order or unknown, or bytes after the signature (but
+    /// the store's stamp).
     Sections,
     /// A manifest field that's missing, repeated, out of order, unknown or out of range: which.
     Manifest(&'static str),
@@ -278,6 +285,8 @@ fn read_checked(bytes: &[u8], verify: bool) -> Result<Bundle<'_>, Error> {
     }
     let signed_len = r.at;
     let sig = read_section(&mut r, SECTION_SIGNATURE)?;
+    let developer_signed = r.at;
+    let stamp = if r.b.get(r.at) == Some(&SECTION_STAMP) { Some(read_section(&mut r, SECTION_STAMP)?) } else { None };
     if sig.len() != SIGNATURE_LEN || !r.done() {
         return Err(Error::Sections);
     }
@@ -294,7 +303,7 @@ fn read_checked(bytes: &[u8], verify: bool) -> Result<Bundle<'_>, Error> {
     if code.is_empty() {
         return Err(Error::Sections);
     }
-    Ok(Bundle { manifest, code, icon, developer, hash: Sha256::digest(bytes).into() })
+    Ok(Bundle { manifest, code, icon, developer, hash: Sha256::digest(&bytes[..developer_signed]).into(), stamp })
 }
 
 fn read_section<'a>(r: &mut Reader<'a>, tag: u8) -> Result<&'a [u8], Error> {
@@ -490,6 +499,18 @@ fn section(out: &mut Vec<u8>, tag: u8, v: &[u8]) {
     out.push(tag);
     out.extend_from_slice(&(v.len() as u32).to_le_bytes());
     out.extend_from_slice(v);
+}
+
+/// A bundle as its developer signed it, with the store's stamp added (replacing any it had).
+pub fn with_stamp(bundle: &[u8], stamp: &[u8]) -> Result<Vec<u8>, Error> {
+    let b = read(bundle)?;
+    let signed = bundle.len() - b.stamp.map(|s| s.len() + 5).unwrap_or(0);
+    let mut out = bundle[..signed].to_vec();
+    section(&mut out, SECTION_STAMP, stamp);
+    if out.len() > MAX_BUNDLE {
+        return Err(Error::TooBig);
+    }
+    Ok(out)
 }
 
 /// Packs and signs a bundle, then reads it back, so what it returns is what maki accepts.

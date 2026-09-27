@@ -719,7 +719,7 @@ fn main() -> ! {
                         if would.apps > 0 {
                             what.push_str(&format!("\n{}'s data", count(would.apps, "app")));
                         }
-                        let page = maki_launcher::Page { heading: "Restore".into(), value: "from a backup".into(), mono: what };
+                        let page = maki_launcher::Page { heading: "Restore".into(), value: "from a backup".into(), mono: what, prose: String::new() };
                         match maki_launcher::Launcher::new(&xns).map(|l| {
                             l.review("maki desktop", "Restore backup?", "adds what's missing", vec![page], "restore", "cancel", RESTORE_TIMEOUT_S)
                         }) {

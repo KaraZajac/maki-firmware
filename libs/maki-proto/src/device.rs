@@ -127,6 +127,8 @@ pub enum Apps {
     Install { total: u32, offset: u32, data: Vec<u8> },
     Remove { id: String },
     Message { id: String, message: Vec<u8> },
+    /// `total` 0: just what maki has.
+    StoreUpdate { total: u32, offset: u32, data: Vec<u8> },
 }
 
 /// Pieces of a bundle are at most this big.
@@ -135,6 +137,21 @@ pub const APP_PIECE: usize = 4096;
 pub const MAX_APP: u32 = 512 * 1024;
 /// The biggest message to or from an app (`maki_wasm::MAX_MESSAGE`).
 pub const MAX_APP_MESSAGE: usize = 4096;
+/// Pieces of a store record are at most this big.
+pub const STORE_PIECE: usize = 4096;
+/// The biggest store record maki takes (`maki_app_host_api::MAX_STORE_RECORD`).
+pub const MAX_STORE_RECORD: u32 = 64 * 1024;
+
+/// What maki has of the maki store, as STORE_UPDATE's reply says.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct StoreState {
+    /// The version of the store root maki trusts.
+    pub root: u32,
+    /// The version of the newest revocation list it took, 0 for none.
+    pub revocations: u32,
+    /// When that list goes stale, unix seconds (0 for none).
+    pub revocations_expires: u64,
+}
 
 /// An installed app, as APP_LIST describes it.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -396,6 +413,27 @@ pub mod reply {
         let answer = if status == Approval::Approved { &answer[..answer.len().min(super::MAX_APP_MESSAGE)] } else { &[] };
         (kind::APP_MESSAGE | kind::REPLY, Writer::new().u8(status as u8).bytes16(answer).finish())
     }
+
+    /// A piece of a store record taken (`done` false), or the outcome: taken (`Approved`), or
+    /// `Refused` with maki's reason (at most 255 bytes, cut at a character); and what maki has
+    /// now, unless it's `Locked` or `Unavailable`.
+    pub fn store_update(done: bool, status: Approval, state: super::StoreState, reason: &str) -> (u8, Vec<u8>) {
+        let state = if matches!(status, Approval::Approved | Approval::Refused) { state } else { super::StoreState::default() };
+        let reason = if status == Approval::Refused { reason } else { "" };
+        let mut end = reason.len().min(255);
+        while !reason.is_char_boundary(end) {
+            end -= 1;
+        }
+        let body = Writer::new()
+            .u8(done as u8)
+            .u8(status as u8)
+            .u32(state.root)
+            .u32(state.revocations)
+            .u64(state.revocations_expires)
+            .str8(&reason[..end])
+            .finish();
+        (kind::STORE_UPDATE | kind::REPLY, body)
+    }
 }
 
 pub trait Platform {
@@ -467,7 +505,9 @@ impl<P: Platform> Device<P> {
             kind::ETH_ACCOUNT | kind::ETH_SIGN_TX | kind::ETH_SIGNED | kind::ETH_SIGN_MESSAGE => {
                 return Self::ethereum(packet.kind, body)
             }
-            kind::APP_LIST | kind::APP_INSTALL | kind::APP_REMOVE | kind::APP_MESSAGE => return Self::apps(packet.kind, body),
+            kind::APP_LIST | kind::APP_INSTALL | kind::APP_REMOVE | kind::APP_MESSAGE | kind::STORE_UPDATE => {
+                return Self::apps(packet.kind, body)
+            }
             _ => Ok(error(ErrorCode::UnknownKind, "unknown message kind")),
         };
         let (kind, body) = result.unwrap_or_else(malformed);
@@ -522,6 +562,7 @@ impl<P: Platform> Device<P> {
                 kind::APP_LIST => Apps::List { index: r.u32()? },
                 kind::APP_INSTALL => Apps::Install { total: r.u32()?, offset: r.u32()?, data: r.bytes16()?.to_vec() },
                 kind::APP_MESSAGE => Apps::Message { id: r.str8()?.to_string(), message: r.bytes16()?.to_vec() },
+                kind::STORE_UPDATE => Apps::StoreUpdate { total: r.u32()?, offset: r.u32()?, data: r.bytes16()?.to_vec() },
                 _ => Apps::Remove { id: r.str8()?.to_string() },
             };
             r.end()?;
@@ -546,6 +587,16 @@ impl<P: Platform> Device<P> {
             }
             Ok(Apps::Remove { ref id } | Apps::Message { ref id, .. }) if !app_id_valid(id) => bad("not an app ID"),
             Ok(Apps::Message { ref message, .. }) if message.len() > MAX_APP_MESSAGE => bad("message too big"),
+            Ok(Apps::StoreUpdate { total: 0, offset, ref data }) if offset != 0 || !data.is_empty() => {
+                bad("a store status request carries nothing")
+            }
+            Ok(Apps::StoreUpdate { total, offset, ref data })
+                if total > MAX_STORE_RECORD
+                    || data.len() > STORE_PIECE
+                    || offset as u64 + data.len() as u64 > total as u64 =>
+            {
+                bad("store record piece out of range")
+            }
             Ok(request) => Handled::Apps(request),
         }
     }

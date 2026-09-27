@@ -10,6 +10,16 @@ pub use maki_app_host_api::{data_dict, Record, APPS, RESTORED};
 
 const BUNDLE: &str = "bundle";
 
+/// The maki store's newest root and revocation list that maki has taken (`maki_store`). Nothing
+/// there: the root the firmware carries, and no list yet.
+const STORE: &str = "maki.store";
+const STORE_ROOT: &str = "root";
+const STORE_REVOCATIONS: &str = "revocations";
+
+/// The root this firmware carries: the store's first. The development store's until the real
+/// one opens (DEVELOPMENT.md, "The store's keys").
+const FIRST_ROOT: &[u8] = include_bytes!("../../../libs/maki-store/dev-store/roots/1.bin");
+
 fn bundle_dict(id: &str) -> String { format!("maki.app.{id}") }
 
 pub struct Store {
@@ -66,6 +76,30 @@ impl Store {
         self.pddb.delete_dict(&data_dict(id), None).ok();
         self.pddb.sync().ok();
     }
+
+    /// The root maki trusts: the newest it took, else its firmware's.
+    pub fn store_root(&self) -> maki_store::Root {
+        let taken = self.read(STORE, STORE_ROOT).and_then(|b| maki_store::SignedRoot::decode(&b).ok());
+        match taken.as_ref().map(|s| s.trust_first()) {
+            Some(Ok(root)) => root.clone(),
+            _ => maki_store::SignedRoot::decode(FIRST_ROOT)
+                .ok()
+                .and_then(|s| s.trust_first().ok().cloned())
+                .expect("the firmware's store root checks out"),
+        }
+    }
+
+    pub fn put_store_root(&self, bytes: &[u8]) -> std::io::Result<()> { self.write(STORE, STORE_ROOT, bytes) }
+
+    /// The newest revocation list maki took, with its signature, if any.
+    pub fn signed_revocations(&self) -> Option<maki_store::SignedRevocations> {
+        self.read(STORE, STORE_REVOCATIONS).and_then(|b| maki_store::SignedRevocations::decode(&b).ok())
+    }
+
+    /// The newest revocation list maki took, if any.
+    pub fn revocations(&self) -> Option<maki_store::Revocations> { self.signed_revocations().map(|s| s.list) }
+
+    pub fn put_revocations(&self, bytes: &[u8]) -> std::io::Result<()> { self.write(STORE, STORE_REVOCATIONS, bytes) }
 
     /// What a restore left for an app of this ID that wasn't installed then.
     pub fn restored(&self, id: &str) -> Option<Record> { Record::decode(&self.read(RESTORED, id)?) }

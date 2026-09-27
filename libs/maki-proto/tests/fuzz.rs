@@ -27,7 +27,7 @@ impl Platform for Host {
     fn time_state_changed(&mut self, _: TimeState) {}
 }
 
-const KINDS: [u8; 18] = [
+const KINDS: [u8; 23] = [
     kind::HELLO,
     kind::STATUS,
     kind::TIME_CHALLENGE,
@@ -46,6 +46,11 @@ const KINDS: [u8; 18] = [
     kind::ETH_SIGN_TX,
     kind::ETH_SIGNED,
     kind::ETH_SIGN_MESSAGE,
+    kind::APP_LIST,
+    kind::APP_INSTALL,
+    kind::APP_REMOVE,
+    kind::APP_MESSAGE,
+    kind::STORE_UPDATE,
 ];
 
 #[test]

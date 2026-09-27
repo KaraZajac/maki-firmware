@@ -573,6 +573,15 @@ fn app_requests_go_to_the_host() {
         handled(&mut d, kind::APP_MESSAGE, Writer::new().str8("com.leviathan.maki.ssh").bytes16(b"list").finish()),
         Handled::Apps(Apps::Message { id: "com.leviathan.maki.ssh".into(), message: b"list".to_vec() })
     );
+    assert_eq!(
+        handled(&mut d, kind::STORE_UPDATE, Writer::new().u32(300).u32(0).bytes16(&[9; 300]).finish()),
+        Handled::Apps(Apps::StoreUpdate { total: 300, offset: 0, data: vec![9; 300] })
+    );
+    // nothing: what maki has
+    assert_eq!(
+        handled(&mut d, kind::STORE_UPDATE, Writer::new().u32(0).u32(0).bytes16(&[]).finish()),
+        Handled::Apps(Apps::StoreUpdate { total: 0, offset: 0, data: vec![] })
+    );
 }
 
 #[test]
@@ -588,6 +597,11 @@ fn app_requests_out_of_range_are_refused() {
         (kind::APP_REMOVE, Writer::new().str8("").finish()),
         (kind::APP_MESSAGE, Writer::new().str8("SSH").bytes16(b"list").finish()),
         (kind::APP_MESSAGE, Writer::new().str8("com.leviathan.maki.ssh").bytes16(&vec![0; MAX_APP_MESSAGE + 1]).finish()),
+        (kind::STORE_UPDATE, Writer::new().u32(0).u32(0).bytes16(&[1]).finish()),
+        (kind::STORE_UPDATE, Writer::new().u32(0).u32(4).bytes16(&[]).finish()),
+        (kind::STORE_UPDATE, Writer::new().u32(MAX_STORE_RECORD + 1).u32(0).bytes16(&[1]).finish()),
+        (kind::STORE_UPDATE, Writer::new().u32(10).u32(5).bytes16(&[0; 6]).finish()),
+        (kind::STORE_UPDATE, Writer::new().u32(MAX_STORE_RECORD).u32(0).bytes16(&vec![0; STORE_PIECE + 1]).finish()),
     ];
     for (k, body) in bad {
         let reply = ask(&mut d, k, body.clone());
@@ -640,4 +654,16 @@ fn app_replies_carry_only_what_the_answer_allows() {
     // no answer: nothing of one
     let (_, body) = reply::app_message(Approval::Unavailable, b"ok");
     assert_eq!(body, [Approval::Unavailable as u8, 0, 0]);
+
+    let state = StoreState { root: 2, revocations: 7, revocations_expires: 1_800_000_000 };
+    let (k, body) = reply::store_update(true, Approval::Refused, state, "the revocation list: older than what maki has");
+    assert_eq!(k, kind::STORE_UPDATE | kind::REPLY);
+    let mut r = Reader::new(&body);
+    assert_eq!((r.u8().unwrap(), r.u8().unwrap()), (1, Approval::Refused as u8));
+    assert_eq!((r.u32().unwrap(), r.u32().unwrap(), r.u64().unwrap()), (2, 7, 1_800_000_000));
+    assert_eq!(r.str8().unwrap(), "the revocation list: older than what maki has");
+    r.end().unwrap();
+    // locked: nothing of what maki has, nor a reason
+    let (_, body) = reply::store_update(true, Approval::Locked, state, "ignored");
+    assert_eq!(body, [&[1, Approval::Locked as u8][..], &[0; 16], &[0]].concat());
 }

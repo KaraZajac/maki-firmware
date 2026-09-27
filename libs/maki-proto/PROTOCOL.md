@@ -70,6 +70,7 @@ bytes. Bodies must be consumed exactly: trailing bytes are an error.
 | `0x51` APP_INSTALL | `total:u32` `offset:u32` `piece:bytes16` | `done:u8` `approval:u8` `reason:str8` |
 | `0x52` APP_REMOVE | `id:str8` | `approval:u8` |
 | `0x53` APP_MESSAGE | `id:str8` `message:bytes16` | `status:u8` `answer:bytes16` |
+| `0x54` STORE_UPDATE | `total:u32` `offset:u32` `piece:bytes16` | `done:u8` `status:u8` `root:u32` `revocations:u32` `revocations_expires:u64` `reason:str8` |
 | `0x7f` ERROR (reply only) | | `code:u8` `detail:str8` |
 
 `time_state`: 0 unset, 1 unverified, 2 verified.
@@ -281,3 +282,16 @@ the owner before installing or removing anything: whoever sends these can't do e
   time), 4 busy (another app is open on maki, or at most three requests wait at once) or no app
   host, 6 locked, 9 refused (the app hasn't the link permission). Only an answered reply carries
   the app's answer. What the messages mean is up to the app and the software talking to it.
+- **STORE_UPDATE** hands maki a record from the maki store (`libs/maki-store`): a newer root,
+  or a newer revocation list. It goes in pieces of up to 4096 bytes, in order, with the same
+  `total` each time (at most 64 KiB); a piece at offset 0 starts a new record, and pieces before
+  the last are answered at once (`done` 0). maki checks the record itself against the root it
+  trusts, and doesn't ask the owner: a root must be signed by the threshold of the current
+  root's keys and of its own, and a revocation list by the catalogue key while that's current,
+  which takes a verified clock. `total` 0 (with offset 0 and no piece) just asks what maki has.
+  `status`: 0 taken (or nothing sent), 4 no app host, 6 locked, or 9 refused with `reason`
+  (maki's own words: not signed by the store, older than what maki has, the clock isn't
+  verified). Unless locked or unavailable, the reply says what maki has now: the version of the
+  root it trusts, and the version of its revocation list and when that goes stale (unix
+  seconds; both 0 for none). Stamps, which make a bundle a store app, travel inside bundles
+  (APP_INSTALL), not here.

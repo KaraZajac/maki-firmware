@@ -21,6 +21,7 @@ maki-ui = { path = "../../libs/maki-ui" }
 maki-launcher = { path = "../maki-launcher" }
 maki-keys = { package = "maki-keys-api", path = "../../libs/maki-keys-api" }
 maki-bundle = { path = "../../libs/maki-bundle" }
+maki-store = { path = "../../libs/maki-store" }
 maki-wasm = { path = "../../libs/maki-wasm" }
 maki-app-host-api = { path = "../../libs/maki-app-host-api" }
 getrandom = "0.2"

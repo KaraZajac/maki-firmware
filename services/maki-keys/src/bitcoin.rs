@@ -220,7 +220,7 @@ impl Btc {
             let pages = review
                 .pages()
                 .into_iter()
-                .map(|p| Page { heading: p.heading, value: p.value, mono: p.mono })
+                .map(|p| Page { heading: p.heading, value: p.value, mono: p.mono, prose: String::new() })
                 .collect();
             let spent = display::amount(review.spent(), net);
             let mut result = owner_says(|l| {

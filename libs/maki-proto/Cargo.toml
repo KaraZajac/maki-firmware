@@ -17,6 +17,8 @@ maki-seed = { path = "../maki-seed" }
 # and checks app bundles as maki's app host does
 maki-bundle = { path = "../maki-bundle" }
 maki-wasm = { path = "../maki-wasm" }
+# and the maki store's records: stamps, roots, revocation lists
+maki-store = { path = "../maki-store" }
 
 [features]
 # the fake maki's shortcut past Roughtime (Device::trust_platform_clock); never for the badge
