@@ -144,12 +144,15 @@ impl Screen {
     }
 
     /// The bottom line: what a press of the centre does now, boxed, and arrows at the sides
-    /// when left and right have somewhere to go.
+    /// when left and right have somewhere to go. No action, no box.
     pub fn action_bar(&self, action: &str, arrows: bool) {
         let top = H - SMALL_LINE;
         if arrows {
             self.arrow(3, top + SMALL_LINE / 2, 5, true);
             self.arrow(W - 4, top + SMALL_LINE / 2, 5, false);
+        }
+        if action.is_empty() {
+            return;
         }
         let mut tv = TextView::new(
             Gid::dummy(),

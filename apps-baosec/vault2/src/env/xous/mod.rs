@@ -12,6 +12,7 @@ use persistent_store::Store;
 use xous::try_send_message;
 use xous_names::XousNames;
 use xous_usb_hid::device::fido::*;
+use zeroize::Zeroize;
 
 pub use self::storage::XousStorage;
 use crate::KEEPALIVE_DELAY_MS;
@@ -85,7 +86,24 @@ enum Ctap1TimeoutOp {
     Stop,
     Invalid,
 }
+/// maki: the authenticator's secrets, from the recovery phrase (maki-keys derives them; see
+/// `maki_seed::fido_keys`).
+struct PhraseKeys {
+    encryption: [u8; 32],
+    authentication: [u8; 32],
+    cred_random: [u8; 64],
+}
+
+impl Drop for PhraseKeys {
+    fn drop(&mut self) {
+        self.encryption.zeroize();
+        self.authentication.zeroize();
+        self.cred_random.zeroize();
+    }
+}
+
 pub struct XousEnv {
+    phrase_keys: Option<PhraseKeys>,
     rng: XousRng256,
     store: Store<XousStorage>,
     main_connection: XousHidConnection,
@@ -591,6 +609,7 @@ impl XousEnv {
         });
 
         XousEnv {
+            phrase_keys: None,
             rng: XousRng256::new(&xns),
             store,
             main_connection: XousHidConnection { endpoint: usb_bao1x::UsbHid::new() },
@@ -599,6 +618,18 @@ impl XousEnv {
             modals: modals::Modals::new(&xns).unwrap(),
             last_user_presence_request: None,
             ctap1_cid,
+        }
+    }
+
+    /// maki: the secrets from the recovery phrase, 128 bytes (encryption key, authentication key,
+    /// CredRandom), before `Ctap::new`. Without them no credential ID can be made or opened.
+    pub fn set_phrase_keys(&mut self, keys: &[u8]) {
+        if keys.len() == 128 {
+            self.phrase_keys = Some(PhraseKeys {
+                encryption: keys[..32].try_into().unwrap(),
+                authentication: keys[32..64].try_into().unwrap(),
+                cred_random: keys[64..].try_into().unwrap(),
+            });
         }
     }
 
@@ -771,7 +802,38 @@ impl FirmwareProtection for XousEnv {
     fn lock(&mut self) -> bool { false }
 }
 
-impl key_store::Helper for XousEnv {}
+/// maki: the master keys come from the recovery phrase, not from the RNG and the store, so the
+/// credential IDs maki gives out (which hold the credential's private key, encrypted and
+/// authenticated with them) open on any maki restored from the same phrase.
+impl key_store::KeyStore for XousEnv {
+    fn key_handle_encryption(&mut self) -> Result<[u8; 32], key_store::Error> {
+        self.phrase_keys.as_ref().map(|k| k.encryption).ok_or(key_store::Error)
+    }
+
+    fn key_handle_authentication(&mut self) -> Result<[u8; 32], key_store::Error> {
+        self.phrase_keys.as_ref().map(|k| k.authentication).ok_or(key_store::Error)
+    }
+
+    fn derive_ecdsa(&mut self, seed: &[u8; 32]) -> Result<[u8; 32], key_store::Error> {
+        match ctap_crypto::ecdsa::SecKey::from_bytes(seed) {
+            None => Err(key_store::Error),
+            Some(_) => Ok(*seed),
+        }
+    }
+
+    fn generate_ecdsa_seed(&mut self) -> Result<[u8; 32], key_store::Error> {
+        let mut seed = [0; 32];
+        ctap_crypto::ecdsa::SecKey::gensk(self.rng()).to_bytes(&mut seed);
+        Ok(seed)
+    }
+
+    /// Nothing of the key store's is kept to reset: its keys come from the phrase, so
+    /// credentials made before a CTAP reset keep working, and a new phrase is what starts over.
+    /// A master key an earlier firmware stored goes.
+    fn reset(&mut self) -> Result<(), key_store::Error> {
+        self.store().remove(key_store::STORAGE_KEY).map_err(|_| key_store::Error)
+    }
+}
 
 impl AttestationStore for XousEnv {
     fn get(
@@ -837,6 +899,8 @@ impl Env for XousEnv {
     fn write(&mut self) -> Self::Write { Console::new() }
 
     fn customization(&self) -> &Self::Customization { &DEFAULT_CUSTOMIZATION }
+
+    fn fixed_cred_random(&mut self) -> Option<[u8; 64]> { self.phrase_keys.as_ref().map(|k| k.cred_random) }
 
     fn main_hid_connection(&mut self) -> &mut Self::HidConnection { &mut self.main_connection }
 

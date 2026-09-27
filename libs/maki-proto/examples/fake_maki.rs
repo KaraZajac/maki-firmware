@@ -154,7 +154,7 @@ fn parse_fake(blob: &[u8]) -> Option<(Vec<(String, String, String)>, Vec<(String
 
 /// The last piece of a restore: open it, ask, add what's missing.
 fn finish_restore(blob: Vec<u8>, store: &Mutex<Store>, policy: Policy) -> (u8, Vec<u8>) {
-    let Some((logins, totp)) = parse_fake(&blob) else { return reply::restore_piece(true, Approval::NotYours, 0, 0) };
+    let Some((logins, totp)) = parse_fake(&blob) else { return reply::restore_piece(true, Approval::NotYours, 0, 0, 0) };
     let (new_logins, new_totp): (Vec<_>, Vec<_>) = {
         let st = store.lock().unwrap();
         (
@@ -164,7 +164,7 @@ fn finish_restore(blob: Vec<u8>, store: &Mutex<Store>, policy: Policy) -> (u8, V
     };
     let (l, t) = (new_logins.len() as u16, new_totp.len() as u16);
     if l + t == 0 {
-        return reply::restore_piece(true, Approval::Approved, 0, 0);
+        return reply::restore_piece(true, Approval::Approved, 0, 0, 0);
     }
     let a = approve(policy, &format!("restore backup? {l} logins, {t} codes"));
     if a == Approval::Approved {
@@ -172,7 +172,7 @@ fn finish_restore(blob: Vec<u8>, store: &Mutex<Store>, policy: Policy) -> (u8, V
         st.logins.extend(new_logins);
         st.totp.extend(new_totp);
     }
-    reply::restore_piece(true, a, l, t)
+    reply::restore_piece(true, a, l, t, 0)
 }
 
 fn base32(s: &str) -> Option<Vec<u8>> {
@@ -337,11 +337,11 @@ fn main() {
                         };
                         match finished {
                             None => {
-                                let (kind, body) = reply::restore_piece(true, Approval::Unavailable, 0, 0);
+                                let (kind, body) = reply::restore_piece(true, Approval::Unavailable, 0, 0, 0);
                                 writer.lock().unwrap().write_all(&frame::encode(kind, packet.id, &body)).ok();
                             }
                             Some(false) => {
-                                let (kind, body) = reply::restore_piece(false, Approval::Approved, 0, 0);
+                                let (kind, body) = reply::restore_piece(false, Approval::Approved, 0, 0, 0);
                                 writer.lock().unwrap().write_all(&frame::encode(kind, packet.id, &body)).ok();
                             }
                             // like an ask: answered once the owner decides, from another thread

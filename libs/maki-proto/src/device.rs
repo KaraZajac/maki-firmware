@@ -115,6 +115,7 @@ pub enum Handled {
     Bitcoin(Bitcoin),
 }
 
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Bitcoin {
     Account { network: u8 },
@@ -251,9 +252,10 @@ pub mod reply {
 
     /// A restore piece taken in (`done` false), or the restore's outcome (`done` true): the
     /// approval, and what it added.
-    pub fn restore_piece(done: bool, status: Approval, logins: u16, codes: u16) -> (u8, Vec<u8>) {
-        let (logins, codes) = if status == Approval::Approved { (logins, codes) } else { (0, 0) };
-        (kind::BACKUP_PUT | kind::REPLY, Writer::new().u8(done as u8).u8(status as u8).u16(logins).u16(codes).finish())
+    pub fn restore_piece(done: bool, status: Approval, logins: u16, codes: u16, passkeys: u16) -> (u8, Vec<u8>) {
+        let (logins, codes, passkeys) = if status == Approval::Approved { (logins, codes, passkeys) } else { (0, 0, 0) };
+        let body = Writer::new().u8(done as u8).u8(status as u8).u16(logins).u16(codes).u16(passkeys).finish();
+        (kind::BACKUP_PUT | kind::REPLY, body)
     }
 }
 

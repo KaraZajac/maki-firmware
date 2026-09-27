@@ -63,3 +63,20 @@ fn the_backup_key_depends_only_on_the_seed() {
     assert_eq!(a, backup_key(&seed(&words, "")));
     assert_ne!(a, backup_key(&seed(&words, "other")));
 }
+
+#[test]
+fn fido_keys_are_hkdf_of_the_seed() {
+    // computed apart from this crate: RFC 5869 HKDF-SHA256 (salt "maki", info "fido v1") written
+    // out in Python over the test phrase's BIP39 seed
+    let words: Vec<&str> =
+        "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about".split(' ').collect();
+    let k = fido_keys(&seed(&words, ""));
+    let all: Vec<u8> = [&k.encryption[..], &k.authentication[..], &k.cred_random[..]].concat();
+    assert_eq!(
+        all,
+        hex("44c97ef1beb4a0dcb3988aa0d3634b2a58147e72ce1b4b92784c45b0b2c3298338711e230b49d3b84a3209f265c4ae43d4e6ca89ff730166ade90873855833b3d5ddb9ac507b40fafe35d9b4a6413b9f6b2c2d0e326ba4e5cc16c60633e7219378f41d01bd7158b3ead57d53394186c4c73a95e79dfd07d3f8c6c82df8f437b4")
+    );
+    // nothing shared with the backup's key
+    let b = backup_key(&seed(&words, ""));
+    assert!(all.windows(32).all(|w| w != b));
+}

@@ -103,6 +103,39 @@ pub fn seed(words: &[&str], passphrase: &str) -> [u8; 64] {
     out
 }
 
+/// The FIDO authenticator's secrets, from the seed, so that what maki gave sites (credential
+/// IDs, hmac-secret outputs) still works on a maki restored from the same phrase.
+pub struct FidoKeys {
+    /// AES-256: wraps the private key inside each credential ID maki gives out
+    pub encryption: [u8; 32],
+    /// HMAC-SHA256: authenticates those credential IDs
+    pub authentication: [u8; 32],
+    /// hmac-secret's CredRandom: 32 bytes used without user verification, then 32 with
+    pub cred_random: [u8; 64],
+}
+
+impl Drop for FidoKeys {
+    fn drop(&mut self) {
+        self.encryption.zeroize();
+        self.authentication.zeroize();
+        self.cred_random.zeroize();
+    }
+}
+
+/// HKDF-SHA256 over the seed, salt "maki", info "fido v1": 128 bytes, in `FidoKeys`' order.
+pub fn fido_keys(seed: &[u8; 64]) -> FidoKeys {
+    let hk = hkdf::Hkdf::<Sha256>::new(Some(b"maki"), seed);
+    let mut okm = [0u8; 128];
+    hk.expand(b"fido v1", &mut okm).expect("128 bytes is a valid HKDF length");
+    let keys = FidoKeys {
+        encryption: okm[..32].try_into().unwrap(),
+        authentication: okm[32..64].try_into().unwrap(),
+        cred_random: okm[64..].try_into().unwrap(),
+    };
+    okm.zeroize();
+    keys
+}
+
 /// The key that encrypts maki's backup: from the seed, so the phrase alone opens a backup and
 /// the PIN plays no part in it (a backup file is what an attacker gets to guess PINs against).
 pub fn backup_key(seed: &[u8; 64]) -> [u8; 32] {

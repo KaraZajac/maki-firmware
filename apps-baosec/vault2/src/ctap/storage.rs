@@ -49,8 +49,15 @@ struct PinProperties {
 
 /// Initializes the store by creating missing objects.
 pub fn init(env: &mut impl Env) -> Result<(), Ctap2StatusCode> {
-    // Generate and store the CredRandom secrets if they are missing.
-    if env.store().find_handle(key::CRED_RANDOM_SECRET)?.is_none() {
+    // maki: CredRandom from the recovery phrase, when the environment has it, so hmac-secret
+    // answers the same on a maki restored from the phrase (and after a CTAP reset)
+    if let Some(mut fixed) = env.fixed_cred_random() {
+        if env.store().find(key::CRED_RANDOM_SECRET)?.as_deref() != Some(&fixed[..]) {
+            env.store().insert(key::CRED_RANDOM_SECRET, &fixed)?;
+        }
+        fixed.fill(0);
+    } else if env.store().find_handle(key::CRED_RANDOM_SECRET)?.is_none() {
+        // Generate and store the CredRandom secrets if they are missing.
         let cred_random_with_uv = env.rng().gen_uniform_u8x32();
         let cred_random_without_uv = env.rng().gen_uniform_u8x32();
         let mut cred_random = Vec::with_capacity(64);

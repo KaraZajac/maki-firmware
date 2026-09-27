@@ -57,7 +57,7 @@ bytes. Bodies must be consumed exactly: trailing bytes are an error.
 | `0x11` GET_TOTP | `site:str8` | `approval:u8` `code:str8` `valid_for_s:u8` |
 | `0x12` SAVE_LOGIN | `site:str8` `username:str8` `password:str8` | `approval:u8` |
 | `0x20` BACKUP_GET | `offset:u32` | `status:u8` `total:u32` `offset:u32` `piece:bytes16` |
-| `0x21` BACKUP_PUT | `total:u32` `offset:u32` `piece:bytes16` | `done:u8` `approval:u8` `logins:u16` `codes:u16` |
+| `0x21` BACKUP_PUT | `total:u32` `offset:u32` `piece:bytes16` | `done:u8` `approval:u8` `logins:u16` `codes:u16` `passkeys:u16` |
 | `0x30` BTC_ACCOUNT | `network:u8` | `approval:u8` `zpub:str8` `descriptor:str8` |
 | `0x31` BTC_ADDRESS | `network:u8` `change:u8` `index:u32` | `approval:u8` `address:str8` |
 | `0x32` BTC_SIGN | `network:u8` `total:u32` `offset:u32` `piece:bytes16` | `done:u8` `approval:u8` `signed:u32` `reason:str8` |
@@ -140,9 +140,11 @@ logins for a site), left and right go through them, then "cancel", and the centr
 
 ## Backups
 
-maki's logins and codes, sealed by maki with AES-256-GCM-SIV under a key derived from its
-recovery phrase (HKDF over the BIP39 seed), so the host keeps them without being able to read
-them, and a maki restored from the phrase can open them.
+maki's logins, codes and passkeys (its resident FIDO credentials, and the signature counter),
+sealed by maki with AES-256-GCM-SIV under a key derived from its recovery phrase (HKDF over the
+BIP39 seed), so the host keeps them without being able to read them, and a maki restored from
+the phrase can open them. The passkeys' keys and the credential IDs maki gave sites come from
+the phrase too, so the phrase and a backup are all a new maki needs.
 
 - **BACKUP_GET** hands the backup out in pieces of up to 4096 bytes. Offset 0 seals a fresh one
   (reading the vault and deriving the key takes maki a moment); the host asks for further
@@ -150,10 +152,12 @@ them, and a maki restored from the phrase can open them.
   phrase with none.
 - **BACKUP_PUT** sends one back in pieces of up to 4096 bytes, in order, with the same `total`
   each time (at most 512 KiB). A piece before the last is answered `done` = 0 at once. The last
-  is answered once maki has opened the backup and asked the owner ("Restore backup? 12 logins,
-  3 codes"): `done` = 1, then the approval and what was added. maki only adds records it doesn't
-  have; what it has, it keeps. A backup maki can't open is `7` not yours, and nothing is asked.
-  If there's nothing new, nothing is asked either: approved, with nothing added.
+  is answered once maki has opened the backup and asked the owner (what it would add: logins,
+  codes, passkeys): `done` = 1, then the approval and what was added. maki only adds records it
+  doesn't have (passkeys are matched by credential ID); what it has, it keeps. A signature
+  counter higher than maki's is taken, so sites never see it go back. A backup maki can't open
+  is `7` not yours, and nothing is asked. If there's nothing new, nothing is asked either:
+  approved, with nothing added.
 
 ## Bitcoin
 

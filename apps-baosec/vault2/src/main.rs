@@ -320,17 +320,32 @@ fn main() -> ! {
         let conn = conn.clone();
         move || {
             let mut vendor_session = VendorSession::default();
+            // maki: the passkeys' secrets come from the recovery phrase, through maki-keys, which
+            // hands them to this process alone: claim that before anything else can
+            let keys = maki_keys::Keys::new(&xous_names::XousNames::new().unwrap())
+                .expect("couldn't connect to maki-keys");
+            if !keys.claim_fido() {
+                log::error!("another process has the FIDO role: no passkeys");
+            }
             // block until the PDDB is mounted
             let pddb = pddb::Pddb::new();
             pddb.is_mounted_blocking();
-            // maki: and until the PIN has opened the secret basis, so that the FIDO store (and
-            // the keys it makes on first use) lands in it, not in the system basis
-            let keys = maki_keys::Keys::new(&xous_names::XousNames::new().unwrap())
-                .expect("couldn't connect to maki-keys");
-            keys.wait_unlocked();
+            // maki: and until the PIN has opened the secret basis, so that the FIDO store lands
+            // in it, not in the system basis, and there's a phrase to derive the secrets from
+            // (during setup the PIN comes first)
+            keys.wait_phrase();
 
-            let env = XousEnv::new(conn);
+            let mut env = XousEnv::new(conn);
+            match keys.fido_keys() {
+                Some(mut secrets) => {
+                    env.set_phrase_keys(&secrets);
+                    secrets.fill(0);
+                    log::info!("FIDO: secrets from the recovery phrase");
+                }
+                None => log::error!("maki-keys gave no FIDO secrets: no credential can be made"),
+            }
             let mut ctap = vault2::Ctap::new(env, Instant::now());
+            let mut generation = keys.status_and_generation().1;
             loop {
                 match ctap.env().main_hid_connection().u2f_wait_incoming() {
                     Ok(msg) => {
@@ -338,11 +353,18 @@ fn main() -> ! {
                         // closed, and the store would read the system basis instead, even make
                         // keys there. The request is dropped (the browser tries again) until the
                         // PIN opens the basis, and then the store re-reads what it holds.
-                        if keys.status().0 != maki_keys::State::Unlocked {
+                        let (state, now) = keys.status_and_generation();
+                        if state != maki_keys::State::Unlocked {
                             log::info!("FIDO request while locked: waiting for the PIN");
                             keys.wait_unlocked();
                             ctap.env().store().refresh();
+                            generation = keys.status_and_generation().1;
                             continue;
+                        }
+                        // and a restore may have added passkeys to the store behind its back
+                        if now != generation {
+                            generation = now;
+                            ctap.env().store().refresh();
                         }
                         ctap.update_timeouts(Instant::now());
                         let mutex = opensk_mutex.lock().unwrap();

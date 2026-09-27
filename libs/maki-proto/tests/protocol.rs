@@ -411,9 +411,16 @@ fn backup_replies_carry_nothing_unless_approved() {
     assert_eq!(k, kind::BACKUP_GET | kind::REPLY);
     let mut r = Reader::new(&body);
     assert_eq!((r.u8().unwrap(), r.u32().unwrap(), r.u32().unwrap(), r.bytes16().unwrap()), (Approval::Locked as u8, 999, 0, &[][..]));
-    let (_, body) = reply::restore_piece(true, Approval::Denied, 5, 6);
+    let (_, body) = reply::restore_piece(true, Approval::Denied, 5, 6, 7);
     let mut r = Reader::new(&body);
-    assert_eq!((r.u8().unwrap(), r.u8().unwrap(), r.u16().unwrap(), r.u16().unwrap()), (1, Approval::Denied as u8, 0, 0));
+    assert_eq!(
+        (r.u8().unwrap(), r.u8().unwrap(), r.u16().unwrap(), r.u16().unwrap(), r.u16().unwrap()),
+        (1, Approval::Denied as u8, 0, 0, 0)
+    );
+    r.end().unwrap();
+    let (_, body) = reply::restore_piece(true, Approval::Approved, 5, 6, 7);
+    let mut r = Reader::new(&body);
+    assert_eq!((r.u8().unwrap(), r.u8().unwrap(), r.u16().unwrap(), r.u16().unwrap(), r.u16().unwrap()), (1, 0, 5, 6, 7));
 }
 
 #[test]

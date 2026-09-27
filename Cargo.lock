@@ -4338,17 +4338,20 @@ dependencies = [
 ]
 
 [[package]]
-name = "maki-bitcoin"
+name = "maki-apps"
 version = "0.1.0"
 dependencies = [
  "blitstr2",
  "log",
+ "maki-fido",
  "maki-icons",
  "maki-keys-api",
  "maki-launcher",
+ "maki-proto",
  "maki-ui",
  "num-derive 0.4.2",
  "num-traits",
+ "pddb",
  "xous 0.9.70 (registry+https://github.com/rust-lang/crates.io-index)",
  "xous-api-log",
  "xous-api-names",
@@ -4370,6 +4373,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "maki-fido"
+version = "0.1.0"
+
+[[package]]
 name = "maki-icons"
 version = "0.1.0"
 
@@ -4382,6 +4389,7 @@ dependencies = [
  "hmac 0.12.1",
  "log",
  "maki-btc",
+ "maki-fido",
  "maki-keys-api",
  "maki-launcher",
  "maki-seed",
@@ -8067,6 +8075,7 @@ dependencies = [
  "xous-api-ticktimer",
  "xous-ipc 0.10.10 (registry+https://github.com/rust-lang/crates.io-index)",
  "xous-usb-hid",
+ "zeroize",
 ]
 
 [[package]]

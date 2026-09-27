@@ -55,6 +55,23 @@ pub enum KeysOp {
     /// Memory message (mutable lend) with a `PinRequest` (`pin` the current one, `new_pin`),
     /// from the screen, while unlocked. A wrong current PIN counts toward the wipe.
     ChangePin = 13,
+    /// Blocking scalar: the first process to call this is the FIDO authenticator (the vault, at
+    /// boot), and only it may have `FidoKeys`. Returns 1 to it.
+    ClaimFido = 14,
+    /// Memory message (mutable lend) with a `FidoSecret`: the authenticator's secrets, derived
+    /// from the recovery phrase (`maki_seed::fido_keys`), for the FIDO process, once there's a
+    /// phrase and maki is unlocked.
+    FidoKeys = 15,
+    /// Scalar: something changed the FIDO store behind the vault's back (the Passkeys app
+    /// deleted one): bumps the store generation in `Status`, so the vault re-reads it.
+    FidoStoreChanged = 16,
+}
+
+/// `FidoKeys`' answer: `keys` is 128 bytes (encryption, authentication, CredRandom).
+#[derive(Debug, Default, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
+pub struct FidoSecret {
+    pub result: u32,
+    pub keys: Vec<u8>,
 }
 
 /// Backups and PSBTs travel in pieces this big, here and over USB.
@@ -76,6 +93,7 @@ pub struct Chunk {
     pub done: bool,
     pub logins: u32,
     pub codes: u32,
+    pub passkeys: u32,
     /// a PSBT: `NETWORK_*`
     pub network: u8,
     /// a PSBT refused (`RESULT_REFUSED`): why, for the computer to show
@@ -168,6 +186,10 @@ pub const RESULT_REFUSED: u32 = 11;
 
 /// Set in the second word of `Status`'s answer when a recovery phrase exists.
 pub const HAS_PHRASE: usize = 1 << 16;
+/// Bits of `Status`' second word counting restores, which may write to the FIDO store behind
+/// the vault's back: when it changes, the vault re-reads the store.
+pub const STORE_GENERATION_SHIFT: usize = 20;
+pub const STORE_GENERATION_MASK: usize = 0xfff;
 
 /// Six to twelve digits.
 pub fn pin_is_valid(pin: &str) -> bool {
@@ -200,6 +222,12 @@ impl Keys {
     pub fn status(&self) -> (State, u32) {
         let (state, rest) = self.status_raw();
         (state, (rest & 0xffff) as u32)
+    }
+
+    /// The state, and the FIDO store's generation (see `STORE_GENERATION_SHIFT`).
+    pub fn status_and_generation(&self) -> (State, u32) {
+        let (state, rest) = self.status_raw();
+        (state, ((rest >> STORE_GENERATION_SHIFT) & STORE_GENERATION_MASK) as u32)
     }
 
     /// Whether a recovery phrase has been made (or restored). Known only while unlocked.
@@ -293,6 +321,42 @@ impl Keys {
     /// A piece of the PSBT last signed, from `offset`.
     pub fn btc_signed_chunk(&self, offset: u32) -> Chunk {
         self.chunk_call(KeysOp::BtcSigned, Chunk { offset, ..Default::default() })
+    }
+
+    /// Take the FIDO authenticator's role (the vault, at boot). See `KeysOp::ClaimFido`.
+    pub fn claim_fido(&self) -> bool {
+        matches!(
+            xous::send_message(self.conn, xous::Message::new_blocking_scalar(KeysOp::ClaimFido.to_usize().unwrap(), 0, 0, 0, 0)),
+            Ok(xous::Result::Scalar1(1))
+        )
+    }
+
+    /// The FIDO authenticator's secrets, from the phrase: encryption key, authentication key,
+    /// CredRandom (32 + 32 + 64 bytes). None unless this is the FIDO process and maki is unlocked
+    /// with a phrase. Overwrite them when done with them.
+    pub fn fido_keys(&self) -> Option<Vec<u8>> {
+        let Ok(mut buf) = Buffer::into_buf(FidoSecret { result: RESULT_FAILED, keys: Vec::new() }) else { return None };
+        buf.lend_mut(self.conn, KeysOp::FidoKeys.to_u32().unwrap()).ok()?;
+        let answer = buf.to_original::<FidoSecret, _>().ok()?;
+        (answer.result == RESULT_OK && answer.keys.len() == 128).then_some(answer.keys)
+    }
+
+    /// Tell the vault the FIDO store changed behind its back. See `KeysOp::FidoStoreChanged`.
+    pub fn fido_store_changed(&self) {
+        xous::send_message(
+            self.conn,
+            xous::Message::new_scalar(KeysOp::FidoStoreChanged.to_usize().unwrap(), 0, 0, 0, 0),
+        )
+        .ok();
+    }
+
+    /// Returns once the secrets are open and there's a recovery phrase: what the passkeys come
+    /// from. (During setup, the PIN opens the secrets before the phrase is made.)
+    pub fn wait_phrase(&self) {
+        let tt = ticktimer_server::Ticktimer::new().unwrap();
+        while !(self.status().0 == State::Unlocked && self.has_phrase()) {
+            tt.sleep_ms(250).ok();
+        }
     }
 
     /// Returns once the secrets are open. For processes that mustn't touch storage before then.

@@ -67,6 +67,10 @@ pub trait Env {
 
     fn customization(&self) -> &Self::Customization;
 
+    /// hmac-secret's CredRandom when it comes from outside rather than the RNG (maki derives it
+    /// from the recovery phrase); `storage::init` keeps the store in step with it.
+    fn fixed_cred_random(&mut self) -> Option<[u8; 64]> { None }
+
     /// I/O connection for sending packets implementing CTAP HID protocol.
     fn main_hid_connection(&mut self) -> &mut Self::HidConnection;
 

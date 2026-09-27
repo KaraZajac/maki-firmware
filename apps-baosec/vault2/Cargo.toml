@@ -40,6 +40,7 @@ usb-bao1x = { path = "../../services/usb-bao1x" }
 xous-usb-hid = { git = "https://github.com/betrusted-io/xous-usb-hid.git", branch = "main" }
 keystore = { path = "../../services/keystore" }
 
+zeroize = "1.8.1"
 # opensk
 ctap-crypto = { path = "./libraries/crypto", package = "ctap-crypto-vault2" }
 cbor = { path = "./libraries/cbor", package = "cbor-vault2" }

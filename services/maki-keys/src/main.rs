@@ -9,8 +9,10 @@
 //! opened (its key is gone), and its name mustn't collide with the new one.
 
 mod bitcoin;
+mod passkeys;
 
 use std::io::{Read, Write};
+use std::sync::atomic::Ordering;
 
 use aes_gcm_siv::aead::{Aead, KeyInit, Payload};
 use aes_gcm_siv::{Aes256GcmSiv, Nonce};
@@ -30,10 +32,12 @@ const KEY_TRIES: &str = "tries";
 const SEED_DICT: &str = "maki.seed";
 const KEY_ENTROPY: &str = "entropy";
 
-/// What a backup holds: the vault's dictionaries, record by record, as the vault stores them.
-/// (Passkeys will join when they come from the phrase.)
-const BACKUP_DICTS: [&str; 2] = ["vault.passwords", "vault.totp"];
+/// What a backup holds: the vault's dictionaries, record by record, as the vault stores them, and
+/// the FIDO authenticator's resident credentials and signature counter (see passkeys.rs). An
+/// older firmware restoring a newer backup skips the dictionaries it doesn't know.
+const BACKUP_DICTS: [&str; 3] = ["vault.passwords", "vault.totp", passkeys::DICT];
 const BACKUP_MAGIC: &[u8; 8] = b"MAKIBAK1";
+const RESTORE_TIMEOUT_S: u32 = if option_env!("MAKI_DEMO").is_some() { 600 } else { 60 };
 const BACKUP_HEADER: &[u8] = b"maki backup 1\n";
 
 /// A backup's plaintext: each record with the dictionary it came from.
@@ -48,6 +52,9 @@ fn gather(store: &Store, basis: &str) -> Vec<u8> {
     for (id, dict) in BACKUP_DICTS.iter().enumerate() {
         let Ok(keys) = store.pddb.list_keys(dict, Some(basis)) else { continue };
         for key in keys {
+            if *dict == passkeys::DICT && !passkeys::backed_up(&key) {
+                continue;
+            }
             let Ok(mut k) = store.pddb.get(dict, &key, Some(basis), false, false, None, None::<fn()>) else { continue };
             let mut value = Vec::new();
             if k.read_to_end(&mut value).is_err() {
@@ -117,35 +124,91 @@ fn backup_key(store: &Store, basis: &str) -> Option<[u8; 32]> {
     Some(key)
 }
 
-/// Add the records maki doesn't have; returns (logins, codes) added.
-fn restore(store: &Store, basis: &str, entries: &[Entry]) -> (u32, u32) {
-    let (mut logins, mut codes) = (0, 0);
+/// What a restore adds, or would add.
+#[derive(Default, Clone, Copy)]
+struct Added {
+    logins: u32,
+    codes: u32,
+    passkeys: u32,
+}
+
+fn read_key(store: &Store, dict: &str, key: &str, basis: &str) -> Option<Vec<u8>> {
+    let mut k = store.pddb.get(dict, key, Some(basis), false, false, None, None::<fn()>).ok()?;
+    let mut v = Vec::new();
+    k.read_to_end(&mut v).ok()?;
+    Some(v)
+}
+
+/// The resident credentials maki has: the slot of each, and its credential ID.
+fn credentials(store: &Store, basis: &str) -> Vec<(usize, Vec<u8>)> {
+    let Ok(keys) = store.pddb.list_keys(passkeys::DICT, Some(basis)) else { return Vec::new() };
+    keys.iter()
+        .filter_map(|k| k.parse::<usize>().ok().filter(|n| passkeys::CREDENTIALS.contains(n)))
+        .filter_map(|slot| {
+            let mut value = read_key(store, passkeys::DICT, &slot.to_string(), basis)?;
+            let id = passkeys::credential_id(&value).map(|id| id.to_vec());
+            value.zeroize();
+            Some((slot, id?))
+        })
+        .collect()
+}
+
+/// Add what maki doesn't have (or with `write` false, count it): logins and codes by their
+/// record's name, passkeys by credential ID, each into a free slot. The signature counter only
+/// ever goes up, so sites never see it go back.
+fn restore(store: &Store, basis: &str, entries: &[Entry], write: bool) -> Added {
+    let mut added = Added::default();
+    let mut have = credentials(store, basis);
+    let mut free = passkeys::CREDENTIALS.filter(|n| !have.iter().any(|(slot, _)| slot == n)).collect::<Vec<_>>().into_iter();
+    let put = |dict: &str, key: &str, value: &[u8]| -> bool {
+        store
+            .pddb
+            .get(dict, key, Some(basis), true, true, Some(value.len()), None::<fn()>)
+            .and_then(|mut k| k.write_all(value))
+            .is_ok()
+    };
     for e in entries {
         let dict = BACKUP_DICTS[e.dict as usize];
-        if store.pddb.get(dict, &e.key, Some(basis), false, false, None, None::<fn()>).is_ok() {
+        if dict == passkeys::DICT {
+            if e.key == passkeys::COUNTER.to_string() {
+                let theirs = e.value.get(..4).map(|b| u32::from_le_bytes(b.try_into().unwrap()));
+                let ours = read_key(store, dict, &e.key, basis)
+                    .and_then(|v| v.get(..4).map(|b| u32::from_le_bytes(b.try_into().unwrap())))
+                    .unwrap_or(0);
+                if let Some(theirs) = theirs.filter(|&t| t > ours) {
+                    if write {
+                        store.pddb.delete_key(dict, &e.key, Some(basis)).ok();
+                        put(dict, &e.key, &theirs.to_le_bytes());
+                    }
+                }
+                continue;
+            }
+            let Some(id) = passkeys::credential_id(&e.value) else { continue };
+            if have.iter().any(|(_, have)| have == id) {
+                continue; // maki has it already: keep maki's
+            }
+            let Some(slot) = free.next() else { continue }; // no room left
+            if !write || put(dict, &slot.to_string(), &e.value) {
+                have.push((slot, id.to_vec()));
+                added.passkeys += 1;
+            }
+            continue;
+        }
+        if read_key(store, dict, &e.key, basis).is_some() {
             continue; // maki has it already: keep maki's
         }
-        let Ok(mut k) = store.pddb.get(dict, &e.key, Some(basis), true, true, Some(e.value.len()), None::<fn()>) else {
-            continue;
-        };
-        if k.write_all(&e.value).is_ok() {
+        if !write || put(dict, &e.key, &e.value) {
             if e.dict == 0 {
-                logins += 1;
+                added.logins += 1;
             } else {
-                codes += 1;
+                added.codes += 1;
             }
         }
     }
-    store.pddb.sync().ok();
-    (logins, codes)
-}
-
-/// What a restore would add, before asking.
-fn missing(store: &Store, basis: &str, entries: &[Entry]) -> (u32, u32) {
-    entries
-        .iter()
-        .filter(|e| store.pddb.get(BACKUP_DICTS[e.dict as usize], &e.key, Some(basis), false, false, None, None::<fn()>).is_err())
-        .fold((0, 0), |(l, c), e| if e.dict == 0 { (l + 1, c) } else { (l, c + 1) })
+    if write {
+        store.pddb.sync().ok();
+    }
+    added
 }
 /// PBKDF2-HMAC-SHA256 rounds for the PIN. Around a second on the badge is the aim: slow for
 /// guessing, tolerable at boot. To be measured on hardware; it's stored, so it can change.
@@ -401,11 +464,15 @@ fn main() -> ! {
     log::info!("starting {:?}", state);
     // the screen (the launcher), which alone may use the PIN and the phrase
     let mut screen: Option<xous::PID> = None;
+    // the FIDO authenticator (the vault), which alone may have the passkeys' secrets
+    let mut fido: Option<xous::PID> = None;
     // the backup being read out, and one being restored
     let mut sealed: Option<Vec<u8>> = None;
     let mut incoming: Vec<u8> = Vec::new();
     let mut incoming_total: u32 = 0;
     let mut btc = bitcoin::Btc::new();
+    // bumped when a restore writes to the FIDO store behind the vault's back
+    let generation = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
     // the phrase's entropy, while unlocked
     let entropy = |store: &Store, state: State| match (state, store.lock()) {
         (State::Unlocked, Some(lock)) => store.entropy(&lock.basis),
@@ -421,7 +488,9 @@ fn main() -> ! {
                 let tries_left = if state == State::Unset { MAX_TRIES } else { MAX_TRIES.saturating_sub(store.tries()) };
                 let has_phrase = state == State::Unlocked
                     && store.lock().map(|l| store.entropy(&l.basis).is_some()).unwrap_or(false);
-                let rest = tries_left as usize | if has_phrase { HAS_PHRASE } else { 0 };
+                let rest = tries_left as usize
+                    | if has_phrase { HAS_PHRASE } else { 0 }
+                    | (generation.load(Ordering::SeqCst) as usize & STORE_GENERATION_MASK) << STORE_GENERATION_SHIFT;
                 xous::return_scalar2(msg.sender, state as usize, rest).ok();
             }
             Some(KeysOp::BackupChunk) => {
@@ -432,6 +501,7 @@ fn main() -> ! {
                 req.result = match (state, store.lock()) {
                     (State::Unlocked, Some(lock)) => {
                         if req.offset == 0 || sealed.is_none() {
+                            let planted = option_env!("MAKI_DEMO_BACKUP").is_some() && passkeys::plant_demo(&store.pddb, &lock.basis);
                             sealed = backup_key(&store, &lock.basis).and_then(|mut key| {
                                 let mut plain = gather(&store, &lock.basis);
                                 let blob = seal(&key, &plain);
@@ -440,6 +510,9 @@ fn main() -> ! {
                                 key.zeroize();
                                 blob
                             });
+                            if planted {
+                                passkeys::unplant_demo(&store.pddb, &lock.basis);
+                            }
                         }
                         match &sealed {
                             None if store.entropy(&lock.basis).is_none() => RESULT_NO_PHRASE,
@@ -514,32 +587,46 @@ fn main() -> ! {
                     continue;
                 };
                 drop(buffer);
+                let generation = generation.clone();
                 std::thread::spawn(move || {
                     let mut msg = msg;
                     let store = Store { pddb: Pddb::new() };
-                    let (logins, codes) = missing(&store, &basis, &entries);
-                    let (result, added) = if logins + codes == 0 {
-                        (RESULT_OK, (0, 0))
+                    let would = restore(&store, &basis, &entries, false);
+                    let (result, added) = if would.logins + would.codes + would.passkeys == 0 {
+                        // nothing new; a higher signature counter still comes across
+                        (RESULT_OK, restore(&store, &basis, &entries, true))
                     } else {
                         let xns = xous_names::XousNames::new().unwrap();
-                        let detail = format!("{} logins, {} codes", logins, codes);
-                        match maki_launcher::Launcher::new(&xns)
-                            .map(|l| l.ask("maki desktop", "Restore backup?", &detail, &[], 30))
-                        {
-                            Ok(Ok(maki_launcher::Answer::Allowed(_))) => (RESULT_OK, restore(&store, &basis, &entries)),
-                            Ok(Ok(maki_launcher::Answer::Denied)) => (RESULT_DENIED, (0, 0)),
-                            Ok(Ok(maki_launcher::Answer::TimedOut)) => (RESULT_TIMED_OUT, (0, 0)),
-                            _ => (RESULT_FAILED, (0, 0)),
+                        let count = |n: u32, one: &str| format!("{} {}{}", n, one, if n == 1 { "" } else { "s" });
+                        let what = [count(would.logins, "login"), count(would.codes, "code"), count(would.passkeys, "passkey")]
+                            .join("\n");
+                        let page = maki_launcher::Page { heading: "Restore".into(), value: "from a backup".into(), mono: what };
+                        match maki_launcher::Launcher::new(&xns).map(|l| {
+                            l.review("maki desktop", "Restore backup?", "adds what's missing", vec![page], "restore", "cancel", RESTORE_TIMEOUT_S)
+                        }) {
+                            Ok(Ok(maki_launcher::Answer::Allowed(_))) => (RESULT_OK, restore(&store, &basis, &entries, true)),
+                            Ok(Ok(maki_launcher::Answer::Denied)) => (RESULT_DENIED, Added::default()),
+                            Ok(Ok(maki_launcher::Answer::TimedOut)) => (RESULT_TIMED_OUT, Added::default()),
+                            _ => (RESULT_FAILED, Added::default()),
                         }
                     };
-                    log::info!("restore: {} ({} logins, {} codes added)", result, added.0, added.1);
+                    // the FIDO store changed behind the vault's back: it re-reads it
+                    generation.fetch_add(1, Ordering::SeqCst);
+                    log::info!(
+                        "restore: {} ({} logins, {} codes, {} passkeys added)",
+                        result,
+                        added.logins,
+                        added.codes,
+                        added.passkeys
+                    );
                     if let Some(mem) = msg.body.memory_message_mut() {
                         let mut buffer = unsafe { Buffer::from_memory_message_mut(mem) };
                         if let Ok(mut req) = buffer.to_original::<Chunk, _>() {
                             req.result = result;
                             req.done = true;
-                            req.logins = added.0;
-                            req.codes = added.1;
+                            req.logins = added.logins;
+                            req.codes = added.codes;
+                            req.passkeys = added.passkeys;
                             buffer.replace(req).ok();
                         }
                     }
@@ -574,6 +661,39 @@ fn main() -> ! {
             }
             Some(KeysOp::BtcSign) => btc.sign_piece(msg, || entropy(&store, state)),
             Some(KeysOp::BtcSigned) => btc.signed_piece(&mut msg),
+            Some(KeysOp::FidoStoreChanged) => {
+                generation.fetch_add(1, Ordering::SeqCst);
+            }
+            Some(KeysOp::ClaimFido) => {
+                if fido.is_none() {
+                    fido = msg.sender.pid();
+                    log::info!("the FIDO authenticator is PID {:?}", fido);
+                }
+                xous::return_scalar(msg.sender, (msg.sender.pid() == fido) as usize).ok();
+            }
+            Some(KeysOp::FidoKeys) => {
+                let Some(mem) = msg.body.memory_message_mut() else { continue };
+                let mut buffer = unsafe { Buffer::from_memory_message_mut(mem) };
+                let Ok(mut req) = buffer.to_original::<FidoSecret, _>() else { continue };
+                req.keys.clear();
+                req.result = match entropy(&store, state) {
+                    _ if fido.is_none() || msg.sender.pid() != fido => RESULT_NOT_NOW,
+                    None if state == State::Unlocked => RESULT_NO_PHRASE,
+                    None => RESULT_NOT_NOW,
+                    Some(mut e) => {
+                        let words = maki_seed::to_words(&e);
+                        e.zeroize();
+                        let mut seed = maki_seed::seed(&words, "");
+                        let keys = maki_seed::fido_keys(&seed);
+                        seed.zeroize();
+                        req.keys.extend_from_slice(&keys.encryption);
+                        req.keys.extend_from_slice(&keys.authentication);
+                        req.keys.extend_from_slice(&keys.cred_random);
+                        RESULT_OK
+                    }
+                };
+                buffer.replace(req).ok();
+            }
             Some(KeysOp::Claim) => {
                 if screen.is_none() {
                     screen = msg.sender.pid();

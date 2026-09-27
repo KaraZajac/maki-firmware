@@ -88,7 +88,8 @@ fn vault_worker(work: mpsc::Receiver<Work>, waiting: Arc<AtomicU32>, send_lock: 
             Work::Ask(id, ask) => (id, ask),
             Work::Restore { id, total, offset, data } => {
                 let c = keys.restore_chunk(total, offset, data);
-                let (kind, body) = reply::restore_piece(true, approval(c.result), c.logins as u16, c.codes as u16);
+                let (kind, body) =
+                    reply::restore_piece(true, approval(c.result), c.logins as u16, c.codes as u16, c.passkeys as u16);
                 waiting.fetch_sub(1, Ordering::SeqCst);
                 send(&usb, &send_lock, &frame::encode(kind, id, &body));
                 continue;
@@ -300,11 +301,12 @@ fn main() -> ! {
                 offset = end;
                 if c.done || c.result != maki_keys::RESULT_OK || offset >= blob.len() {
                     log::warn!(
-                        "demo restore: result {} done {} ({} logins, {} codes added)",
+                        "demo restore: result {} done {} ({} logins, {} codes, {} passkeys added)",
                         c.result,
                         c.done,
                         c.logins,
-                        c.codes
+                        c.codes,
+                        c.passkeys
                     );
                     break;
                 }
@@ -385,17 +387,17 @@ fn main() -> ! {
                         Handled::Backup(Backup::Put { total, offset, data }) => {
                             if offset as usize + data.len() < total as usize {
                                 let c = keys.restore_chunk(total, offset, data);
-                                reply::restore_piece(c.done, approval(c.result), 0, 0)
+                                reply::restore_piece(c.done, approval(c.result), 0, 0, 0)
                             } else if waiting.fetch_add(1, Ordering::SeqCst) >= MAX_WAITING_ASKS {
                                 waiting.fetch_sub(1, Ordering::SeqCst);
-                                reply::restore_piece(true, Approval::Unavailable, 0, 0)
+                                reply::restore_piece(true, Approval::Unavailable, 0, 0, 0)
                             } else {
                                 // the last piece asks the owner: the worker answers
                                 match to_vault.send(Work::Restore { id: packet.id, total, offset, data }) {
                                     Ok(()) => continue,
                                     Err(_) => {
                                         waiting.fetch_sub(1, Ordering::SeqCst);
-                                        reply::restore_piece(true, Approval::Unavailable, 0, 0)
+                                        reply::restore_piece(true, Approval::Unavailable, 0, 0, 0)
                                     }
                                 }
                             }

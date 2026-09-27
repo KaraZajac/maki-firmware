@@ -23,6 +23,7 @@ aes-gcm-siv = { version = "0.11.1", default-features = false, features = ["alloc
 zeroize = "1.8.1"
 maki-seed = { path = "../../libs/maki-seed" }
 maki-btc = { path = "../../libs/maki-btc" }
+maki-fido = { path = "../../libs/maki-fido" }
 maki-launcher = { path = "../../apps-baosec/maki-launcher" }
 
 [features]
