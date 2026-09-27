@@ -480,8 +480,9 @@ fn main() {
                             Ethereum::Message { site, index, message } => {
                                 let (account, writer) = (eth_account(index), writer.clone());
                                 std::thread::spawn(move || {
-                                    let page = maki_eth::display::message(&message);
-                                    println!("  maki shows: {} {}", page.value, page.mono.replace('\n', " "));
+                                    for page in maki_eth::display::message_pages(&site, &message) {
+                                        println!("  maki shows: {} {} {}", page.heading, page.value, page.mono.replace('\n', " "));
+                                    }
                                     let a = approve(policy, &format!("{site}: sign this message?"));
                                     let signature = account.sign_message(&message).map(|s| s.to_vec()).unwrap_or_default();
                                     let (kind, body) = reply::eth_message(a, &signature);

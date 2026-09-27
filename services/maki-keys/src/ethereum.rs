@@ -127,7 +127,7 @@ impl Eth {
         let (site, message) = (req.site.clone(), req.message.clone());
         drop(buffer);
         std::thread::spawn(move || {
-            let pages = vec![page(display::message(&message))];
+            let pages = display::message_pages(&site, &message).into_iter().map(page).collect();
             let result = owner_says(|l| l.review(&site, "Sign message?", "not a transaction", pages, "sign", "reject", TIMEOUT_S));
             let signature = if result == RESULT_OK { account.sign_message(&message).ok() } else { None };
             log::info!("ethereum message for {}: {}", site, result);

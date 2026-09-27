@@ -246,3 +246,18 @@ fn the_fixtures_are_current() {
     let sig = std::fs::read(format!("{FIXTURES}/abandon-message.sig")).unwrap();
     assert_eq!(account.sign_message(FIXTURE_MESSAGE).unwrap().to_vec(), sig);
 }
+
+#[test]
+fn a_sign_in_for_another_site_is_called_out() {
+    let siwe = |first: &str| format!("{first} wants you to sign in with your Ethereum account:\n0x9858EfFD232B4033E47d90003D41EC34EcaEda94\n\nURI: https://app.example.com\nVersion: 1\nChain ID: 1\nNonce: 32891756\nIssued At: 2026-09-26T12:00:00Z");
+    assert_eq!(display::sign_in_site(siwe("app.example.com").as_bytes()).as_deref(), Some("app.example.com"));
+    assert_eq!(display::sign_in_site(siwe("https://App.Example.com:8443").as_bytes()).as_deref(), Some("app.example.com"));
+    assert_eq!(display::sign_in_site(b"just a message"), None);
+    // from the site it names: just the message
+    let pages = display::message_pages("app.example.com", siwe("app.example.com").as_bytes());
+    assert_eq!(pages.len(), 1);
+    // from anywhere else: the warning first
+    let pages = display::message_pages("app-example.evil.io", siwe("app.example.com").as_bytes());
+    assert_eq!((pages[0].heading.as_str(), pages[0].mono.as_str()), ("Wrong site!", "app.example.com"));
+    assert_eq!(pages[1].heading, "Message");
+}

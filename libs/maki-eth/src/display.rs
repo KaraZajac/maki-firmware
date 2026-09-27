@@ -177,3 +177,31 @@ pub fn message(message: &[u8]) -> Page {
         _ => page("Message", String::from("in hex"), message.iter().map(|b| format!("{:02x}", b)).collect()),
     }
 }
+
+/// The site a Sign-In with Ethereum message (EIP-4361) is for: the host its first line names
+/// (`example.com wants you to sign in with your Ethereum account:`), without a scheme or port.
+/// None for any other message.
+pub fn sign_in_site(message: &[u8]) -> Option<String> {
+    let text = core::str::from_utf8(message).ok()?;
+    let first = text.lines().next()?;
+    let authority = first.strip_suffix(" wants you to sign in with your Ethereum account:")?;
+    let authority = authority.split_once("://").map(|(_, rest)| rest).unwrap_or(authority);
+    // userinfo@host:port: the host is what matters
+    let host = authority.rsplit('@').next()?;
+    let host = match host.strip_prefix('[') {
+        Some(v6) => v6.split(']').next()?,
+        None => host.split(':').next()?,
+    };
+    (!host.is_empty()).then(|| host.to_ascii_lowercase())
+}
+
+/// The pages for a message from `site`: a warning first when it's a sign-in for another site
+/// (the phishing that copies a real site's sign-in), then the message.
+pub fn message_pages(site: &str, message_bytes: &[u8]) -> Vec<Page> {
+    let mut pages = Vec::new();
+    if let Some(other) = sign_in_site(message_bytes).filter(|s| s != site) {
+        pages.push(page("Wrong site!", String::from("a sign-in for"), other));
+    }
+    pages.push(message(message_bytes));
+    pages
+}

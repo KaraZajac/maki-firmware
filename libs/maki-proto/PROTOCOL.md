@@ -218,7 +218,9 @@ Requests come from sites, through the browser extension's EIP-1193 provider, and
   ("Connect wallet?"). maki desktop remembers which sites are connected; a site that isn't sees
   no account.
 - **ETH_SIGN_MESSAGE** signs a message (EIP-191 `personal_sign`, at most 4096 bytes) once the
-  owner has read it on maki: as text, or in hex if it isn't text. The signature is r, s, v (65
+  owner has read it on maki: as text, or in hex if it isn't text. A Sign-In with Ethereum message
+  (EIP-4361) that names another site than the one asking gets a "Wrong site!" page first: that's
+  how a phishing site uses a real site's sign-in. The signature is r, s, v (65
   bytes, v 27 or 28). The prefix EIP-191 adds means a message can never pass for a transaction.
 - **ETH_SIGN_TX** sends an unsigned transaction in pieces of up to 4096 bytes, in order, with the
   same `total` each time (at most 128 KiB): EIP-1559 (`0x02 || rlp([...])`) or legacy EIP-155
