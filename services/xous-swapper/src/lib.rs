@@ -26,6 +26,8 @@ pub enum SwapAbi {
     DebugServers = 10,
     DebugFree = 11,
     DebugInterrupts = 12,
+    /// maki: the processes that ended since the swapper last asked, as a bitmask (bit `pid - 1`)
+    TakeEnded = 13,
 }
 /// SYNC WITH `kernel/src/swap.rs`
 impl SwapAbi {
@@ -43,6 +45,7 @@ impl SwapAbi {
             9 => DebugProcesses,
             10 => DebugServers,
             11 => DebugFree,
+            13 => TakeEnded,
             12 => DebugInterrupts,
             _ => Invalid,
         }

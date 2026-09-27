@@ -44,6 +44,9 @@ pub enum SwapAbi {
     WritePage = 7,
     BlockErase = 8,
     DebugServers = 9,
+    /// maki: the processes that ended since the swapper last asked (13, clear of the swapper's
+    /// own numbering, which runs to 12)
+    TakeEnded = 13,
 }
 /// SYNC WITH `xous-swapper/src/main.rs`
 impl SwapAbi {
@@ -59,6 +62,7 @@ impl SwapAbi {
             7 => WritePage,
             8 => BlockErase,
             9 => DebugServers,
+            13 => TakeEnded,
             _ => Invalid,
         }
     }
@@ -207,6 +211,7 @@ static mut SWAP: Swap = Swap {
     // hand-tuned based on feedback from actual runtime data
     oom_stack_backing: [0usize; BACKUP_STACK_SIZE_WORDS],
     oom_stashed_pid: None,
+    ended: 0,
 };
 
 pub struct Swap {
@@ -246,6 +251,9 @@ pub struct Swap {
     oom_stack_backing: [usize; BACKUP_STACK_SIZE_WORDS],
     /// address space to restore after an OOM, if necessary
     oom_stashed_pid: Option<PID>,
+    /// maki: the processes that ended since the swapper last asked (bit `pid - 1`). Whatever
+    /// they had in swap is the swapper's to free, before another process gets the PID.
+    ended: u64,
 }
 impl Swap {
     pub fn with_mut<F, R>(f: F) -> R
@@ -301,6 +309,12 @@ impl Swap {
         }
         self.epoch
     }
+
+    /// maki: `pid` ended (`Process::terminate`).
+    pub fn process_ended(&mut self, pid: PID) { self.ended |= 1u64 << ((pid.get() as u32 - 1) & 63); }
+
+    /// maki: the processes that ended since the last call (`SwapAbi::TakeEnded`).
+    pub fn take_ended(&mut self) -> u64 { core::mem::take(&mut self.ended) }
 
     pub fn track_alloc(&mut self, is_alloc: bool) {
         if is_alloc {

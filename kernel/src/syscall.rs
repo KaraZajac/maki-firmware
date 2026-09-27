@@ -1402,6 +1402,13 @@ pub fn handle_inner(pid: PID, tid: TID, in_irq: bool, call: SysCall) -> SysCallR
                     }
                     Swap::with(|swap| swap.get_free_mem())
                 }
+                SwapAbi::TakeEnded => {
+                    if pid.get() != xous_kernel::SWAPPER_PID {
+                        return Err(xous_kernel::Error::AccessDenied);
+                    }
+                    let ended = Swap::with_mut(|swap| swap.take_ended());
+                    Ok(xous_kernel::Result::Scalar5(ended as u32 as usize, (ended >> 32) as usize, 0, 0, 0))
+                }
                 SwapAbi::StealPage => {
                     if pid.get() != xous_kernel::SWAPPER_PID {
                         return Err(xous_kernel::Error::AccessDenied);

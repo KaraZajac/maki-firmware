@@ -287,6 +287,10 @@ impl Process {
 
         // Free all associated memory pages
         unsafe { crate::mem::MemoryManager::with_mut(|mm| mm.release_all_memory_for_process(self.pid)) };
+        // maki: and what it had in swap, which only the swapper knows about. It frees it before it
+        // next evicts anything, so before any process given this PID has anything in swap.
+        #[cfg(feature = "swap")]
+        crate::swap::Swap::with_mut(|s| s.process_ended(self.pid));
 
         // Free all claimed IRQs
         crate::irq::release_interrupts_for_pid(self.pid);

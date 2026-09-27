@@ -155,10 +155,27 @@ pub struct SwapperSharedState {
     /// number of pages to free in the OOM routine. Note that this value is imprecise: it can
     /// be mutated by the userspace soft-OOM handler at any time.
     pub pages_to_free: usize,
+    /// maki: the roots of the swap page tables of processes created after boot (native apps),
+    /// indexed by PID - 1, 0 where there's none yet. See `SwapperSharedState::root`.
+    pub extra_roots: [usize; 64],
 }
 impl SwapperSharedState {
-    pub fn pt_walk(&self, pid: u8, va: usize, mark_free: bool) -> Option<usize> {
-        let l1_pt = &self.pts.roots[pid as usize - 1];
+    /// maki: the root of `pid`'s swap page tables. The loader makes them for the processes in
+    /// the image. For a process created later (a native app), `map_swap` makes one the first
+    /// time one of its pages is evicted, kept for the next process given the PID; when a process
+    /// ends, what it had in swap is freed (`forget_ended`).
+    pub fn root(&mut self, pid: u8) -> Option<*mut PtPage> {
+        let i = (pid as usize).checked_sub(1)?;
+        if i < self.pts.roots.len() {
+            Some(self.pts.roots.as_mut_ptr().wrapping_add(i))
+        } else {
+            self.extra_roots.get(i).filter(|&&root| root != 0).map(|&root| root as *mut PtPage)
+        }
+    }
+
+    pub fn pt_walk(&mut self, pid: u8, va: usize, mark_free: bool) -> Option<usize> {
+        // safety: a page of this process's, read here alone
+        let l1_pt = unsafe { &*self.root(pid)? };
         // mask out bottom 10 bits of flags, shift left by 2 to create the address of L0 table
         let l1_entry = l1_pt.entries[va >> 22];
         let l0_address = (l1_entry & 0xFFFF_FC00) << 2;
@@ -216,7 +233,19 @@ fn map_swap(ss: &mut SwapperSharedState, swap_phys: usize, virt: usize, owner: u
     let vpn1 = (virt >> 22) & ((1 << 10) - 1);
     let vpn0 = (virt >> 12) & ((1 << 10) - 1);
     assert!(owner != 0);
-    let l1_pt = &mut ss.pts.roots[owner as usize - 1].entries;
+    // maki: a process created after boot gets a root the first time (see `root`). Made here,
+    // after the page was stolen, as the L0 tables below are: an eviction that fails costs no
+    // memory, and one that succeeds frees a page.
+    if ss.root(owner).is_none() && (owner as usize) <= ss.extra_roots.len() {
+        let mut page = xous::map_memory(None, None, PAGE_SIZE, MemoryFlags::R | MemoryFlags::W)
+            .expect("couldn't allocate a swap page table root");
+        // safety: a fresh page, and `u32` is fully representable
+        unsafe { page.as_slice_mut::<u32>() }.fill(0);
+        ss.extra_roots[owner as usize - 1] = page.as_ptr() as usize;
+    }
+    let root = ss.root(owner).expect("no swap page tables for the page's process");
+    // safety: a page of this process's, and nothing else refers to it right now
+    let l1_pt = unsafe { &mut (*root).entries };
 
     // Allocate a new level 1 pagetable entry if one doesn't exist.
     if l1_pt[vpn1] as usize & loader::FLG_VALID == 0 {
@@ -279,6 +308,44 @@ fn get_free_pages() -> usize {
     match xous::rsyscall(xous::SysCall::SwapOp(SwapAbi::GetFreePages as usize, 0, 0, 0, 0, 0, 0)) {
         Ok(Result::Scalar5(free_pages, _total_memory, _, _, _)) => free_pages,
         _ => panic!("GetFreeMem syscall failed"),
+    }
+}
+
+/// maki: frees what processes that ended had in swap (the kernel says which), and empties their
+/// swap page tables, which are kept for the next process given the PID. Done before anything is
+/// evicted, so before any such process has anything in swap. Without it, every process that
+/// ended with pages in swap would leak them, and a native app is a process that ends.
+fn forget_ended(ss: &mut SwapperSharedState) {
+    let ended = match xous::rsyscall(xous::SysCall::SwapOp(SwapAbi::TakeEnded as usize, 0, 0, 0, 0, 0, 0)) {
+        Ok(Result::Scalar5(lo, hi, _, _, _)) => lo as u64 | (hi as u64) << 32,
+        _ => return,
+    };
+    for bit in 0..64 {
+        if ended & (1u64 << bit) == 0 {
+            continue;
+        }
+        let Some(root) = ss.root(bit as u8 + 1) else { continue };
+        // safety: a page of this process's, and nothing else refers to it right now
+        let l1_pt = unsafe { &(*root).entries };
+        for &l1_entry in l1_pt.iter() {
+            // valid, with RWX 0: points to an L0 table
+            if (l1_entry & 0xF) != loader::FLG_VALID as u32 {
+                continue;
+            }
+            let l0_address = (l1_entry as usize & 0xFFFF_FC00) << 2;
+            // safety: made by `map_swap` or the loader, a page of this process's
+            let l0_pt = unsafe { core::slice::from_raw_parts_mut(l0_address as *mut u32, 1024) };
+            for entry in l0_pt.iter_mut() {
+                if *entry as usize & loader::FLG_VALID != 0 {
+                    let slot = ((*entry as usize & 0xFFFF_FC00) << 2) / PAGE_SIZE;
+                    // free, keeping the count (nonces never repeat)
+                    if let Some(count) = ss.sct.counts.get_mut(slot) {
+                        *count &= !loader::FLG_SWAP_USED;
+                    }
+                    *entry = 0;
+                }
+            }
+        }
     }
 }
 
@@ -463,6 +530,7 @@ fn swap_handler(
             report_full_rpt: true,
             hard_oom_reserved_page: Some(reserved),
             pages_to_free: HARD_OOM_PAGE_TARGET + HARD_OOM_RESERVED_PAGES,
+            extra_roots: [0; 64],
         });
     }
     let ss = sss.inner.as_mut().expect("Shared state should be initialized");
@@ -575,6 +643,7 @@ fn swap_handler(
             // go last: otherwise, with pages taken oldest first, a process working through more
             // memory than fits evicts its own working set to make room for itself.
             let needy = a2 as u8;
+            forget_ended(ss);
 
             // be sure to allocate some extra space for the handler itself to run the next time!
             let mut pages_to_free = ss.pages_to_free;
