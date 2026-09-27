@@ -137,6 +137,7 @@ members = [
   "libs/maki-eth",
   "libs/maki-bundle",
   "libs/maki-store",
+  "libs/maki-native",
   "libs/maki-wasm",
   "libs/maki-app-host-api",
   "services/maki-link",

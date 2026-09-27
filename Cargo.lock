@@ -5392,6 +5392,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "maki-native"
+version = "0.1.0"
+
+[[package]]
 name = "maki-proto"
 version = "0.1.0"
 dependencies = [
