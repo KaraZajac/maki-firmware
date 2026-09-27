@@ -540,6 +540,17 @@ fn main() -> ! {
         });
     }
 
+    // A native app: built with MAKI_DEMO_NATIVE, maki-link installs the SDK's Hello Native (the
+    // Hello example built for maki's processor). Opened, it runs in a process of its own, loaded
+    // by the stub and confined before its code runs, and talks to maki's app service.
+    if option_env!("MAKI_DEMO_NATIVE").is_some() {
+        std::thread::spawn(|| {
+            let host = demo_host();
+            let r = demo_install(&host, include_bytes!("../../../libs/maki-native/tests/fixtures/hello-native.maki"));
+            log::warn!("demo native install: result {} '{}'", r.result, r.reason);
+        });
+    }
+
     // The permissions, the same way: built with MAKI_DEMO_PERMS, maki-link installs Signer and
     // SSH (each asks the owner, with a page for each permission), then does what maki desktop's
     // SSH agent does: asks the SSH app (started without the screen) for its key, then to sign

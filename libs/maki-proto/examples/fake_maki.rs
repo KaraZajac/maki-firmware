@@ -14,6 +14,7 @@
 //! maki's own screen. State survives reconnects, like a badge that stays plugged in. Installed apps
 //! answer APP_MESSAGE as on maki: each runs (with maki's own host code) without a screen, its
 //! asks answered as above, its keys from the phrase, until it's had nothing to do for a while.
+//! Native apps install as on maki, but don't run here: they're machine code for maki's processor.
 //! The maki store's records are checked as maki does, starting from the root the firmware
 //! carries, or the one in `--store-root` (a test store's).
 
@@ -209,6 +210,11 @@ fn app_message(
     let b = maki_bundle::read(&bundle).expect("installed bundles read");
     if !b.manifest.permissions.iter().any(|(p, _)| *p == maki_bundle::Permission::Link) {
         return (Approval::Refused, Vec::new());
+    }
+    // machine code for maki's processor: installed here as on maki, but not run
+    if b.manifest.kind == maki_bundle::Kind::Native {
+        println!("  {app} is a native app: the fake maki doesn't run those");
+        return (Approval::Unavailable, Vec::new());
     }
     // twice: an app that ended just as the message came gets started again
     for _ in 0..2 {
