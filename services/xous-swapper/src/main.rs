@@ -69,7 +69,10 @@ const RENODE_TESTING: bool = false;
 /// are imprecise, in that there is a chance that one target is active during another
 /// invocation of a routine. This is because the hard OOM handler is entirely asynchronous
 /// and could be invoked at any time, including while we are trying to handle a soft OOM.
-const HARD_OOM_PAGE_TARGET: usize = 24;
+// maki: 12 rather than 24. Pages go oldest first, and the kernel dates a page by when it came in,
+// not when it was last used: every page an OOM frees beyond what's needed is likely someone's
+// working set, soon to come back in.
+const HARD_OOM_PAGE_TARGET: usize = 12;
 /// Target of pages to free in case of OOM Doom
 #[cfg(feature = "oom-doom")]
 const OOM_DOOM_PAGE_TARGET: usize = 48;
@@ -568,7 +571,10 @@ fn swap_handler(
         }
         // HardOom handling will evict any and all pages that it can -- it does no filtering.
         Some(KernelOp::HardOom) => {
-            // parse the arguments (none, currently)
+            // maki: the process that ran out of memory (0 if the kernel didn't say). Its pages
+            // go last: otherwise, with pages taken oldest first, a process working through more
+            // memory than fits evicts its own working set to make room for itself.
+            let needy = a2 as u8;
 
             // be sure to allocate some extra space for the handler itself to run the next time!
             let mut pages_to_free = ss.pages_to_free;
@@ -621,6 +627,10 @@ fn swap_handler(
                 // stored thread `sepc`. The syscalls used here are all "simple calls" that don't require re-entry
                 // into the swapper context to handle.
 
+                // the needy process's own candidates, oldest first, in case others' don't suffice
+                // (no allocating in here: a fixed array, and past its end they're taken in turn)
+                let mut deferred = [SwapAlloc::from(0); 32];
+                let mut deferred_len = 0;
                 while pages_to_free > 0 {
                     if let Some(candidate) = alloc_heap.pop() {
                         if candidate.is_wired()
@@ -629,10 +639,21 @@ fn swap_handler(
                             || candidate.raw_pid() == 2
                         {
                             wired += 1;
+                        } else if needy != 0 && candidate.raw_pid() == needy && deferred_len < deferred.len() {
+                            deferred[deferred_len] = candidate;
+                            deferred_len += 1;
                         } else {
                             // errors are ignored because the correct behavior on error is to try another page
                             write_to_swap_inner(ss, candidate, &mut errs, &mut pages_to_free).ok();
                         }
+                    } else if deferred_len > 0 {
+                        for &candidate in deferred[..deferred_len].iter() {
+                            if pages_to_free == 0 {
+                                break;
+                            }
+                            write_to_swap_inner(ss, candidate, &mut errs, &mut pages_to_free).ok();
+                        }
+                        deferred_len = 0;
                     } else {
                         writeln!(
                             DebugUart {},

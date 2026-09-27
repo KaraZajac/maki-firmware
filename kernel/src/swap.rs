@@ -757,9 +757,11 @@ impl Swap {
                 self.swapper_args[2] = offset;
                 self.swapper_args[3] = len;
             }
-            BlockingSwapOp::HardOomSyscall(_tid, _pid) => {
+            BlockingSwapOp::HardOomSyscall(_tid, pid) => {
                 self.swapper_args[0] = self.swapper_state;
                 self.swapper_args[1] = 3; // HardOom
+                // the process that ran out: the swapper takes other processes' pages first
+                self.swapper_args[2] = pid.get() as usize;
             }
         }
         if let Some(op) = self.prev_op.take() {
