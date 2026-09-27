@@ -38,6 +38,14 @@
 #[cfg(feature = "std")]
 extern crate std;
 
+// A native app (`kind = "native"`) calls the same functions over maki's app service.
+#[cfg(target_os = "xous")]
+#[doc(hidden)]
+pub mod native;
+#[cfg(target_os = "xous")]
+use native as sys;
+
+#[cfg(not(target_os = "xous"))]
 mod sys {
     #[link(wasm_import_module = "maki")]
     extern "C" {
@@ -505,7 +513,7 @@ impl<const N: usize> core::fmt::Write for Buf<N> {
     }
 }
 
-#[cfg(all(feature = "panic-handler", not(feature = "std")))]
+#[cfg(all(feature = "panic-handler", not(feature = "std"), not(target_os = "xous"), not(test)))]
 #[panic_handler]
 fn panic(info: &core::panic::PanicInfo) -> ! {
     use core::fmt::Write;

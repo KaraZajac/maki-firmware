@@ -2,7 +2,7 @@
 name = "maki-app"
 version = "0.1.0"
 edition = "2021"
-description = "Write apps for maki, the DEF CON 34 badge firmware: the screen, buttons, storage and time, for wasm32"
+description = "Write apps for maki, the DEF CON 34 badge firmware: the screen, buttons, storage and time, for wasm32 or natively"
 
 [features]
 default = ["panic-handler"]
@@ -10,3 +10,8 @@ default = ["panic-handler"]
 # apps that use std turn it off and get the same from `std`.
 panic-handler = []
 std = []
+
+# a native app (`kind = "native"`): maki's functions over its app service
+[target.'cfg(target_os = "xous")'.dependencies]
+xous = "0.9.70"
+maki-native = { path = "../../libs/maki-native" }

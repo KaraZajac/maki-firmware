@@ -71,7 +71,8 @@ pub fn load(path: &Path) -> Result<Project, String> {
         label: t.label,
         kind,
         api: if kind == Kind::Wasm { t.api.unwrap_or(maki_wasm::API_VERSION) } else { 0 },
-        firmware: t.firmware,
+        // a native app is built for the firmware whose app service the SDK speaks
+        firmware: if kind == Kind::Native && t.firmware.is_empty() { maki_native::service::FIRMWARE.into() } else { t.firmware },
         permissions,
         storage_kib: t.storage,
         memory_kib: t.memory,

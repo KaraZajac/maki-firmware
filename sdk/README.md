@@ -6,9 +6,10 @@ you can install"). Anyone can build one and sideload it through maki desktop; ma
 owner what it is, where it's from and what it may do before installing it, and a sideloaded
 app carries a mark in maki's top bar for as long as it's installed.
 
-This directory has the Rust crate apps are written with (`maki-app`), six examples (Hello,
-Dice, Tally; Signer and Sensors, which use permissions; and SSH, maki's SSH key, which answers
-maki desktop's SSH agent), and the `maki` tool that packs, signs, checks and simulates them.
+This directory has the Rust crate apps are written with (`maki-app`), seven examples (Hello,
+Dice, Tally; Signer and Sensors, which use permissions; SSH, maki's SSH key, which answers
+maki desktop's SSH agent; and Hello Native, Hello built as a native app), and the `maki` tool
+that packs, signs, checks and simulates them.
 
 ## Quick start
 
@@ -149,6 +150,25 @@ Exit. An app can't draw over maki's bar.
   `maki build` makes is what maki takes, and `maki inspect` says whether it would.
 - Updates must be signed with the same developer key and have a higher version. Lose the key
   and you can't update your app: back it up.
+
+## Native apps
+
+The same source builds as a native app too: machine code for maki's processor, run in a process
+of its own at full speed, with threads. Say so in `maki.toml` (`kind = "native"`), make the crate
+a library as well (`crate-type = ["cdylib", "rlib"]`), and give it the memory its code, data,
+heap and 64 KiB of stack need (`examples/hello-native` asks for 512 KiB). `maki build` builds it
+for Xous's target, `riscv32imac-unknown-xous-elf` (Xous's Rust toolchain has it: see Xous's
+README), in a small program that calls the app's `maki_main`; `maki pack`, `maki inspect` and
+`maki reproduce` work as for WebAssembly, and the simulator (`maki run`) runs WebAssembly only.
+
+maki runs a native app confined by its kernel: the stub it starts in loads it, connects it to
+maki's app service (which does for it what a WebAssembly app's imports do, with the same
+permissions), to the ticktimer and to the log, and then confines itself for good. The app keeps
+those three connections and its own memory, up to what its manifest asks for, and can't make
+new connections or map anything else. Rust's `std` works (threads, `Vec`, `String`, `println!`
+to maki's log), but not what needs other servers: the time comes from `maki_app::unix_time`,
+not `SystemTime`, and nothing reaches the network or files. A native app names the firmware it
+was built for (`maki-native-1`); maki refuses one built for another.
 
 ## The maki store
 

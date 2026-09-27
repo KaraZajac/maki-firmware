@@ -345,6 +345,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "hello-native"
+version = "0.1.0"
+dependencies = [
+ "maki-app",
+]
+
+[[package]]
 name = "hkdf"
 version = "0.12.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -442,6 +449,7 @@ dependencies = [
  "getrandom",
  "libc",
  "maki-bundle",
+ "maki-native",
  "maki-seed",
  "maki-store",
  "maki-wasm",
@@ -455,6 +463,10 @@ dependencies = [
 [[package]]
 name = "maki-app"
 version = "0.1.0"
+dependencies = [
+ "maki-native",
+ "xous",
+]
 
 [[package]]
 name = "maki-bundle"
@@ -463,6 +475,10 @@ dependencies = [
  "ed25519-dalek-compat",
  "sha2",
 ]
+
+[[package]]
+name = "maki-native"
+version = "0.1.0"
 
 [[package]]
 name = "maki-seed"
@@ -491,6 +507,7 @@ dependencies = [
  "blitstr2",
  "ed25519-dalek-compat",
  "maki-bundle",
+ "maki-native",
  "qrcode",
  "wasmi",
  "zeroize",

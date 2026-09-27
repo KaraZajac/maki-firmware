@@ -1,0 +1,11 @@
+# Hello as a native app: the same source as examples/hello, built for maki's processor and run
+# in a process of its own, confined.
+id = "com.leviathan.maki.hello-native"
+name = "Hello Native"
+version = 1
+label = "1.0"
+kind = "native"
+storage = 0
+memory = 512
+backup = false
+description = "Says hello, as a native app: machine code in a process of its own, confined by maki's kernel."

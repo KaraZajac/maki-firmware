@@ -115,9 +115,7 @@ fn pack(manifest_path: &Path, code_path: &Path, icon_flag: Option<&str>, key_fla
     let project = manifest::load(manifest_path)?;
     let m = &project.manifest;
     let code = std::fs::read(code_path).map_err(|e| format!("{}: {e}", code_path.display()))?;
-    if m.kind == Kind::Wasm {
-        maki_wasm::admit(m, &code).map_err(|e| format!("{}: maki wouldn't take it: {e}", code_path.display()))?;
-    }
+    admit(m, &code).map_err(|e| format!("{}: maki wouldn't take it: {e}", code_path.display()))?;
     let icon_path = icon_flag.map(PathBuf::from).or(project.icon.clone()).or_else(|| {
         let dir = manifest_path.parent().unwrap_or(Path::new("."));
         ["icon.png", "icon.pbm"].iter().map(|n| dir.join(n)).find(|p| p.exists())
@@ -151,7 +149,7 @@ fn reproduce(bundle_path: &Path, dir: &Path) -> Result<(), String> {
     let b = maki_bundle::read(&bytes).map_err(|e| format!("{}: {e}", bundle_path.display()))?;
     let manifest_path = dir.join("maki.toml");
     let project = manifest::load(&manifest_path)?;
-    let (wasm, _) = cargo_build(dir)?;
+    let (wasm, _) = build_code(dir, project.manifest.kind)?;
     let code = std::fs::read(&wasm).map_err(|e| format!("{}: {e}", wasm.display()))?;
     let icon_path = project.icon.clone().or_else(|| ["icon.png", "icon.pbm"].iter().map(|n| dir.join(n)).find(|p| p.exists()));
     let icon = icon_path.as_deref().map(icon::load).transpose()?;
@@ -192,6 +190,125 @@ fn reproduce(bundle_path: &Path, dir: &Path) -> Result<(), String> {
             dir.display(),
             differs.join("; ")
         ))
+    }
+}
+
+/// Whether maki would take this code for this manifest (`maki_wasm::admit`).
+fn admit(m: &maki_bundle::Manifest, code: &[u8]) -> Result<(), String> { maki_wasm::admit(m, code).map(|_| ()) }
+
+/// The target native apps are built for: Xous's, as maki's own programs are.
+const NATIVE_TARGET: &str = "riscv32imac-unknown-xous-elf";
+
+/// Builds the app in `dir` natively, for maki's processor, and returns the ELF and cargo's
+/// target directory. The app's crate is a library as well as a cdylib (`crate-type = ["cdylib",
+/// "rlib"]`): a small program in the target directory links it, calls its `maki_main`, and
+/// tells maki when it returns or panics. The same source builds either kind; `kind` in
+/// maki.toml says which.
+fn native_build(dir: &Path) -> Result<(PathBuf, PathBuf), String> {
+    let cargo_toml = dir.join("Cargo.toml");
+    let text = std::fs::read_to_string(&cargo_toml).map_err(|e| format!("{}: {e}", cargo_toml.display()))?;
+    let t: toml::Value = toml::from_str(&text).map_err(|e| format!("{}: {e}", cargo_toml.display()))?;
+    let package = t["package"]["name"].as_str().ok_or("Cargo.toml names no package")?.to_string();
+    let types: Vec<&str> = t
+        .get("lib")
+        .and_then(|l| l.get("crate-type"))
+        .and_then(|c| c.as_array())
+        .map(|a| a.iter().filter_map(|v| v.as_str()).collect())
+        .unwrap_or_else(|| vec!["rlib"]);
+    if !types.contains(&"rlib") && !types.contains(&"lib") {
+        return Err(format!(
+            "{}: a native build links the app as a library: make it crate-type = [\"cdylib\", \"rlib\"]",
+            cargo_toml.display()
+        ));
+    }
+    let app_dir = std::fs::canonicalize(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+    // the app's workspace's target directory, as for a WebAssembly build
+    let target = metadata(&app_dir)?["target_directory"].as_str().map(PathBuf::from).unwrap_or_else(|| app_dir.join("target"));
+    let wrapper = target.join("maki-native").join(&package);
+    std::fs::create_dir_all(wrapper.join("src")).map_err(|e| format!("{}: {e}", wrapper.display()))?;
+    let name = format!("{package}-native");
+    let manifest = format!(
+        "# written by `maki build` for a native build of {package}: don't edit\n\
+         [package]\nname = \"{name}\"\nversion = \"0.1.0\"\nedition = \"2021\"\npublish = false\n\n\
+         [dependencies]\napp = {{ package = \"{package}\", path = {:?} }}\n\n\
+         [profile.release]\nopt-level = \"s\"\nlto = true\ncodegen-units = 1\npanic = \"abort\"\nstrip = true\n\n\
+         [workspace]\n",
+        app_dir.display().to_string()
+    );
+    let main = "// written by `maki build`: the app, as a program of its own for maki\n\
+         extern crate app;\n\n\
+         extern \"C\" {\n    fn maki_main();\n    fn maki_native_finished();\n    fn maki_native_crashed(ptr: *const u8, len: usize) -> !;\n}\n\n\
+         fn main() {\n    std::panic::set_hook(Box::new(|info| {\n        let why = format!(\"{info}\");\n        \
+         unsafe { maki_native_crashed(why.as_ptr(), why.len()) }\n    }));\n    \
+         unsafe {\n        maki_main();\n        maki_native_finished();\n    }\n}\n";
+    let write = |path: PathBuf, text: &str| -> Result<(), String> {
+        // untouched if unchanged, so cargo doesn't rebuild for nothing
+        if std::fs::read_to_string(&path).ok().as_deref() != Some(text) {
+            std::fs::write(&path, text).map_err(|e| format!("{}: {e}", path.display()))?;
+        }
+        Ok(())
+    };
+    write(wrapper.join("Cargo.toml"), &manifest)?;
+    write(wrapper.join("src").join("main.rs"), main)?;
+    let status = std::process::Command::new(std::env::var("CARGO").unwrap_or("cargo".into()))
+        .args(["build", "--release", "--target", NATIVE_TARGET])
+        .current_dir(&wrapper)
+        .env("CARGO_ENCODED_RUSTFLAGS", remaps(&wrapper)?.join("\x1f"))
+        .env_remove("RUSTFLAGS")
+        .status()
+        .map_err(|e| format!("cargo: {e}"))?;
+    if !status.success() {
+        return Err(format!("cargo build failed (native apps need Rust's {NATIVE_TARGET} target, which Xous's toolchain has)"));
+    }
+    let elf = wrapper.join("target").join(NATIVE_TARGET).join("release").join(&name);
+    if !elf.exists() {
+        return Err(format!("cargo built no {}", elf.display()));
+    }
+    Ok((elf, target))
+}
+
+fn metadata(dir: &Path) -> Result<serde_json::Value, String> {
+    let out = std::process::Command::new(std::env::var("CARGO").unwrap_or("cargo".into()))
+        .args(["metadata", "--format-version", "1"])
+        .current_dir(dir)
+        .stderr(std::process::Stdio::inherit())
+        .output()
+        .map_err(|e| format!("cargo metadata: {e}"))?;
+    if !out.status.success() {
+        return Err("cargo metadata failed".into());
+    }
+    serde_json::from_slice(&out.stdout).map_err(|e| format!("cargo metadata: {e}"))
+}
+
+/// Where the source a native build compiles came from, as rustc should name it in the program
+/// (panic locations): each local package's directory as its name, and the registry's as
+/// `registry`. Absolute paths would make the build depend on where it's made; with these,
+/// `maki reproduce` gets the same bytes anywhere, given the same Rust.
+fn remaps(wrapper: &Path) -> Result<Vec<String>, String> {
+    let meta = metadata(wrapper)?;
+    let mut flags = Vec::new();
+    for p in meta["packages"].as_array().into_iter().flatten() {
+        let Some(manifest) = p["manifest_path"].as_str() else { continue };
+        let dir = Path::new(manifest).parent().unwrap_or(Path::new("."));
+        if p["source"].is_null() {
+            let name = p["name"].as_str().unwrap_or("app");
+            flags.push(format!("--remap-path-prefix={}={name}", dir.display()));
+        } else if let Some(src) = dir.parent() {
+            // .../registry/src/<index>/<crate>-<version>
+            flags.push(format!("--remap-path-prefix={}=registry", src.display()));
+        }
+    }
+    flags.sort();
+    flags.dedup();
+    Ok(flags)
+}
+
+/// Builds the app in `dir` as its maki.toml says, returning its code and cargo's target
+/// directory.
+fn build_code(dir: &Path, kind: Kind) -> Result<(PathBuf, PathBuf), String> {
+    match kind {
+        Kind::Wasm => cargo_build(dir),
+        Kind::Native => native_build(dir),
     }
 }
 
@@ -272,8 +389,8 @@ fn inspect(path: &Path) -> Result<(), String> {
     if let Some(icon) = &b.icon {
         print!("{}", icon::render(icon));
     }
-    match maki_wasm::admit(m, b.code) {
-        Ok(_) => println!("maki would run it"),
+    match admit(m, b.code) {
+        Ok(()) => println!("maki would run it"),
         Err(e) => println!("maki wouldn't run it: {e}"),
     }
     Ok(())
@@ -285,7 +402,11 @@ fn run(args: &Args) -> Result<(), String> {
     let b = maki_bundle::read(&bytes).map_err(|e| format!("{}: {e}", path.display()))?;
     let m = b.manifest.clone();
     if m.kind != Kind::Wasm {
-        return Err("the simulator runs WebAssembly apps only".into());
+        return Err(
+            "a native app runs only on maki (or in Baomulator): the simulator runs WebAssembly. The same \
+             source builds either kind: try it here with kind = \"wasm\" in its maki.toml"
+                .into(),
+        );
     }
     let limits = maki_wasm::admit(&m, b.code).map_err(|e| format!("maki wouldn't run it: {e}"))?;
     let options = sim::Options {
@@ -343,7 +464,7 @@ fn new_app(dir: &Path, id: Option<&str>, name: Option<&str>) -> Result<(), Strin
         (
             "Cargo.toml",
             format!(
-                "# its own workspace, wherever it's put\n[workspace]\n\n[package]\nname = \"{crate_name}\"\nversion = \"0.1.0\"\nedition = \"2021\"\npublish = false\n\n[lib]\ncrate-type = [\"cdylib\"]\n\n[dependencies]\nmaki-app = {{ path = {:?} }}\n\n[profile.release]\nopt-level = \"z\"\nlto = true\ncodegen-units = 1\npanic = \"abort\"\nstrip = true\n",
+                "# its own workspace, wherever it's put\n[workspace]\n\n[package]\nname = \"{crate_name}\"\nversion = \"0.1.0\"\nedition = \"2021\"\npublish = false\n\n[lib]\n# a cdylib for WebAssembly; the rlib a native build links\ncrate-type = [\"cdylib\", \"rlib\"]\n\n[dependencies]\nmaki-app = {{ path = {:?} }}\n\n[profile.release]\nopt-level = \"z\"\nlto = true\ncodegen-units = 1\npanic = \"abort\"\nstrip = true\n",
                 sdk.display().to_string()
             ),
         ),
@@ -447,7 +568,7 @@ fn main_inner(argv: &[String]) -> Result<(), String> {
             let dir = PathBuf::from(args.positional.get(1).map(String::as_str).unwrap_or("."));
             let manifest = dir.join("maki.toml");
             let project = manifest::load(&manifest)?;
-            let (wasm, target) = cargo_build(&dir)?;
+            let (wasm, target) = build_code(&dir, project.manifest.kind)?;
             let out = args
                 .value("-o")
                 .map(PathBuf::from)

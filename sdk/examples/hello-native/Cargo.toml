@@ -1,0 +1,12 @@
+[package]
+name = "hello-native"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[lib]
+# a cdylib for a WebAssembly build, and a library the native build links
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+maki-app = { path = "../../maki-app" }
