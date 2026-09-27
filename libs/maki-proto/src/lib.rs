@@ -32,6 +32,14 @@ pub mod kind {
     pub const BTC_SIGN: u8 = 0x32;
     /// A piece of the PSBT maki signed.
     pub const BTC_SIGNED: u8 = 0x33;
+    /// The Ethereum account's address, once the owner lets the site connect.
+    pub const ETH_ACCOUNT: u8 = 0x40;
+    /// A piece of an Ethereum transaction to sign; the last is answered once the owner decides.
+    pub const ETH_SIGN_TX: u8 = 0x41;
+    /// A piece of the transaction maki signed.
+    pub const ETH_SIGNED: u8 = 0x42;
+    /// A message to sign (EIP-191 personal_sign), answered once the owner decides.
+    pub const ETH_SIGN_MESSAGE: u8 = 0x43;
     pub const REPLY: u8 = 0x80;
     pub const ERROR: u8 = 0x7f;
 }

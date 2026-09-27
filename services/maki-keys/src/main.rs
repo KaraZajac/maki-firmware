@@ -9,6 +9,7 @@
 //! opened (its key is gone), and its name mustn't collide with the new one.
 
 mod bitcoin;
+mod ethereum;
 mod passkeys;
 
 use std::io::{Read, Write};
@@ -471,6 +472,7 @@ fn main() -> ! {
     let mut incoming: Vec<u8> = Vec::new();
     let mut incoming_total: u32 = 0;
     let mut btc = bitcoin::Btc::new();
+    let mut eth = ethereum::Eth::new();
     // bumped when a restore writes to the FIDO store behind the vault's back
     let generation = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
     // the phrase's entropy, while unlocked
@@ -632,6 +634,44 @@ fn main() -> ! {
                     }
                 });
             }
+            // nothing of the Ethereum account's before the PIN
+            Some(KeysOp::EthAccount) if state != State::Unlocked => {
+                let Some(mem) = msg.body.memory_message_mut() else { continue };
+                let mut buffer = unsafe { Buffer::from_memory_message_mut(mem) };
+                if let Ok(mut req) = buffer.to_original::<EthRequest, _>() {
+                    req.result = RESULT_NOT_NOW;
+                    buffer.replace(req).ok();
+                }
+            }
+            Some(KeysOp::EthMessage) if state != State::Unlocked => {
+                let Some(mem) = msg.body.memory_message_mut() else { continue };
+                let mut buffer = unsafe { Buffer::from_memory_message_mut(mem) };
+                if let Ok(mut req) = buffer.to_original::<EthMessage, _>() {
+                    req.message.clear();
+                    req.result = RESULT_NOT_NOW;
+                    buffer.replace(req).ok();
+                }
+            }
+            Some(KeysOp::EthSign) if state != State::Unlocked => {
+                let Some(mem) = msg.body.memory_message_mut() else { continue };
+                let mut buffer = unsafe { Buffer::from_memory_message_mut(mem) };
+                if let Ok(mut req) = buffer.to_original::<Chunk, _>() {
+                    req.data.clear();
+                    req.result = RESULT_NOT_NOW;
+                    req.done = true;
+                    buffer.replace(req).ok();
+                }
+            }
+            Some(KeysOp::EthAccount) => {
+                let e = entropy(&store, state);
+                eth.share_account(msg, e)
+            }
+            Some(KeysOp::EthMessage) => {
+                let e = entropy(&store, state);
+                eth.sign_message(msg, e)
+            }
+            Some(KeysOp::EthSign) => eth.sign_piece(msg, || entropy(&store, state)),
+            Some(KeysOp::EthSigned) => eth.signed_piece(&mut msg),
             // nothing of the wallet's before the PIN
             Some(KeysOp::BtcAccount | KeysOp::BtcAddress) if state != State::Unlocked => {
                 let Some(mem) = msg.body.memory_message_mut() else { continue };
@@ -814,6 +854,7 @@ fn main() -> ! {
                                 b.zeroize();
                             }
                             btc.forget();
+                            eth.forget();
                             state = State::Unset;
                             (RESULT_WIPED, 0)
                         }
@@ -835,6 +876,7 @@ fn main() -> ! {
                                 b.zeroize();
                             }
                             btc.forget();
+                            eth.forget();
                             log::info!("locked");
                             true
                         }

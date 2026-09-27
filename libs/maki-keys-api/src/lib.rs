@@ -65,6 +65,41 @@ pub enum KeysOp {
     /// Scalar: something changed the FIDO store behind the vault's back (the Passkeys app
     /// deleted one): bumps the store generation in `Status`, so the vault re-reads it.
     FidoStoreChanged = 16,
+    /// Memory message (mutable lend) with an `EthRequest`: the Ethereum account's address. With
+    /// `ask`, once the owner lets the site connect.
+    EthAccount = 17,
+    /// Memory message (mutable lend) with a `Chunk` (`site`, `index` set): a piece of an Ethereum
+    /// transaction to sign. The last piece checks it, shows the owner what it does, and signs it
+    /// if they say so.
+    EthSign = 18,
+    /// Memory message (mutable lend) with a `Chunk`: a piece of the transaction last signed.
+    EthSigned = 19,
+    /// Memory message (mutable lend) with an `EthMessage`: a message (EIP-191) to sign, once the
+    /// owner has read it on screen.
+    EthMessage = 20,
+}
+
+/// A question about the Ethereum account, and its answer.
+#[derive(Debug, Default, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
+pub struct EthRequest {
+    /// who asks: shown to the owner
+    pub site: String,
+    /// the account, `m/44'/60'/0'/0/index`
+    pub index: u32,
+    pub ask: bool,
+    pub result: u32,
+    /// EIP-55
+    pub address: String,
+}
+
+/// A message to sign, and its signature (r, s, v: 65 bytes).
+#[derive(Debug, Default, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
+pub struct EthMessage {
+    pub site: String,
+    pub index: u32,
+    pub message: Vec<u8>,
+    pub result: u32,
+    pub signature: Vec<u8>,
 }
 
 /// `FidoKeys`' answer: `keys` is 128 bytes (encryption, authentication, CredRandom).
@@ -80,6 +115,8 @@ pub const CHUNK: usize = 4096;
 pub const MAX_BACKUP: usize = 512 * 1024;
 /// The biggest PSBT maki takes in.
 pub const MAX_PSBT: usize = 512 * 1024;
+/// The biggest Ethereum transaction maki takes in.
+pub const MAX_TX: usize = 128 * 1024;
 
 /// A piece of a backup or a PSBT, either way. On the way back: `result` (`RESULT_*`), `total`,
 /// and for a finished restore, what it added; for a finished signing, the signed PSBT's size.
@@ -96,8 +133,11 @@ pub struct Chunk {
     pub passkeys: u32,
     /// a PSBT: `NETWORK_*`
     pub network: u8,
-    /// a PSBT refused (`RESULT_REFUSED`): why, for the computer to show
+    /// a PSBT or transaction refused (`RESULT_REFUSED`): why, for the computer to show
     pub reason: String,
+    /// an Ethereum transaction: the site asking, and the account
+    pub site: String,
+    pub index: u32,
 }
 
 /// Bitcoin itself, and its test networks (testnet, signet), which share addresses.
@@ -339,6 +379,42 @@ impl Keys {
         buf.lend_mut(self.conn, KeysOp::FidoKeys.to_u32().unwrap()).ok()?;
         let answer = buf.to_original::<FidoSecret, _>().ok()?;
         (answer.result == RESULT_OK && answer.keys.len() == 128).then_some(answer.keys)
+    }
+
+    /// The Ethereum account's address (`address`). With `ask`, once the owner lets `site`
+    /// connect, blocking while they decide.
+    pub fn eth_account(&self, site: &str, index: u32, ask: bool) -> EthRequest {
+        let failed = EthRequest { result: RESULT_FAILED, ..Default::default() };
+        let Ok(mut buf) = Buffer::into_buf(EthRequest { site: site.into(), index, ask, ..Default::default() }) else {
+            return failed;
+        };
+        if buf.lend_mut(self.conn, KeysOp::EthAccount.to_u32().unwrap()).is_err() {
+            return failed;
+        }
+        buf.to_original::<EthRequest, _>().unwrap_or(failed)
+    }
+
+    /// A piece of an Ethereum transaction to sign. The last blocks while the owner reviews it; its
+    /// answer's `total` is the signed transaction's size, or `reason` says why it was refused.
+    pub fn eth_sign_chunk(&self, site: &str, index: u32, total: u32, offset: u32, data: Vec<u8>) -> Chunk {
+        self.chunk_call(KeysOp::EthSign, Chunk { offset, total, data, site: site.into(), index, ..Default::default() })
+    }
+
+    /// A piece of the transaction last signed, from `offset`.
+    pub fn eth_signed_chunk(&self, offset: u32) -> Chunk {
+        self.chunk_call(KeysOp::EthSigned, Chunk { offset, ..Default::default() })
+    }
+
+    /// Sign a message (EIP-191) once the owner has read it: the 65-byte signature, or why not.
+    pub fn eth_message(&self, site: &str, index: u32, message: &[u8]) -> EthMessage {
+        let failed = EthMessage { result: RESULT_FAILED, ..Default::default() };
+        let request = EthMessage { site: site.into(), index, message: message.to_vec(), ..Default::default() };
+        // a message of up to 4 KiB and its bookkeeping: two pages
+        let mut buf = Buffer::new(2 * CHUNK);
+        if buf.replace(request).is_err() || buf.lend_mut(self.conn, KeysOp::EthMessage.to_u32().unwrap()).is_err() {
+            return failed;
+        }
+        buf.to_original::<EthMessage, _>().unwrap_or(failed)
     }
 
     /// Tell the vault the FIDO store changed behind its back. See `KeysOp::FidoStoreChanged`.

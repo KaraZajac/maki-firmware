@@ -119,7 +119,15 @@ impl Xpriv {
         base58check(&data)
     }
 
-    pub(crate) fn secret(&self) -> &SecretKey { &self.key }
+    /// The private key, to sign with: this crate's wallet, and other chains' (maki-eth).
+    pub fn secret(&self) -> &SecretKey { &self.key }
+
+    /// Replace the key (for maki-eth's accounts from a bare key, in tests). The chain code and
+    /// the rest stay as they were.
+    pub fn set_secret(&mut self, key: SecretKey) {
+        self.public = public_of(&key);
+        self.key = key;
+    }
 }
 
 /// A public key from a compressed encoding, if it's on the curve.

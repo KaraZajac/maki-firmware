@@ -10,7 +10,7 @@ use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 
-use maki_proto::device::{reply, Approval, Ask, Backup, Bitcoin, Device, Handled, Platform, TimeState};
+use maki_proto::device::{reply, Approval, Ask, Backup, Bitcoin, Device, Ethereum, Handled, Platform, TimeState};
 use maki_proto::frame::{self, Deframer};
 use num_traits::ToPrimitive;
 
@@ -59,6 +59,7 @@ enum Work {
     Ask(u16, Ask),
     Restore { id: u16, total: u32, offset: u32, data: Vec<u8> },
     Bitcoin(u16, Bitcoin),
+    Ethereum(u16, Ethereum),
 }
 
 /// maki-keys' answers, as the protocol's.
@@ -100,6 +101,12 @@ fn vault_worker(work: mpsc::Receiver<Work>, waiting: Arc<AtomicU32>, send_lock: 
                 send(&usb, &send_lock, &frame::encode(kind, id, &body));
                 continue;
             }
+            Work::Ethereum(id, request) => {
+                let (kind, body) = ethereum(&keys, request);
+                waiting.fetch_sub(1, Ordering::SeqCst);
+                send(&usb, &send_lock, &frame::encode(kind, id, &body));
+                continue;
+            }
         };
         let (kind, body) = match &ask {
             Ask::Login { site } => {
@@ -136,6 +143,37 @@ fn bitcoin(keys: &maki_keys::Keys, request: Bitcoin) -> (u8, Vec<u8>) {
             let c = keys.btc_signed_chunk(offset);
             reply::btc_signed(approval(c.result), c.total, offset, &c.data)
         }
+    }
+}
+
+/// An Ethereum request, through maki-keys, which asks the owner.
+fn ethereum(keys: &maki_keys::Keys, request: Ethereum) -> (u8, Vec<u8>) {
+    match request {
+        Ethereum::Account { site, index } => {
+            let r = keys.eth_account(&site, index, true);
+            reply::eth_account(approval(r.result), &r.address)
+        }
+        Ethereum::Sign { site, index, total, offset, data } => {
+            let c = keys.eth_sign_chunk(&site, index, total, offset, data);
+            reply::eth_sign(c.done, approval(c.result), if c.done { c.total } else { 0 }, &c.reason)
+        }
+        Ethereum::Signed { offset } => {
+            let c = keys.eth_signed_chunk(offset);
+            reply::eth_signed(approval(c.result), c.total, offset, &c.data)
+        }
+        Ethereum::Message { site, index, message } => {
+            let m = keys.eth_message(&site, index, &message);
+            reply::eth_message(approval(m.result), &m.signature)
+        }
+    }
+}
+
+/// Whether an Ethereum request waits for the owner: then the worker takes it.
+fn eth_waits(request: &Ethereum) -> bool {
+    match request {
+        Ethereum::Account { .. } | Ethereum::Message { .. } => true,
+        Ethereum::Sign { total, offset, data, .. } => *offset as usize + data.len() >= *total as usize,
+        Ethereum::Signed { .. } => false,
     }
 }
 
@@ -364,6 +402,35 @@ fn main() -> ! {
         });
     }
 
+    // The emulator again: built with MAKI_DEMO_ETH, once maki is unlocked with a phrase, do what
+    // the browser extension's Ethereum provider does for a site, "demo.maki": connect, sign a
+    // message, and sign a transaction (0.05 ETH on Ethereum), then check the signatures against
+    // the ones maki's code makes on a computer for the BIP39 test phrase: restore that at setup.
+    if option_env!("MAKI_DEMO_ETH").is_some() {
+        std::thread::spawn(|| {
+            let unsigned: &[u8] = include_bytes!("../../../libs/maki-eth/tests/fixtures/abandon-tx-unsigned.bin");
+            let expected: &[u8] = include_bytes!("../../../libs/maki-eth/tests/fixtures/abandon-tx-signed.bin");
+            let expected_sig: &[u8] = include_bytes!("../../../libs/maki-eth/tests/fixtures/abandon-message.sig");
+            let xns = xous_names::XousNames::new().unwrap();
+            let keys = maki_keys::Keys::new(&xns).expect("maki-keys");
+            let tt = ticktimer_server::Ticktimer::new().unwrap();
+            while !(keys.status().0 == maki_keys::State::Unlocked && keys.has_phrase()) {
+                tt.sleep_ms(500).ok();
+            }
+            tt.sleep_ms(3_000).ok();
+            let a = keys.eth_account("demo.maki", 0, true);
+            log::warn!("demo eth account: result {} {}", a.result, a.address);
+            let m = keys.eth_message("demo.maki", 0, b"Sign in to demo.maki");
+            log::warn!("demo eth message: result {}, as expected: {}", m.result, m.signature == expected_sig);
+            let c = keys.eth_sign_chunk("demo.maki", 0, unsigned.len() as u32, 0, unsigned.to_vec());
+            log::warn!("demo eth sign: result {} total {} reason '{}'", c.result, c.total, c.reason);
+            if c.result == maki_keys::RESULT_OK {
+                let p = keys.eth_signed_chunk(0);
+                log::warn!("demo eth signed: {} bytes, as expected: {}", p.data.len(), p.data == expected);
+            }
+        });
+    }
+
     let usb = usb_bao1x::UsbHid::new();
     let mut deframer = Deframer::default();
     loop {
@@ -420,6 +487,29 @@ fn main() -> ! {
                                         waiting.fetch_sub(1, Ordering::SeqCst);
                                         reply::btc_sign(true, Approval::Unavailable, 0, "")
                                     }
+                                }
+                            }
+                        }
+                        Handled::Ethereum(request) if !eth_waits(&request) => ethereum(&keys, request),
+                        Handled::Ethereum(request) => {
+                            let busy = |request: &Ethereum| match request {
+                                Ethereum::Account { .. } => reply::eth_account(Approval::Unavailable, ""),
+                                Ethereum::Message { .. } => reply::eth_message(Approval::Unavailable, &[]),
+                                _ => reply::eth_sign(true, Approval::Unavailable, 0, ""),
+                            };
+                            if waiting.fetch_add(1, Ordering::SeqCst) >= MAX_WAITING_ASKS {
+                                waiting.fetch_sub(1, Ordering::SeqCst);
+                                log::warn!("too many requests waiting on the owner");
+                                busy(&request)
+                            } else {
+                                match to_vault.send(Work::Ethereum(packet.id, request)) {
+                                    Ok(()) => continue,
+                                    Err(mpsc::SendError(Work::Ethereum(_, request))) => {
+                                        log::error!("the worker is gone");
+                                        waiting.fetch_sub(1, Ordering::SeqCst);
+                                        busy(&request)
+                                    }
+                                    Err(_) => unreachable!(),
                                 }
                             }
                         }

@@ -12,6 +12,7 @@ roughtime = { path = "../roughtime" }
 hmac = "0.12.1"
 sha1 = "0.10.6"
 maki-btc = { path = "../maki-btc" }
+maki-eth = { path = "../maki-eth" }
 maki-seed = { path = "../maki-seed" }
 
 [features]

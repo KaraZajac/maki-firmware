@@ -21,7 +21,8 @@ use hmac::{Hmac, Mac};
 use maki_btc::psbt::Psbt;
 use maki_btc::{display, wallet, Account, Network};
 use maki_proto::device::{
-    reply, Approval, Ask, Backup, Bitcoin, Device, Handled, Platform, TimeState, BACKUP_PIECE, PSBT_PIECE,
+    reply, Approval, Ask, Backup, Bitcoin, Device, Ethereum, Handled, Platform, TimeState, BACKUP_PIECE, PSBT_PIECE,
+    TX_PIECE,
 };
 use maki_proto::frame::{self, Deframer};
 use maki_proto::site;
@@ -67,11 +68,14 @@ struct Store {
     incoming: Vec<u8>,
 }
 
-/// The fake's wallet, and the PSBT coming in and the one it last signed.
+/// The fake's wallet, and the PSBT coming in and the one it last signed; the same for Ethereum.
 struct Wallet {
     accounts: [Account; 2],
     incoming: Vec<u8>,
     signed: Vec<u8>,
+    seed: [u8; 64],
+    eth_incoming: Vec<u8>,
+    eth_signed: Vec<u8>,
 }
 
 const TEST_PHRASE: &str = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
@@ -82,7 +86,14 @@ impl Wallet {
         maki_seed::to_entropy(&words).expect("--phrase isn't a BIP39 phrase");
         let seed = maki_seed::seed(&words, "");
         let account = |n| Account::from_seed(&seed, n).expect("keys");
-        Wallet { accounts: [account(Network::Bitcoin), account(Network::Testnet)], incoming: Vec::new(), signed: Vec::new() }
+        Wallet {
+            accounts: [account(Network::Bitcoin), account(Network::Testnet)],
+            incoming: Vec::new(),
+            signed: Vec::new(),
+            seed,
+            eth_incoming: Vec::new(),
+            eth_signed: Vec::new(),
+        }
     }
 }
 
@@ -113,6 +124,33 @@ fn finish_signing(psbt: Vec<u8>, account: &Account, wallet: &Mutex<Wallet>, poli
     let total = signed.len() as u32;
     wallet.lock().unwrap().signed = signed;
     reply::btc_sign(true, Approval::Approved, total, "")
+}
+
+/// Everything maki-keys does with a finished Ethereum transaction, minus the screen.
+fn finish_eth(tx: Vec<u8>, site: &str, account: &maki_eth::Account, wallet: &Mutex<Wallet>, policy: Policy) -> (u8, Vec<u8>) {
+    let tx = match maki_eth::Tx::parse(&tx) {
+        Ok(t) => t,
+        Err(e) => return reply::eth_sign(true, Approval::Refused, 0, &e.to_string()),
+    };
+    let (pages, summary) = match maki_eth::display::review(&tx) {
+        Ok(r) => r,
+        Err(e) => return reply::eth_sign(true, Approval::Refused, 0, &e.to_string()),
+    };
+    for p in pages {
+        println!("  maki shows: {:14} {:22} {}", p.heading, p.value, p.mono.replace('\n', " "));
+    }
+    let a = approve(policy, &format!("{site}: sign and send, {summary}?"));
+    if a != Approval::Approved {
+        return reply::eth_sign(true, a, 0, "");
+    }
+    match tx.sign(account) {
+        Ok(signed) => {
+            let total = signed.len() as u32;
+            wallet.lock().unwrap().eth_signed = signed;
+            reply::eth_sign(true, Approval::Approved, total, "")
+        }
+        Err(e) => reply::eth_sign(true, Approval::Refused, 0, &e.to_string()),
+    }
 }
 
 /// The fake's backup: its store as lines of text, not encrypted (the badge's is; the desktop
@@ -415,6 +453,75 @@ fn main() {
                                     let start = (offset as usize).min(w.signed.len());
                                     let end = (start + PSBT_PIECE).min(w.signed.len());
                                     Some(reply::btc_signed(Approval::Approved, w.signed.len() as u32, offset, &w.signed[start..end]))
+                                }
+                            }
+                        };
+                        if let Some((kind, body)) = immediate {
+                            writer.lock().unwrap().write_all(&frame::encode(kind, packet.id, &body)).ok();
+                        }
+                    }
+                    Handled::Ethereum(request) => {
+                        println!("  0x{:02x}#{} -> ethereum", packet.kind, packet.id);
+                        let id = packet.id;
+                        let eth_account = |index: u32| {
+                            let seed = wallet.lock().unwrap().seed;
+                            maki_eth::Account::from_seed(&seed, index).expect("keys")
+                        };
+                        let immediate = match request {
+                            Ethereum::Account { site, index } => {
+                                let (account, writer) = (eth_account(index), writer.clone());
+                                std::thread::spawn(move || {
+                                    let a = approve(policy, &format!("connect {site} to your ethereum account?"));
+                                    let (kind, body) = reply::eth_account(a, &account.address_string());
+                                    writer.lock().unwrap().write_all(&frame::encode(kind, id, &body)).ok();
+                                });
+                                None
+                            }
+                            Ethereum::Message { site, index, message } => {
+                                let (account, writer) = (eth_account(index), writer.clone());
+                                std::thread::spawn(move || {
+                                    let page = maki_eth::display::message(&message);
+                                    println!("  maki shows: {} {}", page.value, page.mono.replace('\n', " "));
+                                    let a = approve(policy, &format!("{site}: sign this message?"));
+                                    let signature = account.sign_message(&message).map(|s| s.to_vec()).unwrap_or_default();
+                                    let (kind, body) = reply::eth_message(a, &signature);
+                                    writer.lock().unwrap().write_all(&frame::encode(kind, id, &body)).ok();
+                                });
+                                None
+                            }
+                            Ethereum::Sign { site, index, total, offset, data } => {
+                                let mut w = wallet.lock().unwrap();
+                                if offset == 0 {
+                                    w.eth_incoming.clear();
+                                }
+                                if offset as usize != w.eth_incoming.len() {
+                                    w.eth_incoming.clear();
+                                    Some(reply::eth_sign(true, Approval::Unavailable, 0, ""))
+                                } else {
+                                    w.eth_incoming.extend_from_slice(&data);
+                                    if (w.eth_incoming.len() as u32) < total {
+                                        Some(reply::eth_sign(false, Approval::Approved, 0, ""))
+                                    } else {
+                                        let tx = std::mem::take(&mut w.eth_incoming);
+                                        drop(w);
+                                        let account = eth_account(index);
+                                        let (writer, wallet) = (writer.clone(), wallet.clone());
+                                        std::thread::spawn(move || {
+                                            let (kind, body) = finish_eth(tx, &site, &account, &wallet, policy);
+                                            writer.lock().unwrap().write_all(&frame::encode(kind, id, &body)).ok();
+                                        });
+                                        None
+                                    }
+                                }
+                            }
+                            Ethereum::Signed { offset } => {
+                                let w = wallet.lock().unwrap();
+                                if w.eth_signed.is_empty() {
+                                    Some(reply::eth_signed(Approval::Unavailable, 0, offset, &[]))
+                                } else {
+                                    let start = (offset as usize).min(w.eth_signed.len());
+                                    let end = (start + TX_PIECE).min(w.eth_signed.len());
+                                    Some(reply::eth_signed(Approval::Approved, w.eth_signed.len() as u32, offset, &w.eth_signed[start..end]))
                                 }
                             }
                         };

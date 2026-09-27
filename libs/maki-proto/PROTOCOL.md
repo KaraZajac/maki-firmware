@@ -62,6 +62,10 @@ bytes. Bodies must be consumed exactly: trailing bytes are an error.
 | `0x31` BTC_ADDRESS | `network:u8` `change:u8` `index:u32` | `approval:u8` `address:str8` |
 | `0x32` BTC_SIGN | `network:u8` `total:u32` `offset:u32` `piece:bytes16` | `done:u8` `approval:u8` `signed:u32` `reason:str8` |
 | `0x33` BTC_SIGNED | `offset:u32` | `status:u8` `total:u32` `offset:u32` `piece:bytes16` |
+| `0x40` ETH_ACCOUNT | `site:str8` `index:u32` | `approval:u8` `address:str8` |
+| `0x41` ETH_SIGN_TX | `site:str8` `index:u32` `total:u32` `offset:u32` `piece:bytes16` | `done:u8` `approval:u8` `signed:u32` `reason:str8` |
+| `0x42` ETH_SIGNED | `offset:u32` | `status:u8` `total:u32` `offset:u32` `piece:bytes16` |
+| `0x43` ETH_SIGN_MESSAGE | `site:str8` `index:u32` `message:bytes16` | `approval:u8` `signature:bytes16` |
 | `0x7f` ERROR (reply only) | | `code:u8` `detail:str8` |
 
 `time_state`: 0 unset, 1 unverified, 2 verified.
@@ -202,3 +206,40 @@ payment with its amount and full address, the change coming back (an output coun
 only if it derives from this wallet's change chain; anything else is shown as a payment), and
 the fee with its rate (called out when over a tenth of what's sent). Last come "sign" and
 "reject". Signatures are deterministic (RFC 6979) and low-S.
+
+## Ethereum
+
+maki keeps an Ethereum account from the same recovery phrase, the standard way
+(`m/44'/60'/0'/0/index`, BIP44, as MetaMask and Ledger make it; `index` 0 is the first account).
+Requests come from sites, through the browser extension's EIP-1193 provider, and carry the site
+(a hostname, checked like GET_LOGIN's) that maki shows the owner.
+
+- **ETH_ACCOUNT** hands the site the account's address (EIP-55), once the owner lets it connect
+  ("Connect wallet?"). maki desktop remembers which sites are connected; a site that isn't sees
+  no account.
+- **ETH_SIGN_MESSAGE** signs a message (EIP-191 `personal_sign`, at most 4096 bytes) once the
+  owner has read it on maki: as text, or in hex if it isn't text. The signature is r, s, v (65
+  bytes, v 27 or 28). The prefix EIP-191 adds means a message can never pass for a transaction.
+- **ETH_SIGN_TX** sends an unsigned transaction in pieces of up to 4096 bytes, in order, with the
+  same `total` each time (at most 128 KiB): EIP-1559 (`0x02 || rlp([...])`) or legacy EIP-155
+  (`rlp([nonce, gas price, gas, to, value, data, chain ID, 0, 0])`). The last piece is answered
+  once the owner decides: approved with the signed transaction's size, to fetch with
+  **ETH_SIGNED** (ready for `eth_sendRawTransaction`), 1 rejected, 3 timed out, or 9 refused
+  with `reason`.
+
+What maki checks and shows:
+
+- **The bytes it signs are the bytes it shows.** The transaction is parsed strictly (one
+  encoding per value: shortest lengths, no leading zeros, no bytes after the end), and the hash
+  signed is of exactly what came.
+- **A chain ID is required**: legacy transactions without one (before EIP-155) could be replayed
+  on every network, and are refused, as are EIP-2930 and blob transactions for now.
+- The owner goes through the network (named when maki knows it, else its chain ID), what's sent
+  and to whom (full EIP-55 address), and the most the fee can be (gas limit times the fee cap),
+  then "sign" or "reject". Contract calls maki can read are spelled out: ERC-20 `transfer` (the
+  recipient, and the amount in the token's smallest units, since maki can't know its decimals),
+  ERC-20 `approve` (the spender, and "any amount" for an unlimited approval) and ERC-721/1155
+  `setApprovalForAll` (the operator gets every item). Any other call is shown as a contract
+  call maki can't read, with its function selector and length.
+- Typed data (EIP-712) isn't signed yet: maki couldn't show what it means. `eth_sign` never will
+  be: it signs anything, a transaction included.

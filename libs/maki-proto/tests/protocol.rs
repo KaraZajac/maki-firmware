@@ -496,3 +496,62 @@ fn bitcoin_replies_carry_only_what_the_answer_allows() {
     assert_eq!((r.u8().unwrap(), r.u32().unwrap(), r.u32().unwrap(), r.bytes16().unwrap()), (Approval::Unavailable as u8, 10, 0, &[][..]));
     assert_eq!(Approval::from_u8(9), Some(Approval::Refused));
 }
+
+#[test]
+fn ethereum_requests_go_to_the_account() {
+    let mut d = device();
+    assert_eq!(
+        handled(&mut d, kind::ETH_ACCOUNT, Writer::new().str8("app.uniswap.org").u32(0).finish()),
+        Handled::Ethereum(Ethereum::Account { site: "app.uniswap.org".into(), index: 0 })
+    );
+    let piece = vec![0x02u8, 0xc0];
+    assert_eq!(
+        handled(&mut d, kind::ETH_SIGN_TX, Writer::new().str8("example.com").u32(1).u32(2).u32(0).bytes16(&piece).finish()),
+        Handled::Ethereum(Ethereum::Sign { site: "example.com".into(), index: 1, total: 2, offset: 0, data: piece })
+    );
+    assert_eq!(
+        handled(&mut d, kind::ETH_SIGNED, Writer::new().u32(4096).finish()),
+        Handled::Ethereum(Ethereum::Signed { offset: 4096 })
+    );
+    assert_eq!(
+        handled(&mut d, kind::ETH_SIGN_MESSAGE, Writer::new().str8("example.com").u32(0).bytes16(b"hi").finish()),
+        Handled::Ethereum(Ethereum::Message { site: "example.com".into(), index: 0, message: b"hi".to_vec() })
+    );
+}
+
+#[test]
+fn ethereum_requests_out_of_range_are_refused() {
+    let mut d = device();
+    let bad = [
+        (kind::ETH_ACCOUNT, Writer::new().str8("Example.COM").u32(0).finish()),
+        (kind::ETH_ACCOUNT, Writer::new().str8("example.com").u32(0x8000_0000).finish()),
+        (kind::ETH_SIGN_TX, Writer::new().str8("example.com").u32(0).u32(0).u32(0).bytes16(&[]).finish()),
+        (kind::ETH_SIGN_TX, Writer::new().str8("example.com").u32(0).u32(MAX_TX + 1).u32(0).bytes16(&[1]).finish()),
+        (kind::ETH_SIGN_TX, Writer::new().str8("example.com").u32(0).u32(10).u32(5).bytes16(&[0; 6]).finish()),
+        (kind::ETH_SIGN_MESSAGE, Writer::new().str8("example.com").u32(0).bytes16(&vec![0; MAX_MESSAGE + 1]).finish()),
+    ];
+    for (k, body) in bad {
+        let reply = ask(&mut d, k, body);
+        assert_eq!(error_code(&reply), ErrorCode::BadArgument as u8, "0x{k:02x}");
+    }
+}
+
+#[test]
+fn ethereum_replies_carry_only_what_the_answer_allows() {
+    let (k, body) = reply::eth_account(Approval::Denied, "0xabc");
+    assert_eq!(k, kind::ETH_ACCOUNT | kind::REPLY);
+    let mut r = Reader::new(&body);
+    assert_eq!((r.u8().unwrap(), r.str8().unwrap()), (Approval::Denied as u8, ""));
+    let (_, body) = reply::eth_message(Approval::TimedOut, &[1; 65]);
+    let mut r = Reader::new(&body);
+    assert_eq!((r.u8().unwrap(), r.bytes16().unwrap()), (Approval::TimedOut as u8, &[][..]));
+    let (_, body) = reply::eth_message(Approval::Approved, &[1; 65]);
+    let mut r = Reader::new(&body);
+    assert_eq!((r.u8().unwrap(), r.bytes16().unwrap().len()), (0, 65));
+    let (_, body) = reply::eth_sign(true, Approval::Refused, 99, "maki doesn't sign blob transactions");
+    let mut r = Reader::new(&body);
+    assert_eq!(
+        (r.u8().unwrap(), r.u8().unwrap(), r.u32().unwrap(), r.str8().unwrap()),
+        (1, Approval::Refused as u8, 0, "maki doesn't sign blob transactions")
+    );
+}

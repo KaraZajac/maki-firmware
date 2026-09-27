@@ -113,8 +113,26 @@ pub enum Handled {
     /// The Bitcoin wallet: the glue passes it to maki-keys, which asks the owner where it must,
     /// and answers with the matching `reply::btc_*`.
     Bitcoin(Bitcoin),
+    /// The Ethereum account, the same way, with `reply::eth_*`.
+    Ethereum(Ethereum),
 }
 
+/// Ethereum requests come from a site (the browser extension's EIP-1193 provider), which maki
+/// shows the owner.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Ethereum {
+    Account { site: String, index: u32 },
+    Sign { site: String, index: u32, total: u32, offset: u32, data: Vec<u8> },
+    Signed { offset: u32 },
+    Message { site: String, index: u32, message: Vec<u8> },
+}
+
+/// Pieces of an Ethereum transaction are at most this big, either way.
+pub const TX_PIECE: usize = 4096;
+/// The biggest transaction maki takes in: room for the largest contract a deployment may carry.
+pub const MAX_TX: u32 = 128 * 1024;
+/// The longest message maki signs, in one piece.
+pub const MAX_MESSAGE: usize = 4096;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Bitcoin {
@@ -222,6 +240,32 @@ pub mod reply {
         (kind::BACKUP_GET | kind::REPLY, Writer::new().u8(status as u8).u32(total).u32(offset).bytes16(data).finish())
     }
 
+    /// The Ethereum account's address (EIP-55), when the owner let the site connect.
+    pub fn eth_account(approval: Approval, address: &str) -> (u8, Vec<u8>) {
+        let a = if approval == Approval::Approved { address } else { "" };
+        (kind::ETH_ACCOUNT | kind::REPLY, Writer::new().u8(approval as u8).str8(a).finish())
+    }
+
+    /// A transaction piece taken in (`done` false), or the outcome (`done` true): approved with
+    /// the signed transaction's size, to fetch with ETH_SIGNED, or refused with the reason.
+    pub fn eth_sign(done: bool, approval: Approval, signed_total: u32, reason: &str) -> (u8, Vec<u8>) {
+        let total = if approval == Approval::Approved { signed_total } else { 0 };
+        let reason = if approval == Approval::Refused { reason } else { "" };
+        (kind::ETH_SIGN_TX | kind::REPLY, Writer::new().u8(done as u8).u8(approval as u8).u32(total).str8(reason).finish())
+    }
+
+    /// A piece of the signed transaction, ready for `eth_sendRawTransaction`.
+    pub fn eth_signed(status: Approval, total: u32, offset: u32, data: &[u8]) -> (u8, Vec<u8>) {
+        let data = if status == Approval::Approved { data } else { &[] };
+        (kind::ETH_SIGNED | kind::REPLY, Writer::new().u8(status as u8).u32(total).u32(offset).bytes16(data).finish())
+    }
+
+    /// A message's signature: r, s, v (65 bytes), when approved.
+    pub fn eth_message(approval: Approval, signature: &[u8]) -> (u8, Vec<u8>) {
+        let s = if approval == Approval::Approved { signature } else { &[] };
+        (kind::ETH_SIGN_MESSAGE | kind::REPLY, Writer::new().u8(approval as u8).bytes16(s).finish())
+    }
+
     /// The account for wallet software: its zpub (vpub on test networks) and output descriptor.
     pub fn btc_account(approval: Approval, zpub: &str, descriptor: &str) -> (u8, Vec<u8>) {
         let (z, d) = if approval == Approval::Approved { (zpub, descriptor) } else { ("", "") };
@@ -324,6 +368,9 @@ impl<P: Platform> Device<P> {
             kind::BACKUP_GET | kind::BACKUP_PUT => return Self::backup(packet.kind, body),
             kind::BTC_ACCOUNT | kind::BTC_ADDRESS | kind::BTC_SIGN | kind::BTC_SIGNED => {
                 return Self::bitcoin(packet.kind, body)
+            }
+            kind::ETH_ACCOUNT | kind::ETH_SIGN_TX | kind::ETH_SIGNED | kind::ETH_SIGN_MESSAGE => {
+                return Self::ethereum(packet.kind, body)
             }
             _ => Ok(error(ErrorCode::UnknownKind, "unknown message kind")),
         };
@@ -438,6 +485,58 @@ impl<P: Platform> Device<P> {
                 bad("PSBT piece out of range")
             }
             Ok(request) => Handled::Bitcoin(request),
+        }
+    }
+
+    fn ethereum(kind: u8, body: &[u8]) -> Handled {
+        let parsed = (|| {
+            let mut r = Reader::new(body);
+            let request = match kind {
+                kind::ETH_ACCOUNT => Ethereum::Account { site: r.str8()?.into(), index: r.u32()? },
+                kind::ETH_SIGN_TX => Ethereum::Sign {
+                    site: r.str8()?.into(),
+                    index: r.u32()?,
+                    total: r.u32()?,
+                    offset: r.u32()?,
+                    data: r.bytes16()?.to_vec(),
+                },
+                kind::ETH_SIGN_MESSAGE => {
+                    Ethereum::Message { site: r.str8()?.into(), index: r.u32()?, message: r.bytes16()?.to_vec() }
+                }
+                _ => Ethereum::Signed { offset: r.u32()? },
+            };
+            r.end()?;
+            Ok::<_, Truncated>(request)
+        })();
+        let bad = |why: &str| {
+            let (k, b) = error(ErrorCode::BadArgument, why);
+            Handled::Reply(k, b)
+        };
+        match parsed {
+            Err(t) => {
+                let (k, b) = malformed(t);
+                Handled::Reply(k, b)
+            }
+            Ok(Ethereum::Account { ref site, .. } | Ethereum::Sign { ref site, .. } | Ethereum::Message { ref site, .. })
+                if !crate::site::valid(site) =>
+            {
+                bad("site must be a lowercase ASCII hostname")
+            }
+            Ok(Ethereum::Account { index, .. } | Ethereum::Sign { index, .. } | Ethereum::Message { index, .. })
+                if index >= 0x8000_0000 =>
+            {
+                bad("account index out of range")
+            }
+            Ok(Ethereum::Sign { total, offset, ref data, .. })
+                if total == 0
+                    || total > MAX_TX
+                    || data.len() > TX_PIECE
+                    || offset as u64 + data.len() as u64 > total as u64 =>
+            {
+                bad("transaction piece out of range")
+            }
+            Ok(Ethereum::Message { ref message, .. }) if message.len() > MAX_MESSAGE => bad("message too long"),
+            Ok(request) => Handled::Ethereum(request),
         }
     }
 

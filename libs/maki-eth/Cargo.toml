@@ -1,0 +1,17 @@
+[package]
+name = "maki-eth"
+version = "0.1.0"
+edition = "2021"
+description = "maki's Ethereum account: keys from the recovery phrase, addresses, and transactions and messages shown before they're signed"
+
+[dependencies]
+k256 = { version = "0.13", default-features = false, features = ["ecdsa", "arithmetic", "alloc"] }
+sha3 = { version = "0.10.8", default-features = false }
+maki-btc = { path = "../maki-btc" }
+
+[dev-dependencies]
+maki-seed = { path = "../maki-seed" }
+# signs the same transactions and messages independently
+alloy = { version = "1", default-features = false, features = ["consensus", "eips", "signers", "signer-local"] }
+# its derive macros, held to the same release (cargo otherwise picks a newer, incompatible one)
+alloy-tx-macros = "=1.0.30"
