@@ -501,7 +501,7 @@ impl Process {
             server_id_array[3] as _,
         );
 
-        Self::setup_process(pid, initial_thread).unwrap();
+        Self::setup_process(pid, initial_thread)?;
 
         services.create_server_with_address(pid, server_id, false)?;
 

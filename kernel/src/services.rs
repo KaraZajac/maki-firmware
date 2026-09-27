@@ -294,6 +294,10 @@ impl Process {
         // Remove this PID from the process table
         ArchProcess::destroy(self.pid)?;
         self.state = ProcessState::Free;
+        // maki: its page tables went with its memory. The next process given the slot makes its
+        // own (`MemoryMapping::allocate` refuses a slot that still names some), so a slot can be
+        // used again: an app opened a second time.
+        self.mapping = arch::mem::DEFAULT_MEMORY_MAPPING;
         Ok(())
     }
 
@@ -523,14 +527,28 @@ impl SystemServices {
             entry.owner = creator;
             entry.confined = false;
             entry.state = ProcessState::Allocated;
-            unsafe { entry.mapping.allocate(new_pid.unwrap()).or(Err(xous_kernel::Error::InternalError))? };
+            if unsafe { entry.mapping.allocate(new_pid.unwrap()) }.is_err() {
+                // maki: the slot stays free, rather than allocated to nothing for good
+                entry.state = ProcessState::Free;
+                return Err(xous_kernel::Error::InternalError);
+            }
             break;
         }
         if entry_idx.is_none() {
             return Err(xous_kernel::Error::ProcessNotFound);
         }
         let new_pid = new_pid.unwrap();
-        let startup = arch::process::Process::create(new_pid, init_process, self).unwrap();
+        // out of memory, say (maki's RAM is short): what was made of the child goes again, and
+        // the caller gets the error, rather than the whole system a panic
+        let startup = match arch::process::Process::create(new_pid, init_process, self) {
+            Ok(startup) => startup,
+            Err(e) => {
+                klog!("couldn't create PID {}: {:?}", new_pid, e);
+                self.release_process(new_pid).ok();
+                self.get_process(creator)?.activate()?;
+                return Err(e);
+            }
+        };
 
         #[cfg(baremetal)]
         {
