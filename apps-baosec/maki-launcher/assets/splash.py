@@ -1,110 +1,76 @@
 #!/usr/bin/env python3
 """Draw the maki boot image and write it as src/splash.rs.
 
-A steamed bao with a keyhole, 128x128, 1 bit. Drawn procedurally so there is no
-Inkscape/PIL step; rerun after editing. Output matches the dc34-vault bitmap
-convention (pngtorust.py): mirrored left-right, 32 pixels per word MSB-first,
-a set bit is a dark pixel, and each row's four words are written in reverse.
+A maki roll, face on: the nori's ring around the rice, the filling at the middle, and
+"maki" beneath in the launcher's tall font (read from blitstr2, so it matches the text maki
+draws itself). 128x128, 1 bit, drawn procedurally so there is no Inkscape/PIL step; rerun
+after editing. Output matches the dc34-vault bitmap convention (pngtorust.py): mirrored
+left-right, 32 pixels per word MSB-first, a set bit is a dark pixel, and each row's four
+words are written in reverse.
 
     python3 assets/splash.py [--preview OUT.png]
 """
 import math
 import pathlib
+import re
 import struct
 import sys
 import zlib
 
 W = H = 128
-CX = 64
+CX, CY = 63.5, 52.0       # centre of the roll
+NORI_OUT, NORI_IN = 40, 33
+FILLING = 11
+WORD_Y = 100              # top of "maki"
+SAMPLES = 4               # per pixel, each way: edges go light when half covered
+
+FONT = pathlib.Path(__file__).resolve().parents[3] / "libs" / "blitstr2" / "src" / "fonts" / "tall.rs"
 
 
-def in_ellipse(x, y, cx, cy, rx, ry):
-    return ((x - cx) / rx) ** 2 + ((y - cy) / ry) ** 2 <= 1.0
+def roll(x, y):
+    d = math.hypot(x - CX, y - CY)
+    return NORI_IN <= d <= NORI_OUT or d <= FILLING
 
 
-def near_segment(x, y, a, b, width):
-    (ax, ay), (bx, by) = a, b
-    dx, dy = bx - ax, by - ay
-    t = max(0.0, min(1.0, ((x - ax) * dx + (y - ay) * dy) / (dx * dx + dy * dy)))
-    px, py = ax + t * dx, ay + t * dy
-    return (x - px) ** 2 + (y - py) ** 2 <= (width / 2) ** 2
+def tall_font():
+    src = FONT.read_text()
+
+    def array(name):
+        body = re.search(r"pub const %s: \[\w+; \d+\] = \[(.*?)\];" % name, src, re.S).group(1)
+        return [int(v, 0) for v in re.findall(r"0x[0-9A-Fa-f]+|\b\d+\b", body)]
+
+    return array("CODEPOINTS"), array("GLYPHS"), array("WIDTHS"), int(re.search(r"MAX_HEIGHT: u8 = (\d+)", src).group(1))
 
 
-# The bun is the top half of an ellipsoid seen from slightly above, so the pinched
-# knot sits on the visible top surface, over a flatter base.
-RX, RY, RZ = 46, 40, 46   # half-width, height, depth
-CY = 78                   # centre of the bun's widest point
-TILT = math.radians(28)   # how far we look down onto it
-TOP = math.sqrt((RY * math.cos(TILT)) ** 2 + (RZ * math.sin(TILT)) ** 2)
-
-
-def project(theta, phi):
-    """Point at polar angle theta from the knot, azimuth phi, to screen x/y."""
-    x = RX * math.sin(theta) * math.sin(phi)
-    y = RY * math.cos(theta)
-    z = RZ * math.sin(theta) * math.cos(phi)
-    return CX + x, CY - (y * math.cos(TILT) - z * math.sin(TILT))
-
-
-KNOT = project(0.0, 0.0)
-
-
-def bun(x, y):
-    if y <= CY:
-        return in_ellipse(x, y, CX, CY, RX, TOP)
-    return in_ellipse(x, y, CX, CY, RX, 24)
-
-
-# pleats: curves from the knot down the front of the dome, twisting as they go
-PLEATS = []
-for deg in (-70, -42, -14, 14, 42, 70):
-    pts = []
-    for i in range(16):
-        theta = 0.10 + 0.52 * i / 15
-        phi = math.radians(deg) + 0.55 * theta
-        if math.cos(phi) > 0.05:   # only the side facing us
-            pts.append(project(theta, phi))
-    PLEATS.append(pts)
-
-
-def pleat(x, y):
-    if in_ellipse(x, y, KNOT[0], KNOT[1], 2.6, 2.2):
-        return True
-    for pts in PLEATS:
-        for a, b in zip(pts, pts[1:]):
-            if near_segment(x, y, a, b, 1.9):
-                return True
-    return False
-
-
-def keyhole(x, y):
-    if in_ellipse(x, y, CX, 82, 6.5, 6.5):
-        return True
-    if 85 <= y <= 96:
-        half = 2.6 + (y - 85) * (3.0 / 11)
-        return abs(x - CX) <= half
-    return False
-
-
-def steam(x, y):
-    for x0 in (46, 64, 82):
-        if 6 <= y <= 28:
-            wx = x0 + 3.0 * math.sin((y - 6) * 2 * math.pi / 12)
-            if abs(x - wx) <= 1.2:
-                return True
-    return False
-
-
-def lit(x, y):
-    if steam(x, y):
-        return True
-    if bun(x, y):
-        return not (pleat(x, y) or keyhole(x, y))
-    return False
+def word(text):
+    """The light pixels of `text` in the tall font (32-pixel rows, least significant bit
+    leftmost, one glyph after another with a pixel between), and its width."""
+    codepoints, glyphs, widths, height = tall_font()
+    lit, pen = set(), 0
+    for ch in text:
+        n = codepoints.index(ord(ch))
+        for row, bits in enumerate(glyphs[n * 32:n * 32 + height]):
+            for col in range(32):
+                if bits >> col & 1:
+                    lit.add((pen + col, row))
+        pen += widths[n] + 1
+    return lit, pen - 1
 
 
 def pixels():
-    return [[lit(x + 0.5, y + 0.5) for x in range(W)] for y in range(H)]
+    px = []
+    for y in range(H):
+        row = []
+        for x in range(W):
+            hits = sum(roll(x + (i + 0.5) / SAMPLES, y + (j + 0.5) / SAMPLES)
+                       for i in range(SAMPLES) for j in range(SAMPLES))
+            row.append(hits * 2 >= SAMPLES * SAMPLES)
+        px.append(row)
+    lit, width = word("maki")
+    left = (W - width) // 2
+    for x, y in lit:
+        px[WORD_Y + y][left + x] = True
+    return px
 
 
 def to_words(px):
