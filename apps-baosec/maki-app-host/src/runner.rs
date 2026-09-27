@@ -1,6 +1,7 @@
-//! The thread that runs apps, one at a time, each in maki-wasm: it hands the app the events the
-//! main thread sends, draws its frames below maki's bar, keeps its storage in the PDDB, and
-//! shows App info and "stopped" screens itself.
+//! The thread that runs apps, one at a time: a WebAssembly app in maki-wasm, a native app in a
+//! process of its own (`native`). It hands the app the events the main thread sends, draws its
+//! frames below maki's bar, keeps its storage in the PDDB, and shows App info and "stopped"
+//! screens itself.
 
 use std::cell::RefCell;
 use std::collections::{HashMap, VecDeque};
@@ -38,6 +39,16 @@ pub enum ToRunner {
     /// A message from the computer for this slot's app (the link permission), with the message
     /// to answer (`answer`) once the app does.
     Message(usize, xous::MessageEnvelope, Vec<u8>),
+}
+
+/// Sends the runner something; if a native app is running, pokes its service too, in case the
+/// app isn't waiting for events (a WebAssembly app's host is always either waiting or running
+/// out of fuel).
+pub fn tell(to_runner: &std::sync::mpsc::Sender<ToRunner>, shared: &Mutex<Shared>, m: ToRunner) {
+    to_runner.send(m).ok();
+    if shared.lock().unwrap().native.is_some() {
+        crate::native::poke();
+    }
 }
 
 /// How long a message waits for the app to get to it.
@@ -78,6 +89,9 @@ pub struct Shared {
     /// don't each ask maki-keys (which asks the PDDB); after a lock, the secret basis is closed
     /// anyway.
     pub unlocked: bool,
+    /// The running app's process, if it's a native one: the main thread pokes its service
+    /// whenever it sends the runner something, in case the app isn't waiting for events.
+    pub native: Option<xous::PID>,
     /// The slot the launcher has in front, as its last focus message said. The runner learns
     /// of a change only between an app's calls; this is up to date even while it's busy in one
     /// (a scan the launcher ended to ask something), so it never draws over what took the screen.
@@ -87,7 +101,7 @@ pub struct Shared {
 /// Apps compiled this session, by ID, with the version compiled: a few, for memory's sake.
 const KEEP_LOADED: usize = 3;
 
-struct Ctx {
+pub(crate) struct Ctx {
     loaded: RefCell<Vec<(String, u32, Arc<maki_wasm::Loaded>)>>,
     screen: Screen,
     store: Store,
@@ -101,8 +115,10 @@ struct Ctx {
     #[cfg(feature = "board-baosec")]
     accel: RefCell<Option<Option<(bao1x_hal::i2c::I2c, bao1x_hal::lis2dh12::Lis2dh12)>>>,
     time_conn: xous::CID,
-    shared: Arc<Mutex<Shared>>,
+    pub(crate) shared: Arc<Mutex<Shared>>,
     rx: Receiver<ToRunner>,
+    /// The app service native apps talk to (`maki_native::service`).
+    pub(crate) service: xous::SID,
 }
 
 impl Ctx {
@@ -192,6 +208,9 @@ struct RunState {
     /// Started for a message, and not opened by the owner: it ends once idle a while.
     headless: bool,
     idle_since: Instant,
+    /// What the main thread sent that a native app hasn't waited for yet: looked through for an
+    /// exit while it's busy (`ExitWatch::exit_waiting`), then handed to its next wait.
+    deferred: VecDeque<ToRunner>,
 }
 
 impl RunState {
@@ -206,7 +225,7 @@ impl RunState {
     }
 }
 
-struct Device {
+pub(crate) struct Device {
     ctx: Rc<Ctx>,
     slot: usize,
     id: String,
@@ -364,7 +383,36 @@ impl Device {
     }
 }
 
+/// Looks, for a native app that isn't waiting for events, at what the main thread has sent.
+pub(crate) struct ExitWatch {
+    ctx: Rc<Ctx>,
+    state: Rc<RefCell<RunState>>,
+    slot: usize,
+}
+
+impl ExitWatch {
+    /// Whether the owner left the app, maki is stopping it, or another app is being opened.
+    /// What else there is waits for the app's next wait.
+    pub(crate) fn exit_waiting(&self) -> bool {
+        while let Ok(m) = self.ctx.rx.try_recv() {
+            self.state.borrow_mut().deferred.push_back(m);
+        }
+        let st = self.state.borrow();
+        st.stopping
+            || st.deferred.iter().any(|m| match m {
+                ToRunner::Exited(s) => *s == self.slot,
+                ToRunner::Open(s) => *s != self.slot,
+                ToRunner::Stop => true,
+                _ => false,
+            })
+    }
+}
+
 impl Device {
+    pub(crate) fn watch(&self) -> ExitWatch { ExitWatch { ctx: self.ctx.clone(), state: self.state.clone(), slot: self.slot } }
+
+    pub(crate) fn id(&self) -> &str { &self.id }
+
     /// The next message waiting for the app, if any, which becomes the one it answers. One
     /// that waited too long is answered as timed out instead.
     fn next_message(&self) -> Option<Event> {
@@ -407,8 +455,10 @@ impl Platform for Device {
                 (Some(a), Some(b)) => Some(a.min(b)),
                 (a, b) => a.or(b),
             };
-            let msg = match wake {
-                Some(w) => match self.ctx.rx.recv_timeout(w.saturating_duration_since(Instant::now())) {
+            let deferred = self.state.borrow_mut().deferred.pop_front();
+            let msg = match (deferred, wake) {
+                (Some(m), _) => m,
+                (None, Some(w)) => match self.ctx.rx.recv_timeout(w.saturating_duration_since(Instant::now())) {
                     Ok(m) => m,
                     Err(RecvTimeoutError::Timeout) if idle_end.is_some_and(|e| Instant::now() >= e) => {
                         log::info!("{}: nothing more to do: ending it", self.id);
@@ -418,7 +468,7 @@ impl Platform for Device {
                     Err(RecvTimeoutError::Timeout) => return Event::Timeout,
                     Err(RecvTimeoutError::Disconnected) => return Event::Exit,
                 },
-                None => match self.ctx.rx.recv() {
+                (None, None) => match self.ctx.rx.recv() {
                     Ok(m) => m,
                     Err(_) => return Event::Exit,
                 },
@@ -641,12 +691,17 @@ fn stopped(ctx: &Ctx, name: &str, sideloaded: bool, why: &str) {
     // the reason, in lines that fit
     let mut lines: Vec<String> = Vec::new();
     for word in why.split_whitespace() {
-        match lines.last_mut() {
-            Some(l) if l.len() + 1 + word.len() <= 22 => {
-                l.push(' ');
-                l.push_str(word);
+        // a word longer than a line (where a panic was, say) goes on over the next
+        let chars: Vec<char> = word.chars().collect();
+        for piece in chars.chunks(22) {
+            let piece: String = piece.iter().collect();
+            match lines.last_mut() {
+                Some(l) if l.chars().count() + 1 + piece.chars().count() <= 22 => {
+                    l.push(' ');
+                    l.push_str(&piece);
+                }
+                _ => lines.push(piece),
             }
-            _ => lines.push(word.chars().take(22).collect()),
         }
     }
     for (i, line) in lines.iter().take(5).enumerate() {
@@ -690,9 +745,14 @@ fn run(ctx: &Rc<Ctx>, slot: usize, message: Option<(xous::MessageEnvelope, Vec<u
         }
         return None;
     };
-    // checked when it was installed: compiled once a session, kept for the next time
+    // checked when it was installed: a WebAssembly app compiled once a session and kept for
+    // the next time; a native app's ELF checked again, to be loaded into a process of its own
     let started = crate::tt().elapsed_ms();
     let loaded = maki_bundle::read_stored(&bytes).map_err(|e| e.to_string()).and_then(|b| {
+        if b.manifest.kind == maki_bundle::Kind::Native {
+            let limits = crate::native::admit(&b.manifest, b.code)?;
+            return Ok((b.manifest.clone(), Code::Native(b.code.to_vec(), limits)));
+        }
         let app = match ctx.kept(&info.id, b.manifest.version) {
             Some(app) => app,
             None => {
@@ -701,9 +761,11 @@ fn run(ctx: &Rc<Ctx>, slot: usize, message: Option<(xous::MessageEnvelope, Vec<u
                 app
             }
         };
-        Ok((b.manifest, app))
+        Ok((b.manifest, Code::Wasm(app)))
     });
-    let (manifest, app) = match loaded {
+    // what's needed of the bundle is in `loaded`: the rest isn't kept through the app's run
+    drop(bytes);
+    let (manifest, code) = match loaded {
         Ok(ok) => ok,
         Err(why) => {
             log::warn!("{} can't run: {why}", info.id);
@@ -747,7 +809,10 @@ fn run(ctx: &Rc<Ctx>, slot: usize, message: Option<(xous::MessageEnvelope, Vec<u
         }
     }
     log::info!("{} ready to run ({} ms){}", info.id, crate::tt().elapsed_ms() - started, if headless { ", for a message" } else { "" });
-    let limits = app.limits;
+    let limits = match &code {
+        Code::Wasm(app) => app.limits,
+        Code::Native(_, limits) => *limits,
+    };
     let inbox: VecDeque<_> = message.take().map(|(msg, bytes)| (msg, bytes, Instant::now())).into_iter().collect();
     let state = Rc::new(RefCell::new(RunState {
         front: !headless,
@@ -763,6 +828,7 @@ fn run(ctx: &Rc<Ctx>, slot: usize, message: Option<(xous::MessageEnvelope, Vec<u
         current: None,
         headless,
         idle_since: Instant::now(),
+        deferred: VecDeque::new(),
     }));
     let device = Device {
         ctx: ctx.clone(),
@@ -780,7 +846,10 @@ fn run(ctx: &Rc<Ctx>, slot: usize, message: Option<(xous::MessageEnvelope, Vec<u
     device.draw_frame();
     ctx.shared.lock().unwrap().running = Some(slot);
     log::info!("running {}", info.id);
-    let stop = app.run(Box::new(device));
+    let stop = match code {
+        Code::Wasm(app) => app.run(Box::new(device)),
+        Code::Native(elf, limits) => crate::native::run(ctx, device, elf, limits),
+    };
     {
         let mut shared = ctx.shared.lock().unwrap();
         shared.running = None;
@@ -812,6 +881,13 @@ fn run(ctx: &Rc<Ctx>, slot: usize, message: Option<(xous::MessageEnvelope, Vec<u
     st.pending
 }
 
+/// An app's code, ready to run.
+enum Code {
+    Wasm(Arc<maki_wasm::Loaded>),
+    /// A native app's ELF, and what it may use.
+    Native(Vec<u8>, maki_wasm::Limits),
+}
+
 /// Waits for the owner to press the centre (or leave some other way), then goes home.
 fn wait_to_leave(ctx: &Ctx, slot: usize) {
     loop {
@@ -841,6 +917,7 @@ pub fn runner(rx: Receiver<ToRunner>, shared: Arc<Mutex<Shared>>) {
         time_conn: crate::time_conn(),
         shared,
         rx,
+        service: xous::create_server_with_address(&maki_native::service::SID).expect("the app service"),
     });
     let mut next = None;
     loop {

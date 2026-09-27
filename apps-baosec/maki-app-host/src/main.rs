@@ -5,6 +5,7 @@
 //! thread runs apps; a watcher registers the installed apps once maki is unlocked and ends the
 //! running app when it locks.
 
+mod native;
 mod runner;
 mod store;
 
@@ -15,7 +16,7 @@ use maki_app_host_api::*;
 use maki_launcher::{Answer, Focus, MenuMessage, Page};
 use maki_ui::Key;
 use num_traits::{FromPrimitive, ToPrimitive};
-use runner::{Shared, Slot, ToRunner, ASK_TIMEOUT_S};
+use runner::{tell, Shared, Slot, ToRunner, ASK_TIMEOUT_S};
 use store::{Record, Store};
 use xous_ipc::Buffer;
 
@@ -146,7 +147,7 @@ fn stop_if_running(shared: &Mutex<Shared>, to_runner: &Sender<ToRunner>, id: &st
     if !running(&shared.lock().unwrap()) {
         return;
     }
-    to_runner.send(ToRunner::Stop).ok();
+    tell(to_runner, shared, ToRunner::Stop);
     for _ in 0..100 {
         tt().sleep_ms(100).ok();
         if shared.lock().unwrap().running.is_none() {
@@ -187,9 +188,17 @@ fn install(w: &Worker, bytes: Vec<u8>) -> (u32, String) {
         Err(e) => return (RESULT_REFUSED, e.to_string()),
     };
     log::info!("{}: signature checked ({} ms)", b.manifest.id, tt().elapsed_ms() - start);
-    let loaded = match maki_wasm::load(&b.manifest, b.code) {
-        Ok(loaded) => std::sync::Arc::new(loaded),
-        Err(e) => return (RESULT_REFUSED, format!("maki won't install it: {e}")),
+    // a WebAssembly app compiled now, and kept for its first open; a native app's ELF checked
+    let loaded = if b.manifest.kind == maki_bundle::Kind::Native {
+        if let Err(e) = native::admit(&b.manifest, b.code) {
+            return (RESULT_REFUSED, format!("maki won't install it: {e}"));
+        }
+        None
+    } else {
+        match maki_wasm::load(&b.manifest, b.code) {
+            Ok(loaded) => Some(std::sync::Arc::new(loaded)),
+            Err(e) => return (RESULT_REFUSED, format!("maki won't install it: {e}")),
+        }
     };
     log::info!("{}: code checked ({} ms)", b.manifest.id, tt().elapsed_ms() - start);
     let m = &b.manifest;
@@ -321,7 +330,9 @@ fn install(w: &Worker, bytes: Vec<u8>) -> (u32, String) {
     }
     log::info!("installed {} {} ({})", m.id, version, maki_bundle::fingerprint(&b.developer));
     // compiled already: the runner keeps it, so the first open is quick
-    to_runner.send(ToRunner::Loaded(m.id.clone(), m.version, loaded)).ok();
+    if let Some(loaded) = loaded {
+        tell(to_runner, shared, ToRunner::Loaded(m.id.clone(), m.version, loaded));
+    }
     sync_home(&store, &launcher, shared);
     (RESULT_OK, String::new())
 }
@@ -413,7 +424,7 @@ fn worker(work: Receiver<Work>, shared: Arc<Mutex<Shared>>, to_runner: Sender<To
                 }
                 if !now && unlocked {
                     log::info!("maki locked: the running app, if any, ends");
-                    w.to_runner.send(ToRunner::Stop).ok();
+                    tell(&w.to_runner, &w.shared, ToRunner::Stop);
                 }
                 unlocked = now;
             }
@@ -496,7 +507,7 @@ fn main() -> ! {
                         })
                         .unwrap_or_default();
                     for k in keys {
-                        to_runner.send(ToRunner::Key(slot, k)).ok();
+                        tell(&to_runner, &shared, ToRunner::Key(slot, k));
                     }
                 }
                 1 => {
@@ -514,7 +525,7 @@ fn main() -> ! {
                         Some(Focus::Exited) => ToRunner::Exited(slot),
                         _ => ToRunner::Hidden(slot),
                     };
-                    to_runner.send(m).ok();
+                    tell(&to_runner, &shared, m);
                 }
                 2 => match MenuMessage::of(&msg) {
                     Some(MenuMessage::Fill) => {
@@ -524,7 +535,7 @@ fn main() -> ! {
                         MenuMessage::fill(&mut msg, &items);
                     }
                     Some(MenuMessage::Picked(i)) => {
-                        to_runner.send(ToRunner::Menu(slot, i)).ok();
+                        tell(&to_runner, &shared, ToRunner::Menu(slot, i));
                     }
                     None => {}
                 },
@@ -621,7 +632,7 @@ fn main() -> ! {
                     None => runner::answer(msg, RESULT_NO_APP, &[]),
                     // answered once the app does: the runner starts it if need be
                     Some(slot) => {
-                        to_runner.send(ToRunner::Message(slot, msg, req.message)).ok();
+                        tell(&to_runner, &shared, ToRunner::Message(slot, msg, req.message));
                     }
                 }
             }
