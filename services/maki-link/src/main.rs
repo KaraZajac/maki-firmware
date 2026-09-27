@@ -324,7 +324,7 @@ fn main() -> ! {
     let linked = Arc::new(AtomicBool::new(false));
     // Also tells the app host whether the time is verified (for apps): it may start after us,
     // or not be in the image at all, so connect when it appears and pass on every change. One
-    // thread for both, with a small stack: each thread's stack is RAM from the start.
+    // thread for both, with a small stack.
     std::thread::Builder::new().stack_size(32 * 1024).spawn({
         let (last_contact, linked, time_state) = (last_contact.clone(), linked.clone(), time_state.clone());
         move || {
@@ -334,7 +334,8 @@ fn main() -> ! {
             let mut host = None;
             let mut told = u32::MAX;
             loop {
-                tt.sleep_ms(2_000).ok();
+                // not often: when RAM is short, every wake-up pages this process back in
+                tt.sleep_ms(5_000).ok();
                 if host.is_none() {
                     host = app_host::AppHost::try_new(&xns);
                 }

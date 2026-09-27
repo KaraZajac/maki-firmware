@@ -52,6 +52,10 @@ pub struct Shared {
     pub running: Option<usize>,
     /// 0 unset, 1 unverified, 2 verified, as maki-link says.
     pub time_state: u8,
+    /// maki is unlocked, as maki-keys last told the worker. Kept here so an app's storage calls
+    /// don't each ask maki-keys (which asks the PDDB); after a lock, the secret basis is closed
+    /// anyway.
+    pub unlocked: bool,
 }
 
 /// Apps compiled this session, by ID, with the version compiled: a few, for memory's sake.
@@ -61,7 +65,6 @@ struct Ctx {
     loaded: RefCell<Vec<(String, u32, Arc<maki_wasm::Loaded>)>>,
     screen: Screen,
     store: Store,
-    keys: maki_keys::Keys,
     launcher: maki_launcher::Launcher,
     time_conn: xous::CID,
     shared: Arc<Mutex<Shared>>,
@@ -69,7 +72,7 @@ struct Ctx {
 }
 
 impl Ctx {
-    fn unlocked(&self) -> bool { self.keys.status().0 == maki_keys::State::Unlocked }
+    fn unlocked(&self) -> bool { self.shared.lock().unwrap().unlocked }
 
     fn keep(&self, id: String, version: u32, app: Arc<maki_wasm::Loaded>) {
         let mut loaded = self.loaded.borrow_mut();
@@ -119,6 +122,8 @@ struct RunState {
     /// Told to stop: every wait from now on says Exit.
     stopping: bool,
     last: Canvas,
+    /// When it was opened, until its first frame (which the log times).
+    opened_ms: Option<u64>,
 }
 
 struct Device {
@@ -346,6 +351,9 @@ impl Platform for Device {
     fn present(&mut self, canvas: &Canvas) {
         self.state.borrow_mut().last = canvas.clone();
         self.draw_frame();
+        if let Some(opened) = self.state.borrow_mut().opened_ms.take() {
+            log::info!("{}: first frame after {} ms", self.id, crate::tt().elapsed_ms() - opened);
+        }
     }
 
     fn set_menu(&mut self, items: &[String]) { self.ctx.shared.lock().unwrap().menus.insert(self.slot, items.to_vec()); }
@@ -417,6 +425,7 @@ fn stopped(ctx: &Ctx, name: &str, sideloaded: bool, why: &str) {
 
 /// Runs the app in `slot` until it stops. Returns a slot opened meanwhile, to run next.
 fn run(ctx: &Rc<Ctx>, slot: usize) -> Option<usize> {
+    let opened = crate::tt().elapsed_ms();
     let Some(info) = ctx.shared.lock().unwrap().slots.get(slot).cloned().flatten() else {
         ctx.launcher.home().ok();
         return None;
@@ -461,6 +470,7 @@ fn run(ctx: &Rc<Ctx>, slot: usize) -> Option<usize> {
         removed: false,
         stopping: false,
         last: Canvas::default(),
+        opened_ms: Some(opened),
     }));
     let device = Device {
         ctx: ctx.clone(),
@@ -528,7 +538,6 @@ pub fn runner(rx: Receiver<ToRunner>, shared: Arc<Mutex<Shared>>) {
         loaded: RefCell::new(Vec::new()),
         screen: Screen::new(&xns),
         store: Store::new(),
-        keys: maki_keys::Keys::new(&xns).expect("couldn't connect to maki-keys"),
         launcher: maki_launcher::Launcher::new(&xns).expect("couldn't connect to the launcher"),
         time_conn: crate::time_conn(),
         shared,

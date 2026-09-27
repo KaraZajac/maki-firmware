@@ -151,14 +151,34 @@ pub(crate) enum PumpOp {
     Quit,
 }
 
+/// maki: the codes tick only while the vault is in front. The pump used to run from boot, four
+/// times a second whether anything showed or not, and on maki, whose RAM is short, every
+/// wake-up pages the vault back in at the expense of whatever is on screen.
+#[derive(Default)]
+pub(crate) struct Pace {
+    /// the vault is in front
+    pub(crate) focused: std::sync::atomic::AtomicBool,
+    /// a pump is going round
+    running: std::sync::atomic::AtomicBool,
+}
+
+impl Pace {
+    /// Start the codes ticking, unless they already are.
+    pub(crate) fn start(&self, pump_conn: xous::CID) {
+        if !self.running.swap(true, std::sync::atomic::Ordering::SeqCst) {
+            send_message(pump_conn, Message::new_scalar(PumpOp::Pump.to_usize().unwrap(), 0, 0, 0, 0)).ok();
+        }
+    }
+}
+
 pub(crate) fn pumper(
     mode: Arc<Mutex<VaultMode>>,
     sid: xous::SID,
     main_conn: xous::CID,
     allow_totp_rendering: Arc<core::sync::atomic::AtomicBool>,
+    pace: Arc<Pace>,
 ) {
-    // maki: a small stack, as it only pumps redraws: a thread's whole stack is RAM from the
-    // start, and RAM is short
+    // maki: a small stack, as it only pumps redraws
     let _ = thread::Builder::new().stack_size(32 * 1024).spawn({
         move || {
             let tt = ticktimer_server::Ticktimer::new().unwrap();
@@ -177,20 +197,27 @@ pub(crate) fn pumper(
                             )
                             .ok(); // don't panic if the queue overflows
                         }
-                        let mode_cache = { (*mode.lock().unwrap()).clone() };
-                        {
-                            // we really want mode.lock() to be in a different scope so...
-                            if mode_cache == VaultMode::Totp {
-                                tt.sleep_ms(250).unwrap();
-                                send_message(
-                                    self_conn,
-                                    Message::new_scalar(PumpOp::Pump.to_usize().unwrap(), 0, 0, 0, 0),
-                                )
-                                .expect("couldn't restart pump");
+                        // (the mode's lock is let go of straight away)
+                        let go_on = || {
+                            *mode.lock().unwrap() == VaultMode::Totp
+                                && pace.focused.load(core::sync::atomic::Ordering::SeqCst)
+                        };
+                        if go_on() {
+                            tt.sleep_ms(250).unwrap();
+                            send_message(
+                                self_conn,
+                                Message::new_scalar(PumpOp::Pump.to_usize().unwrap(), 0, 0, 0, 0),
+                            )
+                            .expect("couldn't restart pump");
+                        } else {
+                            // out of Totp mode or out of sight, the restart message doesn't go
+                            // through, and the redraws stop; unless the vault came back in front
+                            // since the check
+                            pace.running.store(false, core::sync::atomic::Ordering::SeqCst);
+                            if go_on() {
+                                pace.start(self_conn);
                             }
                         }
-                        // if not in Totp mode, the restart message doesn't go through, and the redraws
-                        // automatically stop.
                     }
                     Some(PumpOp::Quit) => {
                         break;

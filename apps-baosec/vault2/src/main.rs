@@ -22,7 +22,6 @@ use std::time::Instant;
 use locales::t;
 use num_traits::*;
 use pddb::Pddb;
-use totp::PumpOp;
 use vault2::Transport;
 use vault2::ctap::main_hid::HidIterType;
 use vault2::env::Env;
@@ -117,6 +116,7 @@ fn switch_mode(
     mode: &Mutex<VaultMode>,
     actions_conn: xous::CID,
     pump_conn: xous::CID,
+    pace: &totp::Pace,
     allow_totp_rendering: &AtomicBool,
     vault_ui: &mut VaultUi,
 ) {
@@ -134,8 +134,7 @@ fn switch_mode(
     vault_ui.refresh_draw_list();
     if to == VaultMode::Totp {
         allow_totp_rendering.store(true, Ordering::SeqCst);
-        xous::send_message(pump_conn, xous::Message::new_scalar(PumpOp::Pump.to_usize().unwrap(), 0, 0, 0, 0))
-            .expect("couldn't start the pumper");
+        pace.start(pump_conn);
     }
     vault_ui.redraw();
 }
@@ -165,7 +164,8 @@ fn main() -> ! {
 
     // spawn the TOTP pumper
     let pump_sid = xous::create_server().unwrap();
-    crate::totp::pumper(mode.clone(), pump_sid, conn, allow_totp_rendering.clone());
+    let pace = Arc::new(totp::Pace::default());
+    crate::totp::pumper(mode.clone(), pump_sid, conn, allow_totp_rendering.clone(), pace.clone());
     let pump_conn = xous::connect(pump_sid).unwrap();
 
     // maki: key presses arrive through the launcher, and only while the vault is in front.
@@ -520,9 +520,7 @@ fn main() -> ! {
         }
     }
 
-    // kickstart the pumper
-    xous::send_message(pump_conn, xous::Message::new_scalar(PumpOp::Pump.to_usize().unwrap(), 0, 0, 0, 0))
-        .expect("couldn't start the pumper");
+    // maki: the pumper starts when the vault comes to the front (see `totp::Pace`)
     let mut menu_active = false;
     loop {
         let mut msg = xous::receive_message(sid).unwrap();
@@ -543,6 +541,7 @@ fn main() -> ! {
             Some(op @ (VaultOp::FocusChange | VaultOp::FocusPasswords)) => xous::msg_scalar_unpack!(msg, focus, _, _, _, {
                 let foreground = focus == maki_launcher::Focus::Foreground.to_usize().unwrap();
                 vault_ui.set_focus(foreground);
+                pace.focused.store(foreground, Ordering::SeqCst);
                 if foreground {
                     let wanted =
                         if matches!(op, VaultOp::FocusPasswords) { VaultMode::Password } else { VaultMode::Totp };
@@ -550,10 +549,13 @@ fn main() -> ! {
                     if menu_active {
                         menu_mgr.redraw();
                     } else if current != wanted {
-                        switch_mode(wanted, &mode, actions_conn, pump_conn, &allow_totp_rendering, &mut vault_ui);
+                        switch_mode(wanted, &mode, actions_conn, pump_conn, &pace, &allow_totp_rendering, &mut vault_ui);
                     } else {
                         vault_ui.refresh_draw_list();
                         vault_ui.redraw();
+                    }
+                    if *mode.lock().unwrap() == VaultMode::Totp {
+                        pace.start(pump_conn);
                     }
                 }
             }),

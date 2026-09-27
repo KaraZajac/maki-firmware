@@ -29,6 +29,44 @@ use setup::{CheckStep, EntryStep, Phrase, PhraseCheck, PhraseStep, WordEntry};
 use ui::{Key, LINE, Screen, W};
 use xous_ipc::Buffer;
 
+/// How often the tick thread wakes the main loop: every second while an ask is up or waiting
+/// (its countdown, and retries), otherwise at each minute, for the clock. RAM is short, and every
+/// wake-up of a process can page it back in at the expense of whatever is running.
+struct Pace {
+    fast: std::sync::Mutex<bool>,
+    wake: std::sync::Condvar,
+}
+
+static PACE: Pace = Pace { fast: std::sync::Mutex::new(false), wake: std::sync::Condvar::new() };
+
+fn set_pace(fast: bool) {
+    let mut f = PACE.fast.lock().unwrap();
+    if *f != fast {
+        *f = fast;
+        PACE.wake.notify_all();
+    }
+}
+
+/// The clock changed: the tick thread works out the next minute again.
+fn repace() { PACE.wake.notify_all(); }
+
+/// Until just after the clock's next minute starts (a minute, if the clock isn't set).
+#[cfg(feature = "board-baosec")]
+fn until_next_minute(time_conn: xous::CID) -> std::time::Duration {
+    use bao1x_hal_service::api::TimeOp;
+    let ms = match xous::send_message(
+        time_conn,
+        xous::Message::new_blocking_scalar(TimeOp::GetLocalTimeMs.to_usize().unwrap(), 0, 0, 0, 0),
+    ) {
+        Ok(xous::Result::Scalar2(lo, hi)) => ((hi as u64) << 32) | lo as u64,
+        _ => 0,
+    };
+    std::time::Duration::from_millis(60_000 - ms % 60_000 + 200)
+}
+
+#[cfg(not(feature = "board-baosec"))]
+fn until_next_minute(_time_conn: xous::CID) -> std::time::Duration { std::time::Duration::from_secs(60) }
+
 /// The boot image stays up at least this long, so a fast mount doesn't just flash it.
 const SPLASH_MIN_MS: u64 = 1500;
 
@@ -675,17 +713,19 @@ fn main() -> ! {
             .ok();
     });
 
-    // keeps the clock current; the main loop only redraws when the minute changes. A small
-    // stack: a thread's whole stack is RAM from the start, and this one only ticks.
+    // keeps the clock current, and asks' countdowns (see `Pace`); the main loop only redraws
+    // when something changed. A small stack: it only ticks.
     std::thread::Builder::new()
         .stack_size(32 * 1024)
-        .spawn(move || {
-            let tt = ticktimer_server::Ticktimer::new().unwrap();
-            loop {
-                tt.sleep_ms(1000).ok();
-                xous::send_message(conn, xous::Message::new_scalar(LauncherOp::Tick.to_usize().unwrap(), 0, 0, 0, 0))
-                    .ok();
+        .spawn(move || loop {
+            // (the clock is read without the lock held: the main loop takes it for every message)
+            let fast = *PACE.fast.lock().unwrap();
+            let wait = if fast { std::time::Duration::from_secs(1) } else { until_next_minute(time_conn) };
+            let now = PACE.fast.lock().unwrap();
+            if *now == fast {
+                drop(PACE.wake.wait_timeout(now, wait).unwrap());
             }
+            xous::send_message(conn, xous::Message::new_scalar(LauncherOp::Tick.to_usize().unwrap(), 0, 0, 0, 0)).ok();
         })
         .unwrap();
 
@@ -709,6 +749,7 @@ fn main() -> ! {
     };
 
     loop {
+        set_pace(sys.asking.active() || !sys.asking.queue.is_empty());
         let msg = xous::receive_message(sid).unwrap();
         match FromPrimitive::from_usize(msg.body.id()) {
             Some(LauncherOp::Register) => {
@@ -893,6 +934,7 @@ fn main() -> ! {
                 sys.time_verified = state == 2;
                 sys.clock = clock_text(time_conn, sys.time_verified);
                 sys.redraw();
+                repace();
             }),
             Some(LauncherOp::LinkState) => xous::msg_scalar_unpack!(msg, linked, _, _, _, {
                 sys.linked = linked != 0;

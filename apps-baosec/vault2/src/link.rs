@@ -17,8 +17,7 @@ use crate::storage::{self, ContentKind, PasswordRecord, StorageContent, TotpReco
 use crate::totp::{TotpEntry, generate_totp_code, get_current_unix_time};
 
 pub(crate) fn start(main_conn: xous::CID) {
-    // maki's requests: a smaller stack than the default, since RAM is short and a thread's whole
-    // stack is taken when it starts
+    // maki's requests: a smaller stack than the default (128 KiB), which is plenty
     thread::Builder::new().stack_size(64 * 1024).spawn(move || {
         let xns = xous_names::XousNames::new().unwrap();
         // one connection, which maki-link makes at boot: no app can reach this

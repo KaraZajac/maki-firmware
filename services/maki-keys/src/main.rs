@@ -572,16 +572,36 @@ fn main() -> ! {
     let mut seed = SeedCache(None);
     // bumped when a restore writes to the FIDO store behind the vault's back
     let generation = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
+    // who's waiting for the secrets to open (and whether for the phrase too): see `WaitUnlocked`
+    let mut waiting: Vec<(xous::MessageSender, bool)> = Vec::new();
+    // and who's waiting for the state to change from the one they saw: see `WaitChange`
+    let mut watching: Vec<(xous::MessageSender, usize)> = Vec::new();
+    // whether there's a recovery phrase, and the wrong PINs so far: worked out when asked, and
+    // forgotten after anything that could change them. Status checks used to read the PDDB
+    // every time, waking it.
+    let mut phrase_known: Option<bool> = None;
+    let mut tries_known: Option<u32> = None;
+    let phrase_made = |known: &mut Option<bool>| {
+        *known.get_or_insert_with(|| store.lock().map(|l| store.entropy(&l.basis).is_some()).unwrap_or(false))
+    };
 
     loop {
         let mut msg = xous::receive_message(sid).unwrap();
         let from_screen = screen.is_some() && msg.sender.pid() == screen;
-        match FromPrimitive::from_usize(msg.body.id()) {
+        let op = FromPrimitive::from_usize(msg.body.id());
+        if !matches!(op, Some(KeysOp::Status | KeysOp::WaitUnlocked | KeysOp::WaitChange)) {
+            phrase_known = None;
+            tries_known = None;
+        }
+        match op {
             Some(KeysOp::Status) => {
                 // wrong PINs count while unlocked too: changing the PIN checks the current one
-                let tries_left = if state == State::Unset { MAX_TRIES } else { MAX_TRIES.saturating_sub(store.tries()) };
-                let has_phrase = state == State::Unlocked
-                    && store.lock().map(|l| store.entropy(&l.basis).is_some()).unwrap_or(false);
+                let tries_left = if state == State::Unset {
+                    MAX_TRIES
+                } else {
+                    MAX_TRIES.saturating_sub(*tries_known.get_or_insert_with(|| store.tries()))
+                };
+                let has_phrase = state == State::Unlocked && phrase_made(&mut phrase_known);
                 let rest = tries_left as usize
                     | if has_phrase { HAS_PHRASE } else { 0 }
                     | (generation.load(Ordering::SeqCst) as usize & STORE_GENERATION_MASK) << STORE_GENERATION_SHIFT;
@@ -977,7 +997,33 @@ fn main() -> ! {
                 };
                 xous::return_scalar(msg.sender, closed as usize).ok();
             }
+            Some(KeysOp::WaitUnlocked) => {
+                let phrase = msg.body.scalar_message().map(|m| m.arg1 != 0).unwrap_or(false);
+                waiting.push((msg.sender, phrase));
+            }
+            Some(KeysOp::WaitChange) => {
+                let seen = msg.body.scalar_message().map(|m| m.arg1).unwrap_or(usize::MAX);
+                watching.push((msg.sender, seen));
+            }
             _ => log::warn!("unknown opcode {}", msg.body.id()),
         }
+        // answer whoever was waiting for what just happened (or was so already)
+        if state == State::Unlocked && !waiting.is_empty() {
+            let has_phrase = phrase_made(&mut phrase_known);
+            waiting.retain(|&(sender, phrase)| {
+                if phrase && !has_phrase {
+                    return true;
+                }
+                xous::return_scalar(sender, 1).ok();
+                false
+            });
+        }
+        watching.retain(|&(sender, seen)| {
+            if state as usize == seen {
+                return true;
+            }
+            xous::return_scalar(sender, state as usize).ok();
+            false
+        });
     }
 }

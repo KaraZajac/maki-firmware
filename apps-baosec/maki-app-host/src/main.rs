@@ -8,7 +8,7 @@
 mod runner;
 mod store;
 
-use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
+use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 
 use maki_app_host_api::*;
@@ -180,10 +180,12 @@ struct Worker {
     to_runner: Sender<ToRunner>,
 }
 
-/// What the main thread passes the worker, with the message to answer when it's done.
+/// What the main thread passes the worker, with the message to answer when it's done; and
+/// maki locking or unlocking.
 enum Work {
     Install(xous::MessageEnvelope, Install, Vec<u8>),
     Remove(xous::MessageEnvelope, Remove),
+    Unlocked(bool),
 }
 
 /// Checks a bundle that's all arrived, asks the owner, and installs it: the result, and why if
@@ -324,7 +326,7 @@ fn remove(w: &Worker, id: &str) -> u32 {
 
 /// Installs and removes apps, one at a time, answering each message once it's done; and
 /// between times puts the installed apps on the home screen whenever maki is unlocked, and
-/// ends the running app when it locks. One thread for all of it: each thread's stack is RAM.
+/// ends the running app when it locks.
 fn worker(work: Receiver<Work>, shared: Arc<Mutex<Shared>>, to_runner: Sender<ToRunner>) {
     let xns = xous_names::XousNames::new().unwrap();
     let w = Worker {
@@ -336,7 +338,7 @@ fn worker(work: Receiver<Work>, shared: Arc<Mutex<Shared>>, to_runner: Sender<To
     };
     let mut unlocked = false;
     loop {
-        match work.recv_timeout(std::time::Duration::from_secs(1)) {
+        match work.recv() {
             Ok(Work::Install(mut msg, mut req, bytes)) => {
                 let (result, reason) = install(&w, bytes);
                 req.result = result;
@@ -353,18 +355,33 @@ fn worker(work: Receiver<Work>, shared: Arc<Mutex<Shared>>, to_runner: Sender<To
                     buffer.replace(req).ok();
                 }
             }
-            Err(RecvTimeoutError::Timeout) => {}
-            Err(RecvTimeoutError::Disconnected) => return,
+            Ok(Work::Unlocked(now)) => {
+                w.shared.lock().unwrap().unlocked = now;
+                if now && !unlocked {
+                    sync_home(&w.store, &w.launcher, &w.shared);
+                }
+                if !now && unlocked {
+                    log::info!("maki locked: the running app, if any, ends");
+                    w.to_runner.send(ToRunner::Stop).ok();
+                }
+                unlocked = now;
+            }
+            Err(_) => return,
         }
-        let now = w.keys.status().0 == maki_keys::State::Unlocked;
-        if now && !unlocked {
-            sync_home(&w.store, &w.launcher, &w.shared);
+    }
+}
+
+/// Tells the worker when maki locks or unlocks. maki-keys answers when it happens: polling for
+/// it woke three processes every time (this one, maki-keys and the PDDB), and RAM is short.
+fn watch_lock(to_worker: Sender<Work>) {
+    let xns = xous_names::XousNames::new().unwrap();
+    let keys = maki_keys::Keys::new(&xns).expect("couldn't connect to maki-keys");
+    let mut seen = keys.status().0;
+    loop {
+        if to_worker.send(Work::Unlocked(seen == maki_keys::State::Unlocked)).is_err() {
+            return;
         }
-        if !now && unlocked {
-            log::info!("maki locked: the running app, if any, ends");
-            w.to_runner.send(ToRunner::Stop).ok();
-        }
-        unlocked = now;
+        seen = keys.wait_change(seen);
     }
 }
 
@@ -378,8 +395,7 @@ fn main() -> ! {
     log::info!("app host ready");
     let shared = Arc::new(Mutex::new(Shared::default()));
     let (to_runner, from_main) = mpsc::channel();
-    // Two threads besides this one, each with a small stack: RAM is short, and a thread's
-    // whole stack is taken when it starts.
+    // Three threads besides this one, each with a small stack.
     std::thread::Builder::new()
         .stack_size(64 * 1024)
         .spawn({
@@ -393,6 +409,13 @@ fn main() -> ! {
         .spawn({
             let (shared, to_runner) = (shared.clone(), to_runner.clone());
             move || worker(work, shared, to_runner)
+        })
+        .unwrap();
+    std::thread::Builder::new()
+        .stack_size(32 * 1024)
+        .spawn({
+            let to_worker = to_worker.clone();
+            move || watch_lock(to_worker)
         })
         .unwrap();
 

@@ -17,7 +17,37 @@ use utralib::*;
 use xous::{CID, MessageSender, msg_blocking_scalar_unpack, msg_scalar_unpack};
 use xous_ipc::Buffer;
 #[cfg(feature = "board-baosec")]
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Condvar, Mutex};
+
+/// maki: whether a left or right press is waiting for the other side (the menu chord). The
+/// timer that checks on it sleeps until one is: RAM is short, and a thread that wakes all the
+/// time keeps pulling its pages back in.
+#[cfg(feature = "board-baosec")]
+#[derive(Default)]
+struct SidePending {
+    waiting: Mutex<bool>,
+    wake: Condvar,
+}
+
+#[cfg(feature = "board-baosec")]
+impl SidePending {
+    fn set(&self, waiting: bool) {
+        *self.waiting.lock().unwrap() = waiting;
+        if waiting {
+            self.wake.notify_one();
+        }
+    }
+
+    fn is_set(&self) -> bool { *self.waiting.lock().unwrap() }
+
+    /// Until a press is waiting.
+    fn wait(&self) {
+        let mut waiting = self.waiting.lock().unwrap();
+        while !*waiting {
+            waiting = self.wake.wait(waiting).unwrap();
+        }
+    }
+}
 
 /// Hands keys to whoever is listening: blocking listeners get the first two, async listeners
 /// get them all, four to a message.
@@ -367,15 +397,16 @@ fn keyboard_service() {
     #[cfg(feature = "board-baosec")]
     let mut side_waiting: Option<(KeyPress, u64)> = None;
     #[cfg(feature = "board-baosec")]
-    let side_pending = std::sync::Arc::new(AtomicBool::new(false));
+    let side_pending = std::sync::Arc::new(SidePending::default());
     #[cfg(feature = "board-baosec")]
     std::thread::spawn({
         let side_pending = side_pending.clone();
         move || {
             let tt = ticktimer::Ticktimer::new().unwrap();
             loop {
+                side_pending.wait();
                 tt.sleep_ms(40).ok();
-                if side_pending.load(Ordering::SeqCst) {
+                if side_pending.is_set() {
                     xous::try_send_message(
                         kbd_conn,
                         xous::Message::new_scalar(KeyboardOpcode::PollChord.to_usize().unwrap(), 0, 0, 0, 0),
@@ -638,14 +669,14 @@ fn keyboard_service() {
                             match side_waiting.take() {
                                 Some((other, at)) if other != key_down && now.saturating_sub(at) <= CHORD_MS => {
                                     kc.push(MENU);
-                                    side_pending.store(false, Ordering::SeqCst);
+                                    side_pending.set(false);
                                 }
                                 earlier => {
                                     if let Some((k, _)) = earlier {
                                         kc.push(key_tracker.map_keypress(k));
                                     }
                                     side_waiting = Some((key_down, now));
-                                    side_pending.store(true, Ordering::SeqCst);
+                                    side_pending.set(true);
                                 }
                             }
                         } else if key_down != KeyPress::Invalid && key_down != KeyPress::None {
@@ -683,12 +714,12 @@ fn keyboard_service() {
                 match side_waiting {
                     Some((k, at)) if tt.elapsed_ms().saturating_sub(at) > CHORD_MS => {
                         side_waiting = None;
-                        side_pending.store(false, Ordering::SeqCst);
+                        side_pending.set(false);
                         let key = key_tracker.map_keypress(k);
                         deliver(&[key], &listeners, &mut blocking_listener);
                     }
                     Some(_) => {}
-                    None => side_pending.store(false, Ordering::SeqCst),
+                    None => side_pending.set(false),
                 }
             }
             #[cfg(not(feature = "board-baosec"))]

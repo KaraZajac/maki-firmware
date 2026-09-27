@@ -14,4 +14,3 @@ rkyv = { version = "0.8.8", default-features = false, features = [
     "alloc",
 ] }
 xous-names = { package = "xous-api-names", version = "0.9.67" }
-ticktimer-server = { package = "xous-api-ticktimer", version = "0.9.65" }

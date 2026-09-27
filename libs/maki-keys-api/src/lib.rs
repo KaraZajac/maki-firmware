@@ -77,6 +77,12 @@ pub enum KeysOp {
     /// Memory message (mutable lend) with an `EthMessage`: a message (EIP-191) to sign, once the
     /// owner has read it on screen.
     EthMessage = 20,
+    /// Blocking scalar: answered once the secrets are open, and with `arg1` = 1, once there's a
+    /// recovery phrase too. Held rather than polled for.
+    WaitUnlocked = 21,
+    /// Blocking scalar with the `State` last seen in `arg1`: answered with the state once it's
+    /// different. Held rather than polled for.
+    WaitChange = 22,
 }
 
 /// A question about the Ethereum account, and its answer.
@@ -428,19 +434,30 @@ impl Keys {
 
     /// Returns once the secrets are open and there's a recovery phrase: what the passkeys come
     /// from. (During setup, the PIN opens the secrets before the phrase is made.)
-    pub fn wait_phrase(&self) {
-        let tt = ticktimer_server::Ticktimer::new().unwrap();
-        while !(self.status().0 == State::Unlocked && self.has_phrase()) {
-            tt.sleep_ms(250).ok();
+    pub fn wait_phrase(&self) { self.wait(true) }
+
+    /// Returns once the secrets are open. For processes that mustn't touch storage before then.
+    pub fn wait_unlocked(&self) { self.wait(false) }
+
+    /// Returns the state once it's no longer `seen`: maki locked, unlocked, or was wiped.
+    pub fn wait_change(&self, seen: State) -> State {
+        match xous::send_message(
+            self.conn,
+            xous::Message::new_blocking_scalar(KeysOp::WaitChange.to_usize().unwrap(), seen as usize, 0, 0, 0),
+        ) {
+            Ok(xous::Result::Scalar1(s)) => num_traits::FromPrimitive::from_usize(s).unwrap_or(State::Locked),
+            _ => self.status().0,
         }
     }
 
-    /// Returns once the secrets are open. For processes that mustn't touch storage before then.
-    pub fn wait_unlocked(&self) {
-        let tt = ticktimer_server::Ticktimer::new().unwrap();
-        while self.status().0 != State::Unlocked {
-            tt.sleep_ms(250).ok();
-        }
+    /// maki-keys answers when it's so. Polling for it woke both processes a few times a second,
+    /// all through setup, and RAM is short: every wake-up pages a process back in.
+    fn wait(&self, phrase: bool) {
+        xous::send_message(
+            self.conn,
+            xous::Message::new_blocking_scalar(KeysOp::WaitUnlocked.to_usize().unwrap(), phrase as usize, 0, 0, 0),
+        )
+        .ok();
     }
 
     fn call(&self, op: KeysOp, pin: &str) -> PinResult { self.call_with(op, pin, "") }

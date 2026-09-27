@@ -5339,7 +5339,6 @@ dependencies = [
  "rkyv 0.8.8",
  "xous 0.9.70 (registry+https://github.com/rust-lang/crates.io-index)",
  "xous-api-names",
- "xous-api-ticktimer",
  "xous-ipc 0.10.10 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 
