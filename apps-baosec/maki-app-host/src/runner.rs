@@ -732,8 +732,15 @@ fn run(ctx: &Rc<Ctx>, slot: usize, message: Option<(xous::MessageEnvelope, Vec<u
             refuse(RESULT_REFUSED);
             return None;
         }
+        // the store's reason on a page of its own, where it has room, then the choice
+        let pages = vec![maki_launcher::Page {
+            heading: "Revoked".into(),
+            value: "by the maki store".into(),
+            mono: String::new(),
+            prose: format!("{why}\n\nOpen it only if you're sure; App info can remove it."),
+        }];
         let answer =
-            ctx.launcher.review(&info.name, "Revoked by the store", &why, Vec::new(), "open anyway", "don't", ASK_TIMEOUT_S);
+            ctx.launcher.review(&info.name, "Open it anyway?", "revoked", pages, "open anyway", "don't", ASK_TIMEOUT_S);
         if !matches!(answer, Ok(Answer::Allowed(_))) {
             ctx.launcher.home().ok();
             return None;
