@@ -861,6 +861,17 @@ fn confined_flags(flags: MemoryFlags) -> bool {
 
 fn is_confined(pid: PID) -> bool { SystemServices::with(|ss| ss.is_confined(pid)) }
 
+/// Whether the kernel made this call itself, on the current process's behalf: swapping pages
+/// out when the process runs out of memory, or in when it touches one (`Swap::
+/// swap_reentrant_syscall`). The process's confinement is about what it may ask for; refusing
+/// these would leave it (and the kernel, retrying) stuck. The trap says where the call came
+/// from, and user code can't come from supervisor mode.
+#[cfg(all(baremetal, target_arch = "riscv32"))]
+fn from_kernel() -> bool { riscv::register::sstatus::read().spp() == riscv::register::sstatus::SPP::Supervisor }
+
+#[cfg(not(all(baremetal, target_arch = "riscv32")))]
+fn from_kernel() -> bool { false }
+
 /// Takes `pages` from a confined process's budget, or says it hasn't that many.
 fn spend_budget(pages: usize) -> core::result::Result<(), xous_kernel::Error> {
     ArchProcess::with_inner_mut(|p| {
@@ -879,7 +890,7 @@ pub fn handle(pid: PID, tid: TID, in_irq: bool, call: SysCall) -> SysCallResult 
     let result = if in_irq && !call.can_call_from_interrupt() {
         klog!("[!] Called {:?} that's cannot be called from the interrupt handler!", call);
         Err(xous_kernel::Error::InvalidSyscall)
-    } else if !in_irq && is_confined(pid) && !confined_may(&call) {
+    } else if !in_irq && is_confined(pid) && !confined_may(&call) && !from_kernel() {
         klog!("[!] {:?} refused: PID {} is confined", call, pid);
         Err(xous_kernel::Error::AccessDenied)
     } else {
