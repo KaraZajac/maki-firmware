@@ -12,7 +12,7 @@ use maki_launcher::Answer;
 use maki_ui::{Key, Screen, LINE};
 
 /// How long the owner has to answer (the emulator skips through idle time: longer there).
-const ASK_TIMEOUT_S: u32 = if option_env!("MAKI_DEMO").is_some() { 600 } else { 30 };
+const ASK_TIMEOUT_S: u32 = maki_launcher::ask_timeout(30);
 /// A site in fixed-width type: 15 characters to a line, three lines.
 const SITE_WIDTH: usize = 15;
 const SITE_LINES: usize = 3;

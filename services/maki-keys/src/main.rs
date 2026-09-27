@@ -44,7 +44,7 @@ const APP_RECORD: u8 = 3;
 const APP_DATA: u8 = 4;
 use maki_app_host_api::RESTORED;
 const BACKUP_MAGIC: &[u8; 8] = b"MAKIBAK1";
-const RESTORE_TIMEOUT_S: u32 = if option_env!("MAKI_DEMO").is_some() { 600 } else { 60 };
+const RESTORE_TIMEOUT_S: u32 = maki_launcher::ask_timeout(60);
 const BACKUP_HEADER: &[u8] = b"maki backup 1\n";
 
 /// A backup's plaintext: each record with the dictionary it came from.

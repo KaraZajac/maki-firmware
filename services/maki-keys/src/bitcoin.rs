@@ -12,10 +12,10 @@ use maki_launcher::{Answer, Launcher, Page};
 use xous_ipc::Buffer;
 use zeroize::Zeroize;
 
-const ACCOUNT_TIMEOUT_S: u32 = if option_env!("MAKI_DEMO").is_some() { 600 } else { 60 };
-const ADDRESS_TIMEOUT_S: u32 = if option_env!("MAKI_DEMO").is_some() { 600 } else { 120 };
+const ACCOUNT_TIMEOUT_S: u32 = maki_launcher::ask_timeout(60);
+const ADDRESS_TIMEOUT_S: u32 = maki_launcher::ask_timeout(120);
 /// Time to read every payment's address, carefully.
-const SIGN_TIMEOUT_S: u32 = if option_env!("MAKI_DEMO").is_some() { 600 } else { 300 };
+const SIGN_TIMEOUT_S: u32 = maki_launcher::ask_timeout(300);
 /// More outputs than this and a transaction isn't reviewed page by page on a small screen with
 /// any care: maki refuses it.
 const MAX_OUTPUTS: usize = 64;

@@ -113,7 +113,7 @@ fn now_s() -> u64 { get_current_unix_time().unwrap_or(0) }
 
 /// How long the owner has. The emulator skips ahead through idle time, so a demo build
 /// (MAKI_DEMO, see maki-link) waits long enough to be pressed there.
-const TIMEOUT_S: u32 = if option_env!("MAKI_DEMO").is_some() { 600 } else { ASK_TIMEOUT_S };
+const TIMEOUT_S: u32 = maki_launcher::ask_timeout(ASK_TIMEOUT_S);
 
 /// Everything of one kind in the vault. A vault that has never held any has no dictionary for
 /// it yet, which means nothing saved; and the vault's own screen may be reading the same list,

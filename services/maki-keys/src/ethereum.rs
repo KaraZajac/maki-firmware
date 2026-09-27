@@ -11,9 +11,9 @@ use maki_launcher::{Answer, Launcher, Page};
 use xous_ipc::Buffer;
 use zeroize::Zeroize;
 
-const TIMEOUT_S: u32 = if option_env!("MAKI_DEMO").is_some() { 600 } else { 60 };
+const TIMEOUT_S: u32 = maki_launcher::ask_timeout(60);
 /// Time to read a transaction's pages, carefully.
-const SIGN_TIMEOUT_S: u32 = if option_env!("MAKI_DEMO").is_some() { 600 } else { 300 };
+const SIGN_TIMEOUT_S: u32 = maki_launcher::ask_timeout(300);
 
 /// Ask on the launcher's screen, from a thread of our own: the owner takes their time.
 fn owner_says(ask: impl FnOnce(&Launcher) -> Result<Answer, xous::Error>) -> u32 {

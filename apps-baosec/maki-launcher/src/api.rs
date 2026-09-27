@@ -3,6 +3,13 @@
 /// xous-names name of the launcher's server.
 pub const SERVER_NAME_LAUNCHER: &str = "_maki launcher_";
 
+/// How long an ask waits: `normal_s` on a badge, and hours in a demo build (`MAKI_DEMO`). The
+/// emulator skips through idle time, the faster the quieter maki is, so a scripted press can
+/// come many device minutes after its screen went up.
+pub const fn ask_timeout(normal_s: u32) -> u32 {
+    if option_env!("MAKI_DEMO").is_some() { 6 * 3600 } else { normal_s }
+}
+
 /// Sent as `arg1` of an app's `focus_op` scalar whenever the app moves to or from the front.
 #[derive(Debug, Copy, Clone, PartialEq, Eq, num_derive::FromPrimitive, num_derive::ToPrimitive)]
 pub enum Focus {

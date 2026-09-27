@@ -707,7 +707,7 @@ impl ActionManager {
             ),
         };
         // the emulator skips ahead through idle time: a demo build gives the owner longer
-        let timeout_s = if option_env!("MAKI_DEMO").is_some() { 600 } else { 30 };
+        let timeout_s = maki_launcher::ask_timeout(30);
         let allowed = matches!(
             self.launcher.ask(&entry.description, question, &detail, &[], timeout_s),
             Ok(maki_launcher::Answer::Allowed(_))

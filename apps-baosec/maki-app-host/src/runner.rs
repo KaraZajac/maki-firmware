@@ -18,7 +18,7 @@ use ux_api::minigfx::{Point, Rectangle};
 use crate::store::{Record, Store};
 
 /// How long the owner has to answer (the emulator skips through idle time: longer there).
-pub const ASK_TIMEOUT_S: u32 = if option_env!("MAKI_DEMO").is_some() { 600 } else { 30 };
+pub const ASK_TIMEOUT_S: u32 = maki_launcher::ask_timeout(30);
 
 pub enum ToRunner {
     /// The launcher put this slot's app in front: start it, or show it again.
