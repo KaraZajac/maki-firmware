@@ -176,6 +176,14 @@ pub struct Process {
 
     /// When an exception is hit, the kernel will switch to this Thread.
     exception_handler: Option<ExceptionHandler>,
+
+    /// The process that created this one (a loader, for an app), whatever `ppid` says: the
+    /// kernel keeps `ppid` at 1, which it uses to know where to switch.
+    pub owner: PID,
+
+    /// Confined for good (`SysCall::ConfineSelf`): only its own connections and memory. See
+    /// `syscall::confined_may`.
+    pub confined: bool,
 }
 
 impl Default for Process {
@@ -188,6 +196,8 @@ impl Default for Process {
             previous_thread: 0,
             exception_handler: None,
             mapping: Default::default(),
+            owner: unsafe { PID::new_unchecked(1) },
+            confined: false,
         }
     }
 }
@@ -220,6 +230,10 @@ pub struct ProcessInner {
     /// Maximum size of the heap
     pub mem_heap_max: usize,
 
+    /// Pages a confined process may still map (`SysCall::ConfineSelf`): mapping takes from it,
+    /// unmapping gives back. Unused unless the process is confined.
+    pub page_budget: usize,
+
     /// A mapping of connection IDs to server indexes
     pub connection_map: [Option<NonZeroU8>; 32],
 
@@ -240,6 +254,7 @@ impl Default for ProcessInner {
             mem_heap_base: DEFAULT_HEAP_BASE,
             mem_heap_size: 0,
             mem_heap_max: if cfg!(feature = "big-heap") { 1024 * 1024 * 12 } else { 1024 * 512 },
+            page_budget: 0,
             connection_map: [None; 32],
             pid: unsafe { PID::new_unchecked(1) },
             _reserved: [0; 1],
@@ -297,6 +312,8 @@ std::thread_local!(static SYSTEM_SERVICES: core::cell::RefCell<SystemServices> =
         current_thread: 0_usize,
         previous_thread: INITIAL_TID as TID,
         exception_handler: None,
+        owner: unsafe { PID::new_unchecked(1) },
+        confined: false,
     }; MAX_PROCESS_COUNT],
     // Note we can't use MAX_SERVER_COUNT here because of how Rust's
     // macro tokenization works
@@ -314,6 +331,8 @@ static mut SYSTEM_SERVICES: SystemServices = SystemServices {
         current_thread: INITIAL_TID,
         previous_thread: INITIAL_TID as TID,
         exception_handler: None,
+        owner: unsafe { PID::new_unchecked(1) },
+        confined: false,
     }; MAX_PROCESS_COUNT],
     // Note we can't use MAX_SERVER_COUNT here because of how Rust's
     // macro tokenization works
@@ -476,20 +495,21 @@ impl SystemServices {
     ) -> Result<ProcessStartup, xous_kernel::Error> {
         let mut entry_idx = None;
         let mut new_pid = None;
-        let _ppid = crate::arch::process::current_pid();
+        let creator = crate::arch::process::current_pid();
 
         for (idx, entry) in self.processes.iter_mut().enumerate() {
             if entry.state != ProcessState::Free {
                 continue;
             }
+            // (a slot's PID is its index plus one)
             #[cfg(feature = "swap")]
-            if idx == xous_kernel::SWAPPER_PID as usize {
+            if idx + 1 == xous_kernel::SWAPPER_PID as usize {
                 // don't allow re-allocation of the swapper PID. It has special privileges, if it crashes,
                 // it shall remain empty forever.
                 continue;
             }
             #[cfg(feature = "bao1x")]
-            if idx == 3 {
+            if idx + 1 == 3 {
                 // don't allow re-allocation of PID 3 on all Baochip-1x targets. This is because PID 3 is the
                 // very special keystore process, which has elevated privileges in hardware to
                 // access secret data slots. This seals off an attack where an adversary crashes PID 3 and
@@ -500,6 +520,8 @@ impl SystemServices {
             new_pid = Some(pid_from_usize(idx + 1)?);
             entry.pid = new_pid.unwrap();
             entry.ppid = PID::new(1).unwrap();
+            entry.owner = creator;
+            entry.confined = false;
             entry.state = ProcessState::Allocated;
             unsafe { entry.mapping.allocate(new_pid.unwrap()).or(Err(xous_kernel::Error::InternalError))? };
             break;
@@ -519,8 +541,7 @@ impl SystemServices {
             // this process.
             entry.state = ProcessState::Ready(1 << INITIAL_TID);
         }
-        // entry.ppid = _ppid;
-        klog!("created new process for PID {} with PPID {}", new_pid, _ppid);
+        klog!("created new process for PID {} for PID {}", new_pid, creator);
         return Ok(startup);
     }
 
@@ -1973,6 +1994,22 @@ impl SystemServices {
         result
     }
 
+    /// Whether `pid` is confined (`SysCall::ConfineSelf`).
+    pub fn is_confined(&self, pid: PID) -> bool { self.get_process(pid).is_ok_and(|p| p.confined) }
+
+    /// The connection this process already has to the server `sid`, if it has one: all a
+    /// confined process may connect to.
+    pub fn existing_connection(&self, sid: SID) -> Option<CID> {
+        ArchProcess::with_inner(|process_inner| {
+            process_inner.connection_map.iter().enumerate().find_map(|(connection_idx, server_idx)| {
+                let server_idx = (*server_idx)?.get() as usize;
+                // tombstones and unallocated entries are below 2
+                let server = self.servers.get(server_idx.checked_sub(2)?)?.as_ref()?;
+                (server.sid == sid).then_some(connection_idx as CID + 2)
+            })
+        })
+    }
+
     /// Allocate a new server ID for this process and return the address. If the
     /// server table is full, return an error.
     pub fn connect_to_server(&mut self, sid: SID) -> Result<CID, xous_kernel::Error> {
@@ -2204,6 +2241,29 @@ impl SystemServices {
 
     /// Terminate the given process. Returns the process' parent PID.
     pub fn terminate_process(&mut self, target_pid: PID) -> Result<PID, xous_kernel::Error> {
+        let parent_pid = self.release_process(target_pid)?;
+        self.switch_to_thread(parent_pid, None).unwrap();
+        Ok(parent_pid)
+    }
+
+    /// Ends `target_pid` for the process that created it (`SysCall::TerminateChild`): its
+    /// loader, stopping an app. Everything the process had goes, as when it ends itself, and the
+    /// caller carries on.
+    pub fn terminate_child(&mut self, caller: PID, target_pid: PID) -> Result<(), xous_kernel::Error> {
+        let target = self.get_process(target_pid)?;
+        if target_pid == caller || target.free() || target.owner != caller {
+            return Err(xous_kernel::Error::ProcessNotChild);
+        }
+        let result = self.release_process(target_pid).map(|_| ());
+        // back to the caller's own address space, whatever releasing the child went through
+        self.get_process(caller)?.activate()?;
+        result
+    }
+
+    /// Releases a process: its servers (with tombstones in their clients' connections), what
+    /// they hold for it, its memory and interrupts, and its slot. Returns its parent. Leaves
+    /// whichever address space it last needed active.
+    fn release_process(&mut self, target_pid: PID) -> Result<PID, xous_kernel::Error> {
         println!("terminate_process: {:?}", target_pid);
         // To terminate a process, we must perform the following:
         //
@@ -2260,9 +2320,6 @@ impl SystemServices {
         process.activate()?;
         let parent_pid = process.ppid;
         process.terminate()?;
-
-        self.switch_to_thread(parent_pid, None).unwrap();
-
         Ok(parent_pid)
     }
 

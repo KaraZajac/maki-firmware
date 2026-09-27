@@ -572,6 +572,33 @@ pub enum SysCall {
     /// Returns a Scalar5, whose ABI is determined by the meta-opcode
     PlatformSpecific(usize, usize, usize, usize, usize, usize, usize),
 
+    /// Confines the calling process, for good: from now on it may use only the connections it
+    /// already has (connecting again to a server it's connected to returns that connection;
+    /// anything else is refused), and only its own memory, of which it may map at most
+    /// `page_budget` more pages than it unmaps. It can't map physical memory or flash, take
+    /// interrupts, create processes or servers, connect other processes, change its limits,
+    /// shut the system down, or use the debug calls. A native maki app runs confined.
+    ///
+    /// Calling it again while confined can only lower the budget.
+    ///
+    /// ## Arguments
+    ///     * **page_budget**: How many more pages of memory it may map
+    ///
+    /// ## Returns
+    /// Returns Ok.
+    ConfineSelf(usize /* page budget */),
+
+    /// Ends a process this one created (a loader stopping an app it started), whatever it's
+    /// doing: its memory, servers and connections go, as when a process ends itself.
+    ///
+    /// ## Arguments
+    ///     * **pid**: The process to end
+    ///
+    /// ## Errors
+    ///     * **ProcessNotChild**: This process didn't create it, or it's this process
+    ///     * **ProcessNotFound**: There's no such process
+    TerminateChild(PID),
+
     /// This syscall does not exist. It captures all possible
     /// arguments so detailed analysis can be performed.
     Invalid(usize, usize, usize, usize, usize, usize, usize),
@@ -630,6 +657,8 @@ pub enum SysCallNumber {
     #[cfg(feature = "raw-trng")]
     RawTrng = 45,
     PlatformSpecific = 46,
+    ConfineSelf = 47,
+    TerminateChild = 48,
 }
 
 impl SysCallNumber {
@@ -686,6 +715,8 @@ impl SysCallNumber {
             #[cfg(feature = "raw-trng")]
             45 => RawTrng,
             46 => PlatformSpecific,
+            47 => ConfineSelf,
+            48 => TerminateChild,
             _ => Invalid,
         }
     }
@@ -942,6 +973,10 @@ impl SysCall {
             SysCall::PlatformSpecific(a1, a2, a3, a4, a5, a6, a7) => {
                 [SysCallNumber::PlatformSpecific as usize, *a1, *a2, *a3, *a4, *a5, *a6, *a7]
             }
+            SysCall::ConfineSelf(budget) => [SysCallNumber::ConfineSelf as usize, *budget, 0, 0, 0, 0, 0, 0],
+            SysCall::TerminateChild(pid) => {
+                [SysCallNumber::TerminateChild as usize, pid.get() as usize, 0, 0, 0, 0, 0, 0]
+            }
             SysCall::Invalid(a1, a2, a3, a4, a5, a6, a7) => {
                 [SysCallNumber::Invalid as usize, *a1, *a2, *a3, *a4, *a5, *a6, *a7]
             }
@@ -1097,6 +1132,8 @@ impl SysCall {
             #[cfg(feature = "raw-trng")]
             SysCallNumber::RawTrng => SysCall::RawTrng(a1, a2, a3, a4, a5, a6, a7),
             SysCallNumber::PlatformSpecific => SysCall::PlatformSpecific(a1, a2, a3, a4, a5, a6, a7),
+            SysCallNumber::ConfineSelf => SysCall::ConfineSelf(a1),
+            SysCallNumber::TerminateChild => SysCall::TerminateChild(pid_from_usize(a1)?),
             SysCallNumber::Invalid => SysCall::Invalid(a1, a2, a3, a4, a5, a6, a7),
         })
     }
@@ -1934,6 +1971,17 @@ pub fn increase_heap(bytes: usize, flags: MemoryFlags) -> core::result::Result<M
     }
 
     Err(())
+}
+
+/// Confines this process for good (`SysCall::ConfineSelf`): only the connections it has, only its
+/// own memory, `page_budget` more pages of it at most.
+pub fn confine_self(page_budget: usize) -> core::result::Result<(), Error> {
+    rsyscall(SysCall::ConfineSelf(page_budget)).map(|_| ())
+}
+
+/// Ends a process this one created (`SysCall::TerminateChild`).
+pub fn terminate_child(pid: PID) -> core::result::Result<(), Error> {
+    rsyscall(SysCall::TerminateChild(pid)).map(|_| ())
 }
 
 /// Perform a raw syscall and return the result. This will transform

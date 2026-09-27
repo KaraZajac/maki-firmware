@@ -67,6 +67,11 @@ thread_local!(
 
 pub fn current_pid() -> PID { PROCESS_TABLE.with(|pt| pt.borrow().current) }
 
+/// Whether `pid` is in the process table.
+pub fn pid_exists(pid: PID) -> bool {
+    PROCESS_TABLE.with(|pt| pt.borrow().table.get(pid.get() as usize - 1).is_some_and(|p| p.is_some()))
+}
+
 pub fn set_current_pid(pid: PID) {
     PROCESS_TABLE.with(|pt| {
         let pid_idx = (pid.get() - 1) as usize;

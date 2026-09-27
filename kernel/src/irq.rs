@@ -93,7 +93,7 @@ pub fn interrupt_free(irq: usize, pid: PID) -> Result<(), xous_kernel::Error> {
     // Unsafe is required since we're accessing a static mut array.
     // However, we disable interrupts to prevent contention on this array.
     unsafe {
-        if irq > (&mut *(&raw mut IRQ_HANDLERS)).len() {
+        if irq >= (&mut *(&raw mut IRQ_HANDLERS)).len() {
             Err(xous_kernel::Error::InterruptNotFound)
         } else if !(&mut *(&raw mut IRQ_HANDLERS))[irq].map(|f| f.0 == pid).unwrap_or(false) {
             Err(xous_kernel::Error::InterruptNotFound)

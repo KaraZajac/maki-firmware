@@ -35,8 +35,20 @@ pub fn check_project_consistency() -> Result<(), DynError> {
     Ok(())
 }
 
+/// Whether the top-level Cargo.toml patches `name` to the local tree (`[patch.crates-io.name]`,
+/// not commented out): then the build uses the local source, changes and all, and there's no
+/// point comparing it with what crates.io has.
+fn patched_locally(name: &str) -> bool {
+    let section = format!("[patch.crates-io.{}]", name);
+    fs::read_to_string("Cargo.toml").map(|toml| toml.lines().any(|line| line.trim() == section)).unwrap_or(false)
+}
+
 pub fn verify(spec: CrateSpec, hard_failure: bool) -> Result<(), DynError> {
     if let CrateSpec::CratesIo(name, version, _xip) = spec {
+        if patched_locally(&name) {
+            println!("{} is patched to the local tree in Cargo.toml: not compared with crates.io", name);
+            return Ok(());
+        }
         let mut cache_path = Path::new(&env::var("CARGO_HOME").unwrap()).to_path_buf();
         cache_path.push("registry");
         cache_path.push("src");

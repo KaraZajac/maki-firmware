@@ -435,6 +435,11 @@ pub fn idle() -> bool {
             ThreadMessage::SysCall(pid, thread_id, call) => {
                 // let measurement_start = std::time::Instant::now();
                 // println!("KERNEL({}): Received syscall {:?}", pid, call);
+                // a process another ended (TerminateChild) may still have had this on its way,
+                // or its connection's end, which comes as a TerminateProcess: it's gone already
+                if !crate::arch::process::pid_exists(pid) {
+                    continue;
+                }
                 crate::arch::process::set_current_pid(pid);
                 // println!("KERNEL({}): Now running as the new process", pid);
 

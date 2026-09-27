@@ -77,7 +77,7 @@ struct ProcessImpl {
 
     /// Pad everything to 128 bytes, so the Thread slice starts at
     /// offset 128.
-    _padding: [u32; 13],
+    _padding: [u32; 12],
 
     /// This enables the kernel to keep track of threads in the
     /// target process, and know which threads are ready to
@@ -94,7 +94,7 @@ fn _assert_processimpl_is_page_sized() {
             hardware_thread: 0,
             inner: Default::default(),
             last_tid_allocated: 0,
-            _padding: [0; 13],
+            _padding: [0; 12],
             threads: [Default::default(); MAX_THREAD],
         });
     }

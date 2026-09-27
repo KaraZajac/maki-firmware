@@ -1243,6 +1243,146 @@ fn increase_heap_rejects_absurd_delta() {
     main_thread.join().expect("join kernel");
 }
 
+/// A confined process (`SysCall::ConfineSelf`, what a native maki app runs as) keeps the
+/// connections it has and nothing more: no new ones, no servers, processes, interrupts or
+/// physical memory, no changing its limits or shutting the system down, and no more memory
+/// than its budget.
+#[test]
+fn confined_process_keeps_only_what_it_has() {
+    use xous_kernel::{Error, MemoryAddress, MemoryFlags};
+    let main_thread = start_kernel(SERVER_SPEC);
+    let (sids_send, sids_recv) = unbounded();
+    let (pid_send, pid_recv) = unbounded();
+    let (done_send, done_recv) = unbounded::<()>();
+
+    let server = xous_kernel::create_process_as_thread(xous_kernel::ProcessArgsAsThread::new(
+        "confinement server",
+        move || {
+            let kept = xous_kernel::create_server().unwrap();
+            let other = xous_kernel::create_server().unwrap();
+            sids_send.send((kept, other)).unwrap();
+            // the confined client can still send on the connection it had
+            let envelope = xous_kernel::receive_message(kept).unwrap();
+            assert_eq!(envelope.body.id(), 7);
+            // nobody may connect it to anything, either
+            let client_pid = pid_recv.recv().unwrap();
+            assert_eq!(xous_kernel::connect_for_process(client_pid, other).err(), Some(Error::AccessDenied));
+            done_recv.recv().unwrap();
+        },
+    ))
+    .unwrap();
+
+    let client = xous_kernel::create_process_as_thread(xous_kernel::ProcessArgsAsThread::new(
+        "confined client",
+        move || {
+            let (kept, other) = sids_recv.recv().unwrap();
+            let cid = xous_kernel::try_connect(kept).unwrap();
+            xous_kernel::confine_self(4).unwrap();
+
+            // what it had, it keeps; nothing new
+            assert_eq!(xous_kernel::try_connect(kept), Ok(cid));
+            assert_eq!(xous_kernel::try_connect(other), Err(Error::AccessDenied));
+            assert_eq!(xous_kernel::create_server(), Err(Error::AccessDenied));
+            assert_eq!(xous_kernel::create_server_with_address(b"ticktimer-server"), Err(Error::AccessDenied));
+            // (Shutdown is refused the same way, but in hosted mode the harness shuts the kernel
+            // down on any Shutdown call, whatever the kernel answers)
+            assert_eq!(rsyscall(SysCall::ClaimInterrupt(3, MemoryAddress::new(0x1000).unwrap(), None)), Err(Error::AccessDenied));
+            assert_eq!(rsyscall(SysCall::FreeInterrupt(3)), Err(Error::AccessDenied));
+            assert_eq!(rsyscall(SysCall::AdjustProcessLimit(1, 512 * 1024, 16 << 20)), Err(Error::AccessDenied));
+            assert_eq!(rsyscall(SysCall::CreateServerId), Err(Error::AccessDenied));
+
+            // memory: none of it physical, none of it code, within the budget
+            let rw = MemoryFlags::R | MemoryFlags::W;
+            let map = |phys: Option<usize>, pages: usize, flags| {
+                rsyscall(SysCall::MapMemory(
+                    phys.and_then(MemoryAddress::new),
+                    None,
+                    MemoryAddress::new(pages * 4096).unwrap(),
+                    flags,
+                ))
+            };
+            assert_eq!(map(Some(0x4000_0000), 1, rw), Err(Error::AccessDenied));
+            assert_eq!(map(None, 1, rw | MemoryFlags::X), Err(Error::AccessDenied));
+            assert_eq!(map(None, 1, rw | MemoryFlags::DEV), Err(Error::AccessDenied));
+            let Ok(xous_kernel::Result::MemoryRange(two)) = map(None, 2, rw) else { panic!("two pages should map") };
+            assert_eq!(map(None, 3, rw), Err(Error::OutOfMemory));
+            // asking again can't raise the budget
+            xous_kernel::confine_self(100).unwrap();
+            assert_eq!(map(None, 3, rw), Err(Error::OutOfMemory));
+            // what it unmaps it may map again
+            rsyscall(SysCall::UnmapMemory(two)).unwrap();
+            assert!(map(None, 4, rw).is_ok());
+            assert_eq!(map(None, 1, rw), Err(Error::OutOfMemory));
+
+            xous_kernel::try_send_message(cid, xous_kernel::Message::new_scalar(7, 0, 0, 0, 0)).unwrap();
+            pid_send.send(xous_kernel::current_pid().unwrap()).unwrap();
+        },
+    ))
+    .unwrap();
+
+    crate::wait_process_as_thread(client).expect("the confined client");
+    done_send.send(()).unwrap();
+    crate::wait_process_as_thread(server).expect("the server");
+    shutdown_kernel();
+    main_thread.join().expect("join kernel");
+}
+
+/// A loader can end the app it started, whatever the app is doing (`SysCall::TerminateChild`);
+/// nobody else can, and nothing can end itself that way.
+#[test]
+fn a_process_ends_only_what_it_created() {
+    use xous_kernel::Error;
+    let main_thread = start_kernel(SERVER_SPEC);
+    let (app_pid_send, app_pid_recv) = unbounded();
+    let (tried_send, tried_recv) = unbounded::<()>();
+
+    let loader = xous_kernel::create_process_as_thread(xous_kernel::ProcessArgsAsThread::new(
+        "loader",
+        move || {
+            // (in hosted mode, a process creating another names the key its child connects with)
+            xous_kernel::arch::set_process_key(&[0x5a; 16]);
+            let (pid_send, pid_recv) = unbounded();
+            let (never_send, never_recv) = unbounded::<()>();
+            std::mem::forget(never_send);
+            let _app = xous_kernel::create_process_as_thread(xous_kernel::ProcessArgsAsThread::new(
+                "app",
+                move || {
+                    let _sid = xous_kernel::create_server().unwrap();
+                    pid_send.send(xous_kernel::current_pid().unwrap()).unwrap();
+                    // waits for good: only its loader can end it. (Waiting here rather than in
+                    // a syscall: in hosted mode, a thread whose connection the kernel closes
+                    // while it waits on a syscall exits the whole test program.)
+                    never_recv.recv().ok();
+                },
+            ))
+            .unwrap();
+            let app = pid_recv.recv().unwrap();
+            app_pid_send.send(app).unwrap();
+            tried_recv.recv().unwrap();
+            assert_eq!(xous_kernel::terminate_child(xous_kernel::current_pid().unwrap()), Err(Error::ProcessNotChild));
+            xous_kernel::terminate_child(app).unwrap();
+            // and it's gone
+            assert!(xous_kernel::terminate_child(app).is_err());
+        },
+    ))
+    .unwrap();
+
+    let stranger = xous_kernel::create_process_as_thread(xous_kernel::ProcessArgsAsThread::new(
+        "stranger",
+        move || {
+            let app = app_pid_recv.recv().unwrap();
+            assert_eq!(xous_kernel::terminate_child(app), Err(Error::ProcessNotChild));
+            tried_send.send(()).unwrap();
+        },
+    ))
+    .unwrap();
+
+    crate::wait_process_as_thread(stranger).expect("the stranger");
+    crate::wait_process_as_thread(loader).expect("the loader");
+    shutdown_kernel();
+    main_thread.join().expect("join kernel");
+}
+
 #[cfg(test)]
 mod queue_capacity_tests {
     use xous_kernel::{MemoryRange, Message, PID, SID};
