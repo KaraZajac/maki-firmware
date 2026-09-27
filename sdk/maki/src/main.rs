@@ -223,6 +223,7 @@ fn run(args: &Args) -> Result<(), String> {
         verified: args.has("--verified"),
         storage: args.value("--storage").map(PathBuf::from),
         sideloaded: true,
+        developer: b.developer,
     };
     if let Some(dir) = &options.frames {
         std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;

@@ -1,0 +1,13 @@
+[package]
+name = "ssh"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+maki-app = { path = "../../maki-app" }
+# fingerprints, as ssh shows them
+sha2 = { version = "0.10", default-features = false }

@@ -100,6 +100,35 @@ impl Launcher {
             yes: String::new(),
             no: String::new(),
             timeout_s,
+            app: 0,
+            answer: ANSWER_TIMED_OUT,
+            choice: 0,
+        })
+    }
+
+    /// An installed app's question for the owner (the app host asks for it): shown under the
+    /// app's own bar, its name and, if it's sideloaded, the mark, with `yes` and `no` as the
+    /// answers ("allow" and "deny" if empty).
+    pub fn ask_app(
+        &self,
+        name: &str,
+        sideloaded: bool,
+        question: &str,
+        detail: &str,
+        yes: &str,
+        no: &str,
+        timeout_s: u32,
+    ) -> Result<Answer, xous::Error> {
+        self.send_ask(AskRequest {
+            subject: name.into(),
+            question: question.into(),
+            detail: detail.into(),
+            choices: Vec::new(),
+            pages: Vec::new(),
+            yes: yes.into(),
+            no: no.into(),
+            timeout_s,
+            app: if sideloaded { ASK_APP_SIDELOADED } else { ASK_APP_STORE },
             answer: ANSWER_TIMED_OUT,
             choice: 0,
         })
@@ -127,6 +156,7 @@ impl Launcher {
             yes: yes.into(),
             no: no.into(),
             timeout_s,
+            app: 0,
             answer: ANSWER_TIMED_OUT,
             choice: 0,
         })

@@ -1,0 +1,15 @@
+id = "com.leviathan.maki.ssh"
+name = "SSH"
+version = 1
+label = "1.0"
+api = 1
+storage = 1
+memory = 64
+backup = false
+description = "An SSH key from your recovery phrase, for ssh and git through maki desktop's SSH agent. Every sign-in and signature waits for your yes on maki."
+icon = "icon.pbm"
+
+[permissions]
+ask = "To ask you before every sign-in and signature."
+keys = "For your SSH key, made from your recovery phrase and never leaving maki."
+link = "To answer maki desktop's SSH agent, which ssh and git talk to."

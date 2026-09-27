@@ -1,6 +1,6 @@
 //! Client side of maki's app host (ARCHITECTURE.md, "Apps you can install"): what maki-link
-//! uses to install, list and remove apps for maki desktop, and to tell the host whether the
-//! clock is verified.
+//! uses to install, list and remove apps for maki desktop, to hand apps messages from the
+//! computer, and to tell the host whether the clock is verified.
 //!
 //! The host checks every bundle itself and asks the owner before installing or removing
 //! anything, so whoever calls these can't install or remove an app on their own.
@@ -22,6 +22,9 @@ pub enum HostOp {
     Remove = 3,
     /// Scalar from maki-link: `arg1` is 0 (unset), 1 (unverified) or 2 (verified).
     TimeState = 4,
+    /// Memory message (mutable lend) carrying an `AppMessage`, answered with the app's answer
+    /// (the link permission). The host starts the app without the screen if it isn't running.
+    Message = 5,
 }
 
 /// Each installed app's key, focus and menu opcodes: `APP_OPS + 4 * slot` and on.
@@ -36,6 +39,11 @@ pub const RESULT_LOCKED: u32 = 4;
 pub const RESULT_FAILED: u32 = 5;
 /// No such app.
 pub const RESULT_NO_APP: u32 = 6;
+/// Another app is open on maki.
+pub const RESULT_BUSY: u32 = 7;
+
+/// The biggest message to or from an app.
+pub const MAX_MESSAGE: usize = 4096;
 
 /// A piece of a bundle, and what became of it.
 #[derive(Debug, Clone, Default, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
@@ -74,6 +82,17 @@ pub struct AppList {
 #[derive(Debug, Clone, Default, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
 pub struct Remove {
     pub id: String,
+    pub result: u32,
+}
+
+/// A message for an app, and its answer. `result`: `RESULT_OK` (answered), `RESULT_DENIED`
+/// (the app went on without answering), `RESULT_NO_APP`, `RESULT_TIMED_OUT`, `RESULT_BUSY`,
+/// `RESULT_LOCKED`, `RESULT_REFUSED` (it hasn't the link permission), `RESULT_FAILED` (it stopped).
+#[derive(Debug, Clone, Default, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
+pub struct AppMessage {
+    pub id: String,
+    pub message: Vec<u8>,
+    pub answer: Vec<u8>,
     pub result: u32,
 }
 
@@ -125,6 +144,19 @@ impl AppHost {
             return RESULT_FAILED;
         }
         buf.to_original::<Remove, _>().map(|r| r.result).unwrap_or(RESULT_FAILED)
+    }
+
+    /// Hands `message` to the app with this ID, and returns once it has answered (which may
+    /// take as long as the owner does, if it asks them).
+    pub fn message(&self, id: &str, message: Vec<u8>) -> AppMessage {
+        let failed = AppMessage { result: RESULT_FAILED, ..Default::default() };
+        let request = AppMessage { id: id.into(), message, answer: Vec::new(), result: RESULT_FAILED };
+        // room for the message and the answer
+        let mut buf = Buffer::new(3 * 4096);
+        if buf.replace(request).is_err() || buf.lend_mut(self.conn, HostOp::Message.to_u32().unwrap()).is_err() {
+            return failed;
+        }
+        buf.to_original::<AppMessage, _>().unwrap_or(failed)
     }
 
     pub fn set_time_state(&self, state: u8) {

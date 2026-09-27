@@ -136,6 +136,28 @@ pub fn fido_keys(seed: &[u8; 64]) -> FidoKeys {
     keys
 }
 
+/// An app's secret, for the app with this ID and developer key (the key that signs its
+/// bundles) and a label of the app's choosing: HKDF-SHA256 over the seed, salt "maki", info
+/// "app v1" and then the ID, the developer key and the label, the ID and label each after its
+/// length in a byte. Different for every app, developer and label, and the same on any maki
+/// restored from the phrase. `None` for an ID or label longer than 255 bytes.
+pub fn app_secret(seed: &[u8; 64], app_id: &str, developer: &[u8; 32], label: &str) -> Option<[u8; 32]> {
+    let (id, label) = (app_id.as_bytes(), label.as_bytes());
+    let id_len = u8::try_from(id.len()).ok()?;
+    let label_len = u8::try_from(label.len()).ok()?;
+    let mut info = Vec::with_capacity(6 + 1 + id.len() + 32 + 1 + label.len());
+    info.extend_from_slice(b"app v1");
+    info.push(id_len);
+    info.extend_from_slice(id);
+    info.extend_from_slice(developer);
+    info.push(label_len);
+    info.extend_from_slice(label);
+    let hk = hkdf::Hkdf::<Sha256>::new(Some(b"maki"), seed);
+    let mut secret = [0u8; 32];
+    hk.expand(&info, &mut secret).expect("32 bytes is a valid HKDF length");
+    Some(secret)
+}
+
 /// The key that encrypts maki's backup: from the seed, so the phrase alone opens a backup and
 /// the PIN plays no part in it (a backup file is what an attacker gets to guess PINs against).
 pub fn backup_key(seed: &[u8; 64]) -> [u8; 32] {

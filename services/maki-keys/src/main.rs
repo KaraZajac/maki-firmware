@@ -563,6 +563,8 @@ fn main() -> ! {
     let mut screen: Option<xous::PID> = None;
     // the FIDO authenticator (the vault), which alone may have the passkeys' secrets
     let mut fido: Option<xous::PID> = None;
+    // the app host, which alone may have apps' secrets
+    let mut apps: Option<xous::PID> = None;
     // the backup being read out, and one being restored
     let mut sealed: Option<Vec<u8>> = None;
     let mut incoming: Vec<u8> = Vec::new();
@@ -814,6 +816,39 @@ fn main() -> ! {
                     log::info!("the FIDO authenticator is PID {:?}", fido);
                 }
                 xous::return_scalar(msg.sender, (msg.sender.pid() == fido) as usize).ok();
+            }
+            Some(KeysOp::ClaimApps) => {
+                if apps.is_none() {
+                    apps = msg.sender.pid();
+                    log::info!("the app host is PID {:?}", apps);
+                }
+                xous::return_scalar(msg.sender, (msg.sender.pid() == apps) as usize).ok();
+            }
+            Some(KeysOp::AppSecret) => {
+                let Some(mem) = msg.body.memory_message_mut() else { continue };
+                let mut buffer = unsafe { Buffer::from_memory_message_mut(mem) };
+                let Ok(mut req) = buffer.to_original::<AppSecretRequest, _>() else { continue };
+                req.secret.clear();
+                let authorized = apps.is_some() && msg.sender.pid() == apps;
+                let developer: Option<[u8; 32]> = req.developer.as_slice().try_into().ok();
+                req.result = match if authorized { seed.get(&store, state) } else { None } {
+                    _ if !authorized => RESULT_NOT_NOW,
+                    None if state == State::Unlocked => RESULT_NO_PHRASE,
+                    None => RESULT_NOT_NOW,
+                    Some(mut s) => {
+                        let secret = developer.and_then(|d| maki_seed::app_secret(&s, &req.id, &d, &req.label));
+                        s.zeroize();
+                        match secret {
+                            Some(mut secret) => {
+                                req.secret.extend_from_slice(&secret);
+                                secret.zeroize();
+                                RESULT_OK
+                            }
+                            None => RESULT_FAILED,
+                        }
+                    }
+                };
+                buffer.replace(req).ok();
             }
             Some(KeysOp::FidoKeys) => {
                 let Some(mem) = msg.body.memory_message_mut() else { continue };

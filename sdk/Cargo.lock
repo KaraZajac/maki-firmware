@@ -146,6 +146,7 @@ dependencies = [
  "fiat-crypto",
  "rustc_version",
  "subtle",
+ "zeroize",
 ]
 
 [[package]]
@@ -196,6 +197,7 @@ checksum = "9ed9a281f7bc9b7576e61468ba615a66a5c8cfdff42420a70aa82701a3b1e292"
 dependencies = [
  "block-buffer",
  "crypto-common",
+ "subtle",
 ]
 
 [[package]]
@@ -224,6 +226,7 @@ dependencies = [
  "ed25519",
  "sha2",
  "subtle",
+ "zeroize",
 ]
 
 [[package]]
@@ -342,6 +345,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "hkdf"
+version = "0.12.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7b5f8eb2ad728638ea2c7d47a21db23b7b58a72ed6a38256b8a1849f15fbbdf7"
+dependencies = [
+ "hmac",
+]
+
+[[package]]
+name = "hmac"
+version = "0.12.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6c49c37c09c17a53d937dfbb742eb3a961d65a994e6bcdcf37e7399d0cc8ab5e"
+dependencies = [
+ "digest",
+]
+
+[[package]]
 name = "indexmap"
 version = "2.14.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -421,6 +442,7 @@ dependencies = [
  "getrandom",
  "libc",
  "maki-bundle",
+ "maki-seed",
  "maki-wasm",
  "png",
  "serde",
@@ -441,13 +463,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "maki-seed"
+version = "0.1.0"
+dependencies = [
+ "hkdf",
+ "hmac",
+ "pbkdf2",
+ "sha2",
+ "zeroize",
+]
+
+[[package]]
 name = "maki-wasm"
 version = "0.1.0"
 dependencies = [
  "blitstr2",
+ "ed25519-dalek-compat",
  "maki-bundle",
  "qrcode",
  "wasmi",
+ "zeroize",
 ]
 
 [[package]]
@@ -555,6 +590,16 @@ dependencies = [
  "redox_syscall",
  "smallvec",
  "windows-link",
+]
+
+[[package]]
+name = "pbkdf2"
+version = "0.12.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f8ed6a7761f76e3b9f92dfb0a60a6a6477c61024b775147ff0973a02653abaf2"
+dependencies = [
+ "digest",
+ "hmac",
 ]
 
 [[package]]
@@ -823,6 +868,13 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "77549399552de45a898a580c1b41d445bf730df867cc44e6c0233bbc4b8329de"
 
 [[package]]
+name = "signer"
+version = "0.1.0"
+dependencies = [
+ "maki-app",
+]
+
+[[package]]
 name = "simd-adler32"
 version = "0.3.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -845,6 +897,14 @@ name = "spin"
 version = "0.9.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3763264f6b73151db08c50ff20d7d8a0b8796e021cdea7ceedad07b80155fa0e"
+
+[[package]]
+name = "ssh"
+version = "0.1.0"
+dependencies = [
+ "maki-app",
+ "sha2",
+]
 
 [[package]]
 name = "string-interner"
@@ -1133,6 +1193,12 @@ dependencies = [
  "rkyv",
  "xous",
 ]
+
+[[package]]
+name = "zeroize"
+version = "1.9.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e13c156562582aa81c60cb29407084cdb54c4164760106ab78e6c5b0858cf64e"
 
 [[package]]
 name = "zlib-rs"

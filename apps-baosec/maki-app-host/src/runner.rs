@@ -3,16 +3,17 @@
 //! shows App info and "stopped" screens itself.
 
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::rc::Rc;
 use std::sync::mpsc::{Receiver, RecvTimeoutError};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use blitstr2::GlyphStyle;
+use maki_app_host_api::{AppMessage, RESULT_BUSY, RESULT_DENIED, RESULT_FAILED, RESULT_OK, RESULT_REFUSED, RESULT_TIMED_OUT};
 use maki_launcher::Answer;
 use maki_ui::{Key, Screen, LINE};
-use maki_wasm::{Canvas, Event, Platform, Stop, HEIGHT, TOP, WIDTH};
+use maki_wasm::{Ask, Canvas, Event, Platform, Stop, HEIGHT, TOP, WIDTH};
 use ux_api::minigfx::{Point, Rectangle};
 
 use crate::store::{Record, Store};
@@ -34,6 +35,27 @@ pub enum ToRunner {
     Stop,
     /// An app just installed, checked and compiled: kept, so it opens at once.
     Loaded(String, u32, Arc<maki_wasm::Loaded>),
+    /// A message from the computer for this slot's app (the link permission), with the message
+    /// to answer (`answer`) once the app does.
+    Message(usize, xous::MessageEnvelope, Vec<u8>),
+}
+
+/// How long a message waits for the app to get to it.
+const MESSAGE_WAIT: Duration = Duration::from_secs(60);
+/// How long an app started for a message runs with nothing more to do.
+const HEADLESS_IDLE: Duration = Duration::from_secs(30);
+
+/// Answers a message from maki-link: dropping it hands the buffer back.
+pub fn answer(mut msg: xous::MessageEnvelope, result: u32, answer: &[u8]) {
+    if let Some(mem) = msg.body.memory_message_mut() {
+        let mut buffer = unsafe { xous_ipc::Buffer::from_memory_message_mut(mem) };
+        if let Ok(mut req) = buffer.to_original::<AppMessage, _>() {
+            req.result = result;
+            req.message.clear();
+            req.answer = answer.to_vec();
+            buffer.replace(req).ok();
+        }
+    }
 }
 
 /// An installed app the launcher knows, by slot.
@@ -66,6 +88,10 @@ struct Ctx {
     screen: Screen,
     store: Store,
     launcher: maki_launcher::Launcher,
+    /// for apps' secrets (the keys permission): the app host's role, claimed at boot
+    keys: maki_keys::Keys,
+    /// for typing (the keyboard permission)
+    usb: usb_bao1x::UsbHid,
     time_conn: xous::CID,
     shared: Arc<Mutex<Shared>>,
     rx: Receiver<ToRunner>,
@@ -124,6 +150,27 @@ struct RunState {
     last: Canvas,
     /// When it was opened, until its first frame (which the log times).
     opened_ms: Option<u64>,
+    /// Typing into the computer: maki's bar says so meanwhile.
+    typing: bool,
+    /// Messages from the computer the app hasn't been given yet, with when they came.
+    inbox: VecDeque<(xous::MessageEnvelope, Vec<u8>, Instant)>,
+    /// The one it was given, until it answers.
+    current: Option<(xous::MessageEnvelope, Vec<u8>)>,
+    /// Started for a message, and not opened by the owner: it ends once idle a while.
+    headless: bool,
+    idle_since: Instant,
+}
+
+impl RunState {
+    /// Every message the app didn't answer gets an answer anyway: it stopped.
+    fn answer_all(&mut self) {
+        if let Some((msg, _)) = self.current.take() {
+            answer(msg, RESULT_DENIED, &[]);
+        }
+        for (msg, _, _) in self.inbox.drain(..) {
+            answer(msg, RESULT_FAILED, &[]);
+        }
+    }
 }
 
 struct Device {
@@ -135,6 +182,8 @@ struct Device {
     record: Record,
     manifest: maki_bundle::Manifest,
     storage_quota: usize,
+    /// It has the link permission: messages reach it.
+    may_link: bool,
     state: Rc<RefCell<RunState>>,
 }
 
@@ -146,7 +195,8 @@ impl Device {
         }
         let s = &self.ctx.screen;
         s.begin();
-        s.app_bar(&self.name, &self.ctx.clock(), self.sideloaded);
+        let right = if st.typing { String::from("typing") } else { self.ctx.clock() };
+        s.app_bar(&self.name, &right, self.sideloaded);
         s.gfx
             .bitmap(
                 &st.last.to_display(),
@@ -262,28 +312,78 @@ impl Device {
     }
 }
 
+impl Device {
+    /// The next message waiting for the app, if any, which becomes the one it answers. One
+    /// that waited too long is answered as timed out instead.
+    fn next_message(&self) -> Option<Event> {
+        let mut st = self.state.borrow_mut();
+        while let Some((msg, bytes, came)) = st.inbox.pop_front() {
+            if came.elapsed() > MESSAGE_WAIT {
+                answer(msg, RESULT_TIMED_OUT, &[]);
+                continue;
+            }
+            st.current = Some((msg, bytes));
+            st.idle_since = Instant::now();
+            return Some(Event::Message);
+        }
+        None
+    }
+}
+
 impl Platform for Device {
     fn wait(&mut self, timeout: Option<Duration>) -> Event {
         if self.state.borrow().stopping {
             return Event::Exit;
         }
+        // a message it was given and didn't answer: it went on without answering
+        if let Some((msg, _)) = self.state.borrow_mut().current.take() {
+            answer(msg, RESULT_DENIED, &[]);
+        }
+        if let Some(e) = self.next_message() {
+            return e;
+        }
         let deadline = timeout.map(|t| Instant::now() + t);
         loop {
-            let msg = match deadline {
-                // while App info is up, the app's own timers wait
-                Some(d) if self.state.borrow().info.is_none() => {
-                    match self.ctx.rx.recv_timeout(d.saturating_duration_since(Instant::now())) {
-                        Ok(m) => m,
-                        Err(RecvTimeoutError::Timeout) => return Event::Timeout,
-                        Err(RecvTimeoutError::Disconnected) => return Event::Exit,
+            // started for a message and left alone since: it ends
+            let idle_end = {
+                let st = self.state.borrow();
+                st.headless.then(|| st.idle_since + HEADLESS_IDLE)
+            };
+            // while App info is up, the app's own timers wait
+            let timer = deadline.filter(|_| self.state.borrow().info.is_none());
+            let wake = match (timer, idle_end) {
+                (Some(a), Some(b)) => Some(a.min(b)),
+                (a, b) => a.or(b),
+            };
+            let msg = match wake {
+                Some(w) => match self.ctx.rx.recv_timeout(w.saturating_duration_since(Instant::now())) {
+                    Ok(m) => m,
+                    Err(RecvTimeoutError::Timeout) if idle_end.is_some_and(|e| Instant::now() >= e) => {
+                        log::info!("{}: nothing more to do: ending it", self.id);
+                        self.state.borrow_mut().stopping = true;
+                        return Event::Exit;
                     }
-                }
-                _ => match self.ctx.rx.recv() {
+                    Err(RecvTimeoutError::Timeout) => return Event::Timeout,
+                    Err(RecvTimeoutError::Disconnected) => return Event::Exit,
+                },
+                None => match self.ctx.rx.recv() {
                     Ok(m) => m,
                     Err(_) => return Event::Exit,
                 },
             };
             match msg {
+                ToRunner::Message(s, msg, bytes) if s == self.slot => {
+                    if !self.may_link {
+                        answer(msg, RESULT_REFUSED, &[]);
+                        continue;
+                    }
+                    self.state.borrow_mut().inbox.push_back((msg, bytes, Instant::now()));
+                    if let Some(e) = self.next_message() {
+                        return e;
+                    }
+                }
+                // another app's: this one is running
+                ToRunner::Message(_, msg, _) => answer(msg, RESULT_BUSY, &[]),
                 ToRunner::Stop => {
                     self.state.borrow_mut().stopping = true;
                     return Event::Exit;
@@ -295,7 +395,12 @@ impl Platform for Device {
                     return Event::Exit;
                 }
                 ToRunner::Open(_) => {
-                    self.state.borrow_mut().front = true;
+                    {
+                        let mut st = self.state.borrow_mut();
+                        st.front = true;
+                        // the owner opened it: it stays until they leave
+                        st.headless = false;
+                    }
                     let info = self.state.borrow().info;
                     match info {
                         Some(page) => self.draw_info(page),
@@ -348,6 +453,20 @@ impl Platform for Device {
         }
     }
 
+    fn message(&mut self) -> Option<Vec<u8>> { self.state.borrow().current.as_ref().map(|(_, bytes)| bytes.clone()) }
+
+    fn reply(&mut self, reply: &[u8]) -> bool {
+        let current = self.state.borrow_mut().current.take();
+        match current {
+            Some((msg, _)) => {
+                answer(msg, RESULT_OK, reply);
+                self.state.borrow_mut().idle_since = Instant::now();
+                true
+            }
+            None => false,
+        }
+    }
+
     fn present(&mut self, canvas: &Canvas) {
         self.state.borrow_mut().last = canvas.clone();
         self.draw_frame();
@@ -396,6 +515,42 @@ impl Platform for Device {
         }
         self.ctx.store.data_keys(&self.id)
     }
+
+    /// maki's own ask screen, under the app's bar: the app waits for the answer. The launcher
+    /// puts the app in the background meanwhile, and brings it back after.
+    fn ask(&mut self, ask: &Ask) -> maki_wasm::Answer {
+        if !self.ctx.unlocked() {
+            return maki_wasm::Answer::NoAnswer;
+        }
+        let timeout = maki_launcher::ask_timeout(ask.timeout_s);
+        match self.ctx.launcher.ask_app(&self.name, self.sideloaded, &ask.question, &ask.detail, &ask.yes, &ask.no, timeout) {
+            Ok(Answer::Allowed(_)) => maki_wasm::Answer::Yes,
+            Ok(Answer::Denied) => maki_wasm::Answer::No,
+            _ => maki_wasm::Answer::NoAnswer,
+        }
+    }
+
+    /// From maki-keys, which derives it from the phrase for this app's ID and developer key.
+    fn app_secret(&mut self, label: &str) -> Option<[u8; 32]> {
+        if !self.ctx.unlocked() {
+            return None;
+        }
+        self.ctx.keys.app_secret(&self.id, &self.record.developer, label).ok()
+    }
+
+    /// Only for the app in front, with "typing" in maki's bar while it does.
+    fn type_text(&mut self, text: &str) -> bool {
+        if !self.state.borrow().front || !self.ctx.unlocked() {
+            return false;
+        }
+        self.state.borrow_mut().typing = true;
+        self.draw_frame();
+        let typed = self.ctx.usb.send_str(text).is_ok();
+        log::info!("{}: typed {} characters: {}", self.id, text.len(), if typed { "done" } else { "not plugged in" });
+        self.state.borrow_mut().typing = false;
+        self.draw_frame();
+        typed
+    }
 }
 
 /// A screen for an app that stopped, until the owner moves on.
@@ -423,20 +578,38 @@ fn stopped(ctx: &Ctx, name: &str, sideloaded: bool, why: &str) {
     s.end();
 }
 
-/// Runs the app in `slot` until it stops. Returns a slot opened meanwhile, to run next.
-fn run(ctx: &Rc<Ctx>, slot: usize) -> Option<usize> {
+/// Runs the app in `slot` until it stops, opened by the owner, or without the screen for a
+/// message from the computer (`message`). Returns a slot opened meanwhile, to run next.
+fn run(ctx: &Rc<Ctx>, slot: usize, message: Option<(xous::MessageEnvelope, Vec<u8>)>) -> Option<usize> {
     let opened = crate::tt().elapsed_ms();
+    let headless = message.is_some();
+    // the message gets an answer whatever happens: unanswered, it says why
+    let mut message = message;
+    let mut refuse = |result: u32| {
+        if let Some((msg, _)) = message.take() {
+            answer(msg, result, &[]);
+        }
+    };
     let Some(info) = ctx.shared.lock().unwrap().slots.get(slot).cloned().flatten() else {
-        ctx.launcher.home().ok();
+        refuse(maki_app_host_api::RESULT_NO_APP);
+        if !headless {
+            ctx.launcher.home().ok();
+        }
         return None;
     };
     if !ctx.unlocked() {
-        ctx.launcher.home().ok();
+        refuse(maki_app_host_api::RESULT_LOCKED);
+        if !headless {
+            ctx.launcher.home().ok();
+        }
         return None;
     }
     let (Some(record), Some(bytes)) = (ctx.store.record(&info.id), ctx.store.bundle(&info.id)) else {
-        stopped(ctx, &info.name, true, "it isn't installed any more");
-        wait_to_leave(ctx, slot);
+        refuse(maki_app_host_api::RESULT_NO_APP);
+        if !headless {
+            stopped(ctx, &info.name, true, "it isn't installed any more");
+            wait_to_leave(ctx, slot);
+        }
         return None;
     };
     // checked when it was installed: compiled once a session, kept for the next time
@@ -456,21 +629,35 @@ fn run(ctx: &Rc<Ctx>, slot: usize) -> Option<usize> {
         Ok(ok) => ok,
         Err(why) => {
             log::warn!("{} can't run: {why}", info.id);
-            stopped(ctx, &info.name, !record.from_store, &why);
-            wait_to_leave(ctx, slot);
+            refuse(RESULT_FAILED);
+            if !headless {
+                stopped(ctx, &info.name, !record.from_store, &why);
+                wait_to_leave(ctx, slot);
+            }
             return None;
         }
     };
-    log::info!("{} ready to run ({} ms)", info.id, crate::tt().elapsed_ms() - started);
+    let may_link = manifest.permissions.iter().any(|(p, _)| *p == maki_bundle::Permission::Link);
+    if headless && !may_link {
+        refuse(RESULT_REFUSED);
+        return None;
+    }
+    log::info!("{} ready to run ({} ms){}", info.id, crate::tt().elapsed_ms() - started, if headless { ", for a message" } else { "" });
     let limits = app.limits;
+    let inbox: VecDeque<_> = message.take().map(|(msg, bytes)| (msg, bytes, Instant::now())).into_iter().collect();
     let state = Rc::new(RefCell::new(RunState {
-        front: true,
+        front: !headless,
         info: None,
         pending: None,
         removed: false,
         stopping: false,
         last: Canvas::default(),
-        opened_ms: Some(opened),
+        opened_ms: if headless { None } else { Some(opened) },
+        typing: false,
+        inbox,
+        current: None,
+        headless,
+        idle_since: Instant::now(),
     }));
     let device = Device {
         ctx: ctx.clone(),
@@ -479,11 +666,12 @@ fn run(ctx: &Rc<Ctx>, slot: usize) -> Option<usize> {
         name: info.name.clone(),
         sideloaded: !record.from_store,
         storage_quota: limits.storage,
+        may_link,
         manifest,
         record,
         state: state.clone(),
     };
-    // the bar goes up at once, before the app's first frame
+    // the bar goes up at once, before the app's first frame (if it's on screen)
     device.draw_frame();
     ctx.shared.lock().unwrap().running = Some(slot);
     log::info!("running {}", info.id);
@@ -494,6 +682,7 @@ fn run(ctx: &Rc<Ctx>, slot: usize) -> Option<usize> {
         shared.menus.remove(&slot);
     }
     log::info!("{} stopped: {:?}", info.id, stop);
+    state.borrow_mut().answer_all();
     let st = state.borrow();
     let why = match &stop {
         Stop::Finished | Stop::Exited => None,
@@ -526,6 +715,7 @@ fn wait_to_leave(ctx: &Ctx, slot: usize) {
             Ok(ToRunner::Hidden(s) | ToRunner::Exited(s)) if s == slot => return,
             Ok(ToRunner::Stop) | Err(_) => break,
             Ok(ToRunner::Open(s)) if s != slot => return,
+            Ok(ToRunner::Message(_, msg, _)) => answer(msg, RESULT_BUSY, &[]),
             _ => {}
         }
     }
@@ -539,16 +729,24 @@ pub fn runner(rx: Receiver<ToRunner>, shared: Arc<Mutex<Shared>>) {
         screen: Screen::new(&xns),
         store: Store::new(),
         launcher: maki_launcher::Launcher::new(&xns).expect("couldn't connect to the launcher"),
+        keys: maki_keys::Keys::new(&xns).expect("couldn't connect to maki-keys"),
+        usb: usb_bao1x::UsbHid::new(),
         time_conn: crate::time_conn(),
         shared,
         rx,
     });
     let mut next = None;
     loop {
+        let mut message = None;
         let slot = match next.take() {
             Some(s) => s,
             None => match ctx.rx.recv() {
                 Ok(ToRunner::Open(s)) => s,
+                // no app running: start this one without the screen, for the message
+                Ok(ToRunner::Message(s, msg, bytes)) => {
+                    message = Some((msg, bytes));
+                    s
+                }
                 Ok(ToRunner::Loaded(id, version, app)) => {
                     ctx.keep(id, version, app);
                     continue;
@@ -557,6 +755,6 @@ pub fn runner(rx: Receiver<ToRunner>, shared: Arc<Mutex<Shared>>) {
                 Err(_) => return,
             },
         };
-        next = run(&ctx, slot);
+        next = run(&ctx, slot, message);
     }
 }

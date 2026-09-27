@@ -69,6 +69,7 @@ bytes. Bodies must be consumed exactly: trailing bytes are an error.
 | `0x50` APP_LIST | `index:u32` | `status:u8` `count:u32` `present:u8`, then if present: `id:str8` `name:str8` `version:u32` `label:str8` `developer:bytes16` `from_store:u8` `backup:u8` `used:u32` `icon:bytes16` |
 | `0x51` APP_INSTALL | `total:u32` `offset:u32` `piece:bytes16` | `done:u8` `approval:u8` `reason:str8` |
 | `0x52` APP_REMOVE | `id:str8` | `approval:u8` |
+| `0x53` APP_MESSAGE | `id:str8` `message:bytes16` | `status:u8` `answer:bytes16` |
 | `0x7f` ERROR (reply only) | | `code:u8` `detail:str8` |
 
 `time_state`: 0 unset, 1 unverified, 2 verified.
@@ -272,3 +273,11 @@ the owner before installing or removing anything: whoever sends these can't do e
   (the same ID) must be signed with the same developer key and have a higher version.
 - **APP_REMOVE** removes an app and its data once the owner says so on maki: 0 removed,
   1 denied, 2 no such app, 3 timed out, 6 locked.
+- **APP_MESSAGE** hands `message` (at most 4096 bytes) to the app with ID `id`, which must have
+  the link permission, and returns its answer (at most 4096 bytes). If the app isn't running,
+  maki starts it without the screen, unless another app is open on maki; it may ask the owner
+  before it answers, so the answer can take as long as that. `status`: 0 answered, 1 the app
+  didn't answer (it went on to its next event), 2 no such app, 3 timed out (60 s, or an ask's
+  time), 4 busy (another app is open on maki, or at most three requests wait at once) or no app
+  host, 6 locked, 9 refused (the app hasn't the link permission). Only an answered reply carries
+  the app's answer. What the messages mean is up to the app and the software talking to it.

@@ -64,11 +64,20 @@ pub struct AskRequest {
     pub yes: String,
     pub no: String,
     pub timeout_s: u32,
+    /// Asked by an installed app (`ASK_APP_STORE`, `ASK_APP_SIDELOADED`), whose name is the
+    /// subject; 0 for maki's own asks. An app's ask is drawn under the app's bar, with no site,
+    /// so it can't pass for maki asking on a site's behalf.
+    pub app: u8,
     /// Set by the launcher: 0 allowed, 1 denied, 2 timed out.
     pub answer: u32,
     /// Set by the launcher: the choice picked, when allowed.
     pub choice: u32,
 }
+
+/// `AskRequest::app`: an app from the store is asking.
+pub const ASK_APP_STORE: u8 = 1;
+/// A sideloaded app is asking: its bar carries the sideloaded mark.
+pub const ASK_APP_SIDELOADED: u8 = 2;
 
 /// A page of an ask. The launcher breaks one that doesn't fit onto more screens, repeating the
 /// heading, so nothing on it is ever cut.

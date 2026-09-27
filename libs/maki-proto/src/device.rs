@@ -126,12 +126,15 @@ pub enum Apps {
     List { index: u32 },
     Install { total: u32, offset: u32, data: Vec<u8> },
     Remove { id: String },
+    Message { id: String, message: Vec<u8> },
 }
 
 /// Pieces of a bundle are at most this big.
 pub const APP_PIECE: usize = 4096;
 /// The biggest bundle maki takes (`maki_bundle::MAX_BUNDLE`).
 pub const MAX_APP: u32 = 512 * 1024;
+/// The biggest message to or from an app (`maki_wasm::MAX_MESSAGE`).
+pub const MAX_APP_MESSAGE: usize = 4096;
 
 /// An installed app, as APP_LIST describes it.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -387,6 +390,12 @@ pub mod reply {
     pub fn app_remove(approval: Approval) -> (u8, Vec<u8>) {
         (kind::APP_REMOVE | kind::REPLY, Writer::new().u8(approval as u8).finish())
     }
+
+    /// The app's answer (`Approved`), or why there's none, with nothing.
+    pub fn app_message(status: Approval, answer: &[u8]) -> (u8, Vec<u8>) {
+        let answer = if status == Approval::Approved { &answer[..answer.len().min(super::MAX_APP_MESSAGE)] } else { &[] };
+        (kind::APP_MESSAGE | kind::REPLY, Writer::new().u8(status as u8).bytes16(answer).finish())
+    }
 }
 
 pub trait Platform {
@@ -458,7 +467,7 @@ impl<P: Platform> Device<P> {
             kind::ETH_ACCOUNT | kind::ETH_SIGN_TX | kind::ETH_SIGNED | kind::ETH_SIGN_MESSAGE => {
                 return Self::ethereum(packet.kind, body)
             }
-            kind::APP_LIST | kind::APP_INSTALL | kind::APP_REMOVE => return Self::apps(packet.kind, body),
+            kind::APP_LIST | kind::APP_INSTALL | kind::APP_REMOVE | kind::APP_MESSAGE => return Self::apps(packet.kind, body),
             _ => Ok(error(ErrorCode::UnknownKind, "unknown message kind")),
         };
         let (kind, body) = result.unwrap_or_else(malformed);
@@ -512,6 +521,7 @@ impl<P: Platform> Device<P> {
             let request = match kind {
                 kind::APP_LIST => Apps::List { index: r.u32()? },
                 kind::APP_INSTALL => Apps::Install { total: r.u32()?, offset: r.u32()?, data: r.bytes16()?.to_vec() },
+                kind::APP_MESSAGE => Apps::Message { id: r.str8()?.to_string(), message: r.bytes16()?.to_vec() },
                 _ => Apps::Remove { id: r.str8()?.to_string() },
             };
             r.end()?;
@@ -534,7 +544,8 @@ impl<P: Platform> Device<P> {
             {
                 bad("bundle piece out of range")
             }
-            Ok(Apps::Remove { ref id }) if !app_id_valid(id) => bad("not an app ID"),
+            Ok(Apps::Remove { ref id } | Apps::Message { ref id, .. }) if !app_id_valid(id) => bad("not an app ID"),
+            Ok(Apps::Message { ref message, .. }) if message.len() > MAX_APP_MESSAGE => bad("message too big"),
             Ok(request) => Handled::Apps(request),
         }
     }

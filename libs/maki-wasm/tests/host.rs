@@ -16,6 +16,25 @@ struct Record {
     logs: Vec<String>,
     storage: BTreeMap<String, Vec<u8>>,
     waits: Vec<Option<Duration>>,
+    asks: Vec<Ask>,
+    answers: VecDeque<Answer>,
+    typed: Vec<String>,
+    /// maki is locked: no secrets, and nothing typed
+    locked: bool,
+    /// messages from the computer, each delivered with an Event::Message
+    inbox: VecDeque<Vec<u8>>,
+    /// the one being answered, and the answers
+    current: Option<Vec<u8>>,
+    replies: Vec<Vec<u8>>,
+}
+
+/// The test platform's secret for a label: made up, different for each label.
+fn secret_for(label: &str) -> [u8; 32] {
+    let mut s = [0x42u8; 32];
+    for (i, b) in label.bytes().enumerate() {
+        s[i % 32] ^= b.wrapping_add(i as u8);
+    }
+    s
 }
 
 /// Hands out scripted events (Exit once they run out) and records what the app does.
@@ -25,7 +44,11 @@ impl Platform for Script {
     fn wait(&mut self, timeout: Option<Duration>) -> Event {
         let mut r = self.0.borrow_mut();
         r.waits.push(timeout);
-        r.events.pop_front().unwrap_or(Event::Exit)
+        let event = r.events.pop_front().unwrap_or(Event::Exit);
+        if event == Event::Message {
+            r.current = r.inbox.pop_front();
+        }
+        event
     }
     fn present(&mut self, canvas: &Canvas) { self.0.borrow_mut().frames.push(canvas.clone()) }
     fn set_menu(&mut self, items: &[String]) { self.0.borrow_mut().menu = items.to_vec() }
@@ -40,9 +63,34 @@ impl Platform for Script {
     }
     fn storage_delete(&mut self, key: &str) -> bool { self.0.borrow_mut().storage.remove(key).is_some() }
     fn storage_keys(&mut self) -> Vec<String> { self.0.borrow().storage.keys().cloned().collect() }
+    fn ask(&mut self, ask: &Ask) -> Answer {
+        let mut r = self.0.borrow_mut();
+        r.asks.push(ask.clone());
+        r.answers.pop_front().unwrap_or(Answer::NoAnswer)
+    }
+    fn app_secret(&mut self, label: &str) -> Option<[u8; 32]> { (!self.0.borrow().locked).then(|| secret_for(label)) }
+    fn type_text(&mut self, text: &str) -> bool {
+        let mut r = self.0.borrow_mut();
+        if r.locked {
+            return false;
+        }
+        r.typed.push(text.into());
+        true
+    }
+    fn message(&mut self) -> Option<Vec<u8>> { self.0.borrow().current.clone() }
+    fn reply(&mut self, reply: &[u8]) -> bool {
+        let mut r = self.0.borrow_mut();
+        if r.current.take().is_none() {
+            return false;
+        }
+        r.replies.push(reply.to_vec());
+        true
+    }
 }
 
-const LIMITS: Limits = Limits { memory: 256 * 1024, storage: 1024, fuel: 1_000_000 };
+const LIMITS: Limits = Limits { memory: 256 * 1024, storage: 1024, fuel: 1_000_000, granted: Granted::NONE };
+
+fn with(permissions: &[maki_bundle::Permission]) -> Limits { Limits { granted: Granted::of(permissions), ..LIMITS } }
 
 fn module(body: &str) -> Vec<u8> { wat::parse_str(body).unwrap() }
 
@@ -454,7 +502,7 @@ fn admit_says_what_maki_takes() {
     let refusals = [
         (Manifest { kind: Kind::Native, api: 0, firmware: "x".into(), ..m.clone() }, "native"),
         (Manifest { api: API_VERSION + 1, ..m.clone() }, "newer maki"),
-        (Manifest { permissions: vec![(Permission::Keyboard, "typing".into())], ..m.clone() }, "type on your computer"),
+        (Manifest { permissions: vec![(Permission::Camera, "photos".into())], ..m.clone() }, "use the camera"),
         (Manifest { memory_kib: MAX_MEMORY_KIB + 1, ..m.clone() }, "memory"),
         (Manifest { storage_kib: MAX_STORAGE_KIB + 1, ..m.clone() }, "storage"),
         (Manifest { memory_kib: 32, ..m.clone() }, "can't start"),
@@ -463,4 +511,214 @@ fn admit_says_what_maki_takes() {
         let err = admit(&manifest, &ok).unwrap_err();
         assert!(err.contains(why), "{why}: {err}");
     }
+}
+
+/// Runs an app calling one of maki's functions, with `data` at 0, and keeping the function's
+/// result (4 bytes, little-endian) in storage as "r": `call` is the call's WAT, which leaves
+/// the result on the stack.
+fn call_with(imports: &str, data: &str, call: &str, record: Record, limits: Limits) -> (Stop, Record) {
+    let wat = format!(
+        r#"(module
+          {imports}
+          (import "maki" "storage_set" (func $set (param i32 i32 i32 i32) (result i32)))
+          (memory (export "memory") 1)
+          (data (i32.const 0) "{data}")
+          (data (i32.const 1000) "r")
+          (func (export "maki_main")
+            (i32.store (i32.const 1004) {call})
+            (drop (call $set (i32.const 1000) (i32.const 1) (i32.const 1004) (i32.const 4)))))"#
+    );
+    let record = Rc::new(RefCell::new(record));
+    let stop = run(&module(&wat), Box::new(Script(record.clone())), limits);
+    let r = Rc::try_unwrap(record).ok().unwrap().into_inner();
+    (stop, r)
+}
+
+fn result_of(r: &Record) -> i32 { i32::from_le_bytes(r.storage["r"][..4].try_into().unwrap()) }
+
+#[test]
+fn gated_functions_need_their_permission() {
+    use maki_bundle::Permission;
+    let signatures = [
+        ("ask", "(param i32 i32 i32) (result i32)"),
+        ("key_secret", "(param i32 i32 i32) (result i32)"),
+        ("key_public", "(param i32 i32 i32) (result i32)"),
+        ("key_sign", "(param i32 i32 i32 i32 i32) (result i32)"),
+        ("type_text", "(param i32 i32) (result i32)"),
+        ("link_read", "(param i32 i32) (result i32)"),
+        ("link_reply", "(param i32 i32) (result i32)"),
+    ];
+    assert_eq!(signatures.len(), GATED.len());
+    for (name, signature) in signatures {
+        let (_, p) = GATED.iter().find(|(n, _)| *n == name).unwrap();
+        let wat = format!(
+            r#"(module (import "maki" "{name}" (func {signature})) (memory (export "memory") 1) (func (export "maki_main")))"#
+        );
+        let err = check(&module(&wat), LIMITS).unwrap_err();
+        assert!(err.contains(&format!("needs the {} permission", p.name())), "{name}: {err}");
+        check(&module(&wat), with(&[*p])).unwrap();
+        // one permission doesn't stand in for another
+        let other = if *p == Permission::Keys { Permission::Ask } else { Permission::Keys };
+        assert!(check(&module(&wat), with(&[other])).is_err(), "{name}");
+    }
+}
+
+#[test]
+fn an_apps_keys_are_its_secret_and_the_ed25519_key_from_it() {
+    use ed25519_dalek::{Signature, SigningKey, Verifier};
+    use maki_bundle::Permission;
+    let wat = r#"(module
+      (import "maki" "key_secret" (func $secret (param i32 i32 i32) (result i32)))
+      (import "maki" "key_public" (func $public (param i32 i32 i32) (result i32)))
+      (import "maki" "key_sign" (func $sign (param i32 i32 i32 i32 i32) (result i32)))
+      (import "maki" "storage_set" (func $set (param i32 i32 i32 i32) (result i32)))
+      (memory (export "memory") 1)
+      (data (i32.const 0) "ssh")
+      (data (i32.const 16) "sign this")
+      (data (i32.const 32) "spg")
+      (func (export "maki_main")
+        (drop (call $secret (i32.const 0) (i32.const 3) (i32.const 100)))
+        (drop (call $public (i32.const 0) (i32.const 3) (i32.const 200)))
+        (drop (call $sign (i32.const 0) (i32.const 3) (i32.const 16) (i32.const 9) (i32.const 300)))
+        (drop (call $set (i32.const 32) (i32.const 1) (i32.const 100) (i32.const 32)))
+        (drop (call $set (i32.const 33) (i32.const 1) (i32.const 200) (i32.const 32)))
+        (drop (call $set (i32.const 34) (i32.const 1) (i32.const 300) (i32.const 64)))))"#;
+    let record = Rc::new(RefCell::new(Record::default()));
+    let stop = run(&module(wat), Box::new(Script(record.clone())), with(&[Permission::Keys]));
+    assert_eq!(stop, Stop::Finished);
+    let r = record.borrow();
+    let secret = secret_for("ssh");
+    assert_eq!(r.storage["s"], secret);
+    let public = SigningKey::from_bytes(&secret).verifying_key();
+    assert_eq!(r.storage["p"], public.to_bytes());
+    let signature = Signature::from_slice(&r.storage["g"]).unwrap();
+    public.verify(b"sign this", &signature).unwrap();
+    assert!(public.verify(b"sign that", &signature).is_err());
+
+    // locked: no secret, and the app is told so
+    let imports = r#"(import "maki" "key_sign" (func $sign (param i32 i32 i32 i32 i32) (result i32)))"#;
+    let call = "(call $sign (i32.const 0) (i32.const 3) (i32.const 0) (i32.const 3) (i32.const 100))";
+    let (stop, r) = call_with(imports, "ssh", call, Record { locked: true, ..Default::default() }, with(&[Permission::Keys]));
+    assert_eq!((stop, result_of(&r)), (Stop::Finished, FAILED));
+    // a label with a control character isn't one
+    let call = "(call $sign (i32.const 0) (i32.const 4) (i32.const 0) (i32.const 3) (i32.const 100))";
+    let (_, r) = call_with(imports, "ss\\0ah", call, Record::default(), with(&[Permission::Keys]));
+    assert_eq!(result_of(&r), INVALID);
+    // too much to sign
+    let call = format!("(call $sign (i32.const 0) (i32.const 3) (i32.const 0) (i32.const {}) (i32.const 100))", MAX_SIGN + 1);
+    let (_, r) = call_with(imports, "ssh", &call, Record::default(), with(&[Permission::Keys]));
+    assert_eq!(result_of(&r), TOO_BIG);
+    // a label longer than there can be stops the app
+    let call = format!("(call $sign (i32.const 0) (i32.const {}) (i32.const 0) (i32.const 3) (i32.const 100))", MAX_LABEL + 1);
+    let (stop, _) = call_with(imports, "ssh", &call, Record::default(), with(&[Permission::Keys]));
+    assert!(matches!(stop, Stop::Crashed(_)), "{stop:?}");
+}
+
+#[test]
+fn asks_reach_the_owner_and_bring_back_the_answer() {
+    use maki_bundle::Permission;
+    let imports = r#"(import "maki" "ask" (func $ask (param i32 i32 i32) (result i32)))"#;
+    let text = "Sign in?\\0aas kara@example\\0asign\\0acancel";
+    let len = "Sign in?\nas kara@example\nsign\ncancel".len();
+    let call = format!("(call $ask (i32.const 0) (i32.const {len}) (i32.const 0))");
+    for (answer, code) in [(Answer::Yes, 0), (Answer::No, 1), (Answer::NoAnswer, 2)] {
+        let record = Record { answers: [answer].into(), ..Default::default() };
+        let (stop, r) = call_with(imports, text, &call, record, with(&[Permission::Ask]));
+        assert_eq!((stop, result_of(&r)), (Stop::Finished, code));
+        assert_eq!(
+            r.asks,
+            [Ask { question: "Sign in?".into(), detail: "as kara@example".into(), yes: "sign".into(), no: "cancel".into(), timeout_s: ASK_TIMEOUT_S }]
+        );
+    }
+    // just a question, and how long to wait, within what maki allows
+    for (timeout, expect) in [(10, 10), (1, 5), (1000, MAX_ASK_TIMEOUT_S), (-1, ASK_TIMEOUT_S)] {
+        let call = format!("(call $ask (i32.const 0) (i32.const 8) (i32.const {timeout}))");
+        let (_, r) = call_with(imports, "Proceed?", &call, Record::default(), with(&[Permission::Ask]));
+        assert_eq!(r.asks[0], Ask { question: "Proceed?".into(), detail: "".into(), yes: "".into(), no: "".into(), timeout_s: expect });
+    }
+    // what isn't an ask never reaches the owner
+    let too_long = "q".repeat(MAX_QUESTION + 1);
+    for bad in ["", "\\0adetail", "a\\0ab\\0ac\\0ad\\0ae", "tab\\09in", too_long.as_str()] {
+        let len = bad.replace("\\0a", "\n").replace("\\09", "\t").len();
+        let call = format!("(call $ask (i32.const 0) (i32.const {len}) (i32.const 0))");
+        let (_, r) = call_with(imports, bad, &call, Record::default(), with(&[Permission::Ask]));
+        assert_eq!(result_of(&r), INVALID, "{bad:?}");
+        assert!(r.asks.is_empty());
+    }
+}
+
+#[test]
+fn typing_takes_plain_text_only() {
+    use maki_bundle::Permission;
+    let imports = r#"(import "maki" "type_text" (func $type (param i32 i32) (result i32)))"#;
+    let call = |len: usize| format!("(call $type (i32.const 0) (i32.const {len}))");
+    let (_, r) = call_with(imports, "ls -la\\0a\\09x", &call(9), Record::default(), with(&[Permission::Keyboard]));
+    assert_eq!((result_of(&r), r.typed.clone()), (0, vec!["ls -la\n\tx".to_string()]));
+    // not ASCII, or a control character: nothing typed
+    for bad in ["caf\\c3\\a9", "bell\\07"] {
+        let len = if bad.starts_with("caf") { 5 } else { 5 };
+        let (_, r) = call_with(imports, bad, &call(len), Record::default(), with(&[Permission::Keyboard]));
+        assert_eq!(result_of(&r), INVALID, "{bad}");
+        assert!(r.typed.is_empty());
+    }
+    let (_, r) = call_with(imports, "x", &call(MAX_TYPE + 1), Record::default(), with(&[Permission::Keyboard]));
+    assert_eq!(result_of(&r), TOO_BIG);
+    // maki couldn't type (not plugged in, or not in front)
+    let (_, r) = call_with(imports, "hi", &call(2), Record { locked: true, ..Default::default() }, with(&[Permission::Keyboard]));
+    assert_eq!(result_of(&r), FAILED);
+}
+
+#[test]
+fn messages_come_with_an_event_and_get_one_answer_each() {
+    use maki_bundle::Permission;
+    // an app that answers each message with it reversed, and says -1 to a second answer
+    let wat = r#"(module
+      (import "maki" "wait" (func $wait (param i32) (result i32)))
+      (import "maki" "link_read" (func $read (param i32 i32) (result i32)))
+      (import "maki" "link_reply" (func $reply (param i32 i32) (result i32)))
+      (import "maki" "log" (func $log (param i32 i32)))
+      (memory (export "memory") 1)
+      (data (i32.const 900) "second answer refused")
+      (func (export "maki_main")
+        (local $n i32) (local $i i32)
+        (loop $events
+          (if (i32.eq (call $wait (i32.const -1)) (i32.const 7))
+            (then
+              ;; the message at 0, at most 64 bytes of it; its reverse at 100
+              (local.set $n (call $read (i32.const 0) (i32.const 64)))
+              (local.set $i (i32.const 0))
+              (block $done
+                (loop $rev
+                  (br_if $done (i32.ge_s (local.get $i) (local.get $n)))
+                  (i32.store8 (i32.add (i32.const 100) (local.get $i))
+                    (i32.load8_u (i32.sub (i32.sub (local.get $n) (i32.const 1)) (local.get $i))))
+                  (local.set $i (i32.add (local.get $i) (i32.const 1)))
+                  (br $rev)))
+              (drop (call $reply (i32.const 100) (local.get $n)))
+              (if (i32.eq (call $reply (i32.const 100) (local.get $n)) (i32.const -1))
+                (then (call $log (i32.const 900) (i32.const 21))))
+              (br $events)))
+          (br_if $events (i32.const 0))))
+    )"#;
+    let record = Record {
+        events: [Event::Message, Event::Message, Event::Exit].into(),
+        inbox: [b"hello".to_vec(), b"maki".to_vec()].into(),
+        ..Default::default()
+    };
+    let record = Rc::new(RefCell::new(record));
+    let stop = run(&module(wat), Box::new(Script(record.clone())), with(&[Permission::Link]));
+    assert_eq!(stop, Stop::Finished);
+    let r = record.borrow();
+    assert_eq!(r.replies, [b"olleh".to_vec(), b"ikam".to_vec()]);
+    assert_eq!(r.logs, ["second answer refused", "second answer refused"]);
+
+    // nothing to read before a message comes
+    let imports = r#"(import "maki" "link_read" (func $read (param i32 i32) (result i32)))"#;
+    let (_, r) = call_with(imports, "", "(call $read (i32.const 0) (i32.const 64))", Record::default(), with(&[Permission::Link]));
+    assert_eq!(result_of(&r), NOT_FOUND);
+    // too big an answer
+    let imports = r#"(import "maki" "link_reply" (func $reply (param i32 i32) (result i32)))"#;
+    let call = format!("(call $reply (i32.const 0) (i32.const {}))", MAX_MESSAGE + 1);
+    let (_, r) = call_with(imports, "", &call, Record { current: Some(vec![1]), ..Default::default() }, with(&[Permission::Link]));
+    assert_eq!(result_of(&r), TOO_BIG);
 }

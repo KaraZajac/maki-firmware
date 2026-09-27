@@ -11,7 +11,7 @@ use std::collections::VecDeque;
 use blitstr2::GlyphStyle;
 use xous_ipc::Buffer;
 
-use crate::api::{ANSWER_ALLOWED, ANSWER_DENIED, ANSWER_TIMED_OUT, AskRequest};
+use crate::api::{ANSWER_ALLOWED, ANSWER_DENIED, ANSWER_TIMED_OUT, ASK_APP_SIDELOADED, AskRequest};
 use crate::ui::{H, Key, LINE, SMALL_LINE, Screen};
 
 /// An ask shows its site in fixed-width type (8 pixels a character), 15 characters to a line,
@@ -113,6 +113,21 @@ impl Prompt {
             }
             screen.text(y, LINE * lines.len() as isize + 2, GlyphStyle::Monospace, false, false, &lines.join("\n"));
             screen.action_bar("next", true);
+            screen.end();
+            return;
+        }
+
+        if self.req.app != 0 {
+            // an app's question: under its own bar, as over the app, with no site in it
+            screen.app_bar(&self.req.subject, &countdown, self.req.app == ASK_APP_SIDELOADED);
+            screen.text(y, LINE * 2, GlyphStyle::Bold, false, false, &self.req.question);
+            y += LINE * 2 + 4;
+            screen.text(y, LINE * 3, GlyphStyle::Regular, false, false, &self.req.detail);
+            let action = match self.stops[self.selected] {
+                Stop::Yes => self.label(&self.req.yes, "allow"),
+                _ => self.label(&self.req.no, "deny"),
+            };
+            screen.action_bar(action, true);
             screen.end();
             return;
         }

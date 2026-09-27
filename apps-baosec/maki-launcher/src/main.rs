@@ -10,6 +10,9 @@
 //! centre confirms what's offered, left and right together open the menu, and there's no back
 //! button. An ask (`Launcher::ask`) goes over whatever is on screen and gives it back after.
 
+// shared with the library, which uses what the launcher itself doesn't (the demo timeout,
+// asks' kinds for askers)
+#[allow(dead_code)]
 mod api;
 mod ask;
 mod menu;

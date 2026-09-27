@@ -10,7 +10,9 @@
 //! Codes need a verified clock, as on the badge: sync through Roughtime first, or start with
 //! `--clock-verified` to take this computer's clock as verified (tests, offline work).
 //! Everything maki-link does on the device happens here too, except the USB hop, the Xous clock and
-//! maki's own screen. State survives reconnects, like a badge that stays plugged in.
+//! maki's own screen. State survives reconnects, like a badge that stays plugged in. Installed apps
+//! answer APP_MESSAGE as on maki: each runs (with maki's own host code) without a screen, its
+//! asks answered as above, its keys from the phrase, until it's had nothing to do for a while.
 
 use std::io::{BufRead, Read, Write};
 use std::net::{TcpListener, TcpStream};
@@ -70,6 +72,154 @@ struct Store {
     apps: std::collections::BTreeMap<String, (Vec<u8>, bool)>,
     /// a bundle coming in
     app_incoming: Vec<u8>,
+    /// each app's storage, by ID
+    app_data: std::collections::BTreeMap<String, std::collections::BTreeMap<String, Vec<u8>>>,
+}
+
+/// Where an app's answer to a message goes.
+type ReplyTo = std::sync::mpsc::Sender<(Approval, Vec<u8>)>;
+/// Where a running app's next message goes, with where its answer goes.
+type Inbox = std::sync::mpsc::Sender<(Vec<u8>, ReplyTo)>;
+
+/// How long an app started for a message runs with nothing to do, as on maki.
+const APP_IDLE: Duration = Duration::from_secs(30);
+
+/// What a running app has instead of maki's app host: messages from the computer, asks answered
+/// by the fake's policy, keys from its phrase, and storage in memory. No screen.
+struct FakeApp {
+    id: String,
+    name: String,
+    developer: [u8; 32],
+    seed: [u8; 64],
+    policy: Policy,
+    inbox: std::sync::mpsc::Receiver<(Vec<u8>, ReplyTo)>,
+    current: Option<(Vec<u8>, ReplyTo)>,
+    store: Arc<Mutex<Store>>,
+    start: Instant,
+}
+
+impl maki_wasm::Platform for FakeApp {
+    fn wait(&mut self, timeout: Option<Duration>) -> maki_wasm::Event {
+        if let Some((_, reply_to)) = self.current.take() {
+            println!("  {} went on without answering", self.name);
+            reply_to.send((Approval::Denied, Vec::new())).ok();
+        }
+        let wait = timeout.map_or(APP_IDLE, |t| t.min(APP_IDLE));
+        match self.inbox.recv_timeout(wait) {
+            Ok(m) => {
+                self.current = Some(m);
+                maki_wasm::Event::Message
+            }
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) if timeout.is_some_and(|t| t < APP_IDLE) => {
+                maki_wasm::Event::Timeout
+            }
+            // nothing to do for a while: it ends
+            Err(_) => maki_wasm::Event::Exit,
+        }
+    }
+    fn present(&mut self, _: &maki_wasm::Canvas) {}
+    fn set_menu(&mut self, _: &[String]) {}
+    fn millis(&self) -> u64 { self.start.elapsed().as_millis() as u64 }
+    fn unix_time(&self) -> Option<(u64, bool)> { Some((host_utc_ms() / 1000, false)) }
+    fn random(&mut self, buf: &mut [u8]) {
+        std::fs::File::open("/dev/urandom").and_then(|mut f| f.read_exact(buf)).expect("no /dev/urandom");
+    }
+    fn log(&mut self, line: &str) { println!("  {}: {line}", self.name) }
+    fn storage_get(&mut self, key: &str) -> Option<Vec<u8>> {
+        self.store.lock().unwrap().app_data.get(&self.id).and_then(|d| d.get(key).cloned())
+    }
+    fn storage_set(&mut self, key: &str, value: &[u8]) -> Result<(), ()> {
+        self.store.lock().unwrap().app_data.entry(self.id.clone()).or_default().insert(key.into(), value.into());
+        Ok(())
+    }
+    fn storage_delete(&mut self, key: &str) -> bool {
+        self.store.lock().unwrap().app_data.get_mut(&self.id).is_some_and(|d| d.remove(key).is_some())
+    }
+    fn storage_keys(&mut self) -> Vec<String> {
+        self.store.lock().unwrap().app_data.get(&self.id).map(|d| d.keys().cloned().collect()).unwrap_or_default()
+    }
+    fn ask(&mut self, ask: &maki_wasm::Ask) -> maki_wasm::Answer {
+        match approve(self.policy, &format!("{}: {} {}", self.name, ask.question, ask.detail)) {
+            Approval::Approved => maki_wasm::Answer::Yes,
+            _ => maki_wasm::Answer::No,
+        }
+    }
+    fn app_secret(&mut self, label: &str) -> Option<[u8; 32]> { maki_seed::app_secret(&self.seed, &self.id, &self.developer, label) }
+    fn type_text(&mut self, text: &str) -> bool {
+        println!("  {} would type {text:?}", self.name);
+        true
+    }
+    fn message(&mut self) -> Option<Vec<u8>> { self.current.as_ref().map(|(m, _)| m.clone()) }
+    fn reply(&mut self, reply: &[u8]) -> bool {
+        match self.current.take() {
+            Some((_, reply_to)) => {
+                reply_to.send((Approval::Approved, reply.to_vec())).ok();
+                true
+            }
+            None => false,
+        }
+    }
+}
+
+/// A message for an installed app, answered as maki's host would: started if it isn't running.
+fn app_message(
+    app: &str,
+    message: Vec<u8>,
+    store: &Arc<Mutex<Store>>,
+    running: &Arc<Mutex<std::collections::BTreeMap<String, Inbox>>>,
+    seed: [u8; 64],
+    policy: Policy,
+) -> (Approval, Vec<u8>) {
+    let Some((bundle, _)) = store.lock().unwrap().apps.get(app).cloned() else { return (Approval::NoMatch, Vec::new()) };
+    let b = maki_bundle::read(&bundle).expect("installed bundles read");
+    if !b.manifest.permissions.iter().any(|(p, _)| *p == maki_bundle::Permission::Link) {
+        return (Approval::Refused, Vec::new());
+    }
+    // twice: an app that ended just as the message came gets started again
+    for _ in 0..2 {
+        let inbox = {
+            let mut r = running.lock().unwrap();
+            r.entry(app.to_string()).or_insert_with(|| start_app(bundle.clone(), store.clone(), seed, policy)).clone()
+        };
+        let (reply_to, answer) = std::sync::mpsc::channel();
+        if inbox.send((message.clone(), reply_to)).is_err() {
+            running.lock().unwrap().remove(app);
+            continue;
+        }
+        match answer.recv_timeout(Duration::from_secs(90)) {
+            Ok(answer) => return answer,
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => return (Approval::TimedOut, Vec::new()),
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                running.lock().unwrap().remove(app);
+            }
+        }
+    }
+    (Approval::Unavailable, Vec::new())
+}
+
+/// Runs an installed app without a screen, on its own thread, until it's had nothing to do for
+/// a while.
+fn start_app(bundle: Vec<u8>, store: Arc<Mutex<Store>>, seed: [u8; 64], policy: Policy) -> Inbox {
+    let (inbox, messages) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let b = maki_bundle::read(&bundle).expect("installed bundles read");
+        let limits = maki_wasm::admit(&b.manifest, b.code).expect("installed apps are admitted");
+        println!("  {} started for a message", b.manifest.name);
+        let app = FakeApp {
+            id: b.manifest.id.clone(),
+            name: b.manifest.name.clone(),
+            developer: b.developer,
+            seed,
+            policy,
+            inbox: messages,
+            current: None,
+            store,
+            start: Instant::now(),
+        };
+        let stop = maki_wasm::run(b.code, Box::new(app), limits);
+        println!("  {} stopped: {stop:?}", b.manifest.name);
+    });
+    inbox
 }
 
 /// The fake's wallet, and the PSBT coming in and the one it last signed; the same for Ethereum.
@@ -355,6 +505,7 @@ fn main() {
         Policy::Approve
     };
     let store = Arc::new(Mutex::new(Store::default()));
+    let running = Arc::new(Mutex::new(std::collections::BTreeMap::new()));
     let phrase = args.windows(2).find(|w| w[0] == "--phrase").map(|w| w[1].clone()).unwrap_or(TEST_PHRASE.into());
     let wallet = Arc::new(Mutex::new(Wallet::new(&phrase)));
     for pair in args.windows(2).filter(|w| w[0] == "--totp").map(|w| &w[1]) {
@@ -482,6 +633,16 @@ fn main() {
                                 });
                             }
                         }
+                    }
+                    Handled::Apps(Apps::Message { id: app, message }) => {
+                        println!("  0x{:02x}#{} -> app message for {app} ({} bytes)", packet.kind, packet.id, message.len());
+                        let (writer, store, running, id) = (writer.clone(), store.clone(), running.clone(), packet.id);
+                        let seed = wallet.lock().unwrap().seed;
+                        std::thread::spawn(move || {
+                            let (status, answer) = app_message(&app, message, &store, &running, seed, policy);
+                            let (kind, body) = reply::app_message(status, &answer);
+                            writer.lock().unwrap().write_all(&frame::encode(kind, id, &body)).ok();
+                        });
                     }
                     Handled::Apps(Apps::Remove { id: app }) => {
                         let (writer, store, id) = (writer.clone(), store.clone(), packet.id);

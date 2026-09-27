@@ -57,7 +57,8 @@ fn unavailable(ask: &Ask) -> (u8, Vec<u8>) { refused(ask, Approval::Unavailable)
 fn locked(ask: &Ask) -> (u8, Vec<u8>) { refused(ask, Approval::Locked) }
 
 /// What the worker does: a request for the owner, the last piece of a restore (which asks the
-/// owner too), a wallet request that waits for them, or an app to install or remove.
+/// owner too), a wallet request that waits for them, an app to install or remove, or a message
+/// for an app (which may ask the owner before it answers).
 enum Work {
     Ask(u16, Ask),
     Restore { id: u16, total: u32, offset: u32, data: Vec<u8> },
@@ -65,6 +66,7 @@ enum Work {
     Ethereum(u16, Ethereum),
     AppInstall { id: u16, total: u32, offset: u32, data: Vec<u8> },
     AppRemove { id: u16, app: String },
+    AppMessage { id: u16, app: String, message: Vec<u8> },
 }
 
 /// The app host's answers, as the protocol's.
@@ -163,6 +165,18 @@ fn vault_worker(work: mpsc::Receiver<Work>, waiting: Arc<AtomicU32>, send_lock: 
                 let (kind, body) = match app_host::AppHost::try_new(&xns) {
                     Some(host) => reply::app_remove(app_approval(host.remove(&app))),
                     None => reply::app_remove(Approval::Unavailable),
+                };
+                waiting.fetch_sub(1, Ordering::SeqCst);
+                send(&usb, &send_lock, &frame::encode(kind, id, &body));
+                continue;
+            }
+            Work::AppMessage { id, app, message } => {
+                let (kind, body) = match app_host::AppHost::try_new(&xns) {
+                    Some(host) => {
+                        let r = host.message(&app, message);
+                        reply::app_message(app_approval(r.result), &r.answer)
+                    }
+                    None => reply::app_message(Approval::Unavailable, &[]),
                 };
                 waiting.fetch_sub(1, Ordering::SeqCst);
                 send(&usb, &send_lock, &frame::encode(kind, id, &body));
@@ -298,6 +312,31 @@ impl Platform for Badge {
         self.launcher.set_time_state(state as u8).ok();
         self.time_state.store(state as u32, Ordering::SeqCst);
     }
+}
+
+/// For the emulator's demos (MAKI_DEMO_APP, MAKI_DEMO_PERMS): the app host, once maki has
+/// its PIN and phrase, and a minute after (so the work unlocking starts is done first).
+fn demo_host() -> app_host::AppHost {
+    let xns = xous_names::XousNames::new().unwrap();
+    let keys = maki_keys::Keys::new(&xns).expect("maki-keys");
+    keys.wait_phrase();
+    ticktimer_server::Ticktimer::new().unwrap().sleep_ms(60_000).ok();
+    log::warn!("demo: waiting for the app host");
+    let host = app_host::AppHost::new(&xns).expect("the app host");
+    log::warn!("demo: installing");
+    host
+}
+
+/// A bundle handed to the app host as maki desktop would, a piece at a time.
+fn demo_install(host: &app_host::AppHost, bytes: &[u8]) -> app_host::Install {
+    let mut r = app_host::Install::default();
+    for (i, piece) in bytes.chunks(4096).enumerate() {
+        r = host.install(bytes.len() as u32, (i * 4096) as u32, piece.to_vec());
+        if r.done {
+            break;
+        }
+    }
+    r
 }
 
 fn main() -> ! {
@@ -439,38 +478,18 @@ fn main() -> ! {
     // maki refuses), and lists what's installed.
     if option_env!("MAKI_DEMO_APP").is_some() {
         std::thread::spawn(|| {
+            let host = demo_host();
             let bundles: [(&str, &[u8]); 2] = [
                 ("dice", include_bytes!("../../../libs/maki-wasm/tests/fixtures/dice.maki")),
                 ("tally", include_bytes!("../../../libs/maki-wasm/tests/fixtures/tally.maki")),
             ];
-            let mut tampered = include_bytes!("../../../libs/maki-wasm/tests/fixtures/hello.maki").to_vec();
-            tampered[40] ^= 1;
-            let xns = xous_names::XousNames::new().unwrap();
-            let keys = maki_keys::Keys::new(&xns).expect("maki-keys");
-            let tt = ticktimer_server::Ticktimer::new().unwrap();
-            while !(keys.status().0 == maki_keys::State::Unlocked && keys.has_phrase()) {
-                tt.sleep_ms(500).ok();
-            }
-            // after the work unlocking starts (the passkeys' keys from the phrase), not during it
-            tt.sleep_ms(60_000).ok();
-            log::warn!("demo app: waiting for the app host");
-            let host = app_host::AppHost::new(&xns).expect("the app host");
-            log::warn!("demo app: installing");
-            let install = |bytes: &[u8]| {
-                let mut r = app_host::Install::default();
-                for (i, piece) in bytes.chunks(4096).enumerate() {
-                    r = host.install(bytes.len() as u32, (i * 4096) as u32, piece.to_vec());
-                    if r.done {
-                        break;
-                    }
-                }
-                r
-            };
             for (name, bytes) in bundles {
-                let r = install(bytes);
+                let r = demo_install(&host, bytes);
                 log::warn!("demo app install {name}: result {} '{}'", r.result, r.reason);
             }
-            let r = install(&tampered);
+            let mut tampered = include_bytes!("../../../libs/maki-wasm/tests/fixtures/hello.maki").to_vec();
+            tampered[40] ^= 1;
+            let r = demo_install(&host, &tampered);
             log::warn!(
                 "demo app install tampered: result {} '{}', as expected: {}",
                 r.result,
@@ -480,6 +499,59 @@ fn main() -> ! {
             let list = host.list();
             let names: Vec<String> = list.apps.iter().map(|a| format!("{} {}", a.id, a.version)).collect();
             log::warn!("demo app list: result {} {:?}", list.result, names);
+        });
+    }
+
+    // The permissions, the same way: built with MAKI_DEMO_PERMS, maki-link installs Signer and
+    // SSH (each asks the owner, with a page for each permission), then does what maki desktop's
+    // SSH agent does: asks the SSH app (started without the screen) for its key, then to sign
+    // a sign-in, which it asks the owner about first.
+    if option_env!("MAKI_DEMO_PERMS").is_some() {
+        std::thread::spawn(|| {
+            let host = demo_host();
+            let bundles: [(&str, &[u8]); 2] = [
+                ("signer", include_bytes!("../../../libs/maki-wasm/tests/fixtures/signer.maki")),
+                ("ssh", include_bytes!("../../../libs/maki-wasm/tests/fixtures/ssh.maki")),
+            ];
+            for (name, bytes) in bundles {
+                let r = demo_install(&host, bytes);
+                log::warn!("demo perms install {name}: result {} '{}'", r.result, r.reason);
+            }
+            const SSH: &str = "com.leviathan.maki.ssh";
+            let agent = |kind: u8, body: &[u8]| {
+                let mut m = 1u32.to_be_bytes().to_vec();
+                m.push(kind);
+                m.extend_from_slice(body);
+                m
+            };
+            let string = |out: &mut Vec<u8>, b: &[u8]| {
+                out.extend_from_slice(&(b.len() as u32).to_be_bytes());
+                out.extend_from_slice(b);
+            };
+            let r = host.message(SSH, agent(11, &[]));
+            log::warn!("demo perms ssh keys: result {} answer {:02x?}", r.result, r.answer);
+            // the key's blob, from the answer: type 12, one key, its blob
+            let blob = r.answer.get(9..9 + 51).map(|b| b.to_vec()).unwrap_or_default();
+            let mut data = Vec::new();
+            string(&mut data, &[0xaa; 32]);
+            data.push(50);
+            string(&mut data, b"kara");
+            string(&mut data, b"ssh-connection");
+            string(&mut data, b"publickey");
+            data.push(1);
+            string(&mut data, b"ssh-ed25519");
+            string(&mut data, &blob);
+            let mut body = Vec::new();
+            string(&mut body, &blob);
+            string(&mut body, &data);
+            body.extend_from_slice(&0u32.to_be_bytes());
+            let r = host.message(SSH, agent(13, &body));
+            log::warn!(
+                "demo perms ssh sign: result {}, {} bytes, a signature: {}",
+                r.result,
+                r.answer.len(),
+                r.answer.first() == Some(&14)
+            );
         });
     }
 
@@ -608,20 +680,23 @@ fn main() -> ! {
                             app_install(app_host::AppHost::try_new(&xns), total, offset, data)
                         }
                         Handled::Apps(request) => {
-                            let busy = |request: &Apps| match request {
+                            // the reply if it can't be done now, of the request's own kind
+                            let unavailable = match &request {
                                 Apps::Remove { .. } => reply::app_remove(Approval::Unavailable),
+                                Apps::Message { .. } => reply::app_message(Approval::Unavailable, &[]),
                                 _ => reply::app_install(true, Approval::Unavailable, ""),
                             };
                             if waiting.fetch_add(1, Ordering::SeqCst) >= MAX_WAITING_ASKS {
                                 waiting.fetch_sub(1, Ordering::SeqCst);
                                 log::warn!("too many requests waiting on the owner");
-                                busy(&request)
+                                unavailable
                             } else {
                                 let work = match request {
                                     Apps::Install { total, offset, data } => {
                                         Work::AppInstall { id: packet.id, total, offset, data }
                                     }
                                     Apps::Remove { id } => Work::AppRemove { id: packet.id, app: id },
+                                    Apps::Message { id, message } => Work::AppMessage { id: packet.id, app: id, message },
                                     Apps::List { .. } => unreachable!(),
                                 };
                                 match to_vault.send(work) {
@@ -629,7 +704,7 @@ fn main() -> ! {
                                     Err(_) => {
                                         log::error!("the worker is gone");
                                         waiting.fetch_sub(1, Ordering::SeqCst);
-                                        reply::app_install(true, Approval::Unavailable, "")
+                                        unavailable
                                     }
                                 }
                             }

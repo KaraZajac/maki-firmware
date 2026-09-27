@@ -569,6 +569,10 @@ fn app_requests_go_to_the_host() {
         handled(&mut d, kind::APP_REMOVE, Writer::new().str8("com.leviathan.maki.dice").finish()),
         Handled::Apps(Apps::Remove { id: "com.leviathan.maki.dice".into() })
     );
+    assert_eq!(
+        handled(&mut d, kind::APP_MESSAGE, Writer::new().str8("com.leviathan.maki.ssh").bytes16(b"list").finish()),
+        Handled::Apps(Apps::Message { id: "com.leviathan.maki.ssh".into(), message: b"list".to_vec() })
+    );
 }
 
 #[test]
@@ -582,6 +586,8 @@ fn app_requests_out_of_range_are_refused() {
         (kind::APP_REMOVE, Writer::new().str8("Dice").finish()),
         (kind::APP_REMOVE, Writer::new().str8("com..dice").finish()),
         (kind::APP_REMOVE, Writer::new().str8("").finish()),
+        (kind::APP_MESSAGE, Writer::new().str8("SSH").bytes16(b"list").finish()),
+        (kind::APP_MESSAGE, Writer::new().str8("com.leviathan.maki.ssh").bytes16(&vec![0; MAX_APP_MESSAGE + 1]).finish()),
     ];
     for (k, body) in bad {
         let reply = ask(&mut d, k, body.clone());
@@ -628,4 +634,10 @@ fn app_replies_carry_only_what_the_answer_allows() {
     assert_eq!(r.str8().unwrap(), "é".repeat(127));
     let (k, body) = reply::app_remove(Approval::Denied);
     assert_eq!((k, body), (kind::APP_REMOVE | kind::REPLY, vec![Approval::Denied as u8]));
+
+    let (k, body) = reply::app_message(Approval::Approved, b"ok");
+    assert_eq!((k, body), (kind::APP_MESSAGE | kind::REPLY, vec![0, 2, 0, b'o', b'k']));
+    // no answer: nothing of one
+    let (_, body) = reply::app_message(Approval::Unavailable, b"ok");
+    assert_eq!(body, [Approval::Unavailable as u8, 0, 0]);
 }

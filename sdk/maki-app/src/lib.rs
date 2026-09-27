@@ -25,6 +25,12 @@
 //!
 //! The crate is a `cdylib`. Build it with `cargo build --release --target wasm32-unknown-unknown`, then pack and sign
 //! it with `maki pack`, or do both with `maki build`. `maki run` tries it on the computer.
+//!
+//! Some functions need a permission, which the app's `maki.toml` asks for with a line saying
+//! why, and the owner sees before installing it: `ask` (maki's own ask screen), `keys`
+//! (secrets of the app's own from the recovery phrase), `keyboard` (typing into the computer)
+//! and `link` (messages with software on the computer, through maki desktop). maki refuses an
+//! app that calls one without asking for its permission.
 
 #![no_std]
 
@@ -57,6 +63,13 @@ mod sys {
         pub fn random(ptr: *mut u8, len: usize);
         pub fn log(ptr: *const u8, len: usize);
         pub fn abort(ptr: *const u8, len: usize) -> !;
+        pub fn ask(ptr: *const u8, len: usize, timeout_s: i32) -> i32;
+        pub fn key_secret(lptr: *const u8, llen: usize, out: *mut u8) -> i32;
+        pub fn key_public(lptr: *const u8, llen: usize, out: *mut u8) -> i32;
+        pub fn key_sign(lptr: *const u8, llen: usize, mptr: *const u8, mlen: usize, out: *mut u8) -> i32;
+        pub fn type_text(ptr: *const u8, len: usize) -> i32;
+        pub fn link_read(ptr: *mut u8, cap: usize) -> i32;
+        pub fn link_reply(ptr: *const u8, len: usize) -> i32;
     }
 }
 
@@ -110,6 +123,9 @@ pub enum Event {
     Exit,
     /// The owner picked this of the app's menu items (see `menu`).
     Menu(u32),
+    /// A message from software on the computer (the `link` permission): `link::read` it, and
+    /// `link::reply`, before waiting again.
+    Message,
 }
 
 /// Why a maki function failed.
@@ -197,6 +213,7 @@ pub fn wait(timeout_ms: Option<u32>) -> Event {
         4 => Event::Shown,
         5 => Event::Hidden,
         6 => Event::Exit,
+        7 => Event::Message,
         n if n >= 0x100 => Event::Menu((n - 0x100) as u32),
         _ => Event::Timeout,
     }
@@ -260,6 +277,123 @@ pub mod storage {
     pub fn set_u32(key: &str, value: u32) -> Result<(), Error> { set(key, &value.to_le_bytes()) }
 }
 
+/// What the owner answered an `Ask`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Answer {
+    Yes,
+    No,
+    /// They let it time out, or maki couldn't ask (it's locked).
+    NoAnswer,
+}
+
+/// A question for the owner on maki's own ask screen, under the app's bar (the `ask`
+/// permission): `Ask::new("Sign in?").detail("as kara").answers("sign", "cancel").show()`. The
+/// app waits for the answer; it gets `Event::Hidden` and then `Event::Shown` around the ask.
+#[derive(Clone, Copy, Debug)]
+pub struct Ask<'a> {
+    question: &'a str,
+    detail: &'a str,
+    yes: &'a str,
+    no: &'a str,
+    timeout_s: u32,
+}
+
+impl<'a> Ask<'a> {
+    /// The question, up to 64 bytes.
+    pub fn new(question: &'a str) -> Self { Ask { question, detail: "", yes: "", no: "", timeout_s: 0 } }
+
+    /// A line more about it, up to 128 bytes.
+    pub fn detail(self, detail: &'a str) -> Self { Ask { detail, ..self } }
+
+    /// The answers' labels, up to 16 bytes each ("allow" and "deny" if not given).
+    pub fn answers(self, yes: &'a str, no: &'a str) -> Self { Ask { yes, no, ..self } }
+
+    /// How long the owner has, 5 to 120 seconds (30 if not given).
+    pub fn timeout(self, seconds: u32) -> Self { Ask { timeout_s: seconds, ..self } }
+
+    /// Shows it and waits. `Error::Invalid` for text too long or with control characters.
+    pub fn show(self) -> Result<Answer, Error> {
+        use core::fmt::Write;
+        let mut text = Buf::<{ 64 + 128 + 16 + 16 + 3 }>::new();
+        let _ = write!(text, "{}\n{}\n{}\n{}", self.question, self.detail, self.yes, self.no);
+        if text.len() != self.question.len() + self.detail.len() + self.yes.len() + self.no.len() + 3 {
+            return Err(Error::TooBig);
+        }
+        let code = unsafe { sys::ask(text.as_str().as_ptr(), text.len(), self.timeout_s.min(i32::MAX as u32) as i32) };
+        result(code).map(|a| match a {
+            0 => Answer::Yes,
+            1 => Answer::No,
+            _ => Answer::NoAnswer,
+        })
+    }
+}
+
+/// Secrets of the app's own, from maki's recovery phrase (the `keys` permission): different for
+/// every app, developer key and label, and the same on any maki restored from the phrase. A
+/// label (up to 32 bytes, "" is one) names one of the app's secrets. They exist only while maki
+/// is unlocked and has a phrase: `Error::Failed` otherwise.
+///
+/// An app that updates keeps its keys only if it's signed with the same developer key.
+pub mod keys {
+    use super::{result, sys, Error};
+
+    /// The 32-byte secret itself, for the app's own cryptography.
+    pub fn secret(label: &str) -> Result<[u8; 32], Error> {
+        let mut out = [0u8; 32];
+        result(unsafe { sys::key_secret(label.as_ptr(), label.len(), out.as_mut_ptr()) })?;
+        Ok(out)
+    }
+
+    /// The Ed25519 public key whose private key is the secret for `label`. maki holds the
+    /// private key and signs with it (`sign`), so the app needn't.
+    pub fn public_key(label: &str) -> Result<[u8; 32], Error> {
+        let mut out = [0u8; 32];
+        result(unsafe { sys::key_public(label.as_ptr(), label.len(), out.as_mut_ptr()) })?;
+        Ok(out)
+    }
+
+    /// An Ed25519 signature of `message` (up to 16 KiB) with the key for `label`.
+    pub fn sign(label: &str, message: &[u8]) -> Result<[u8; 64], Error> {
+        let mut out = [0u8; 64];
+        let code = unsafe { sys::key_sign(label.as_ptr(), label.len(), message.as_ptr(), message.len(), out.as_mut_ptr()) };
+        result(code)?;
+        Ok(out)
+    }
+}
+
+/// Typing into the computer as a USB keyboard (the `keyboard` permission), only while the app
+/// is in front, with "typing" in maki's bar meanwhile.
+pub mod keyboard {
+    use super::{result, sys, Error};
+
+    /// Types `text`: printable ASCII, newlines and tabs, up to 1024 bytes. `Error::Failed` if
+    /// maki isn't plugged into a computer, or the app isn't in front.
+    pub fn type_text(text: &str) -> Result<(), Error> {
+        result(unsafe { sys::type_text(text.as_ptr(), text.len()) }).map(|_| ())
+    }
+}
+
+/// Messages with software on the computer, through maki desktop (the `link` permission): the
+/// software sends one, the app gets `Event::Message`, reads it and replies, once, before it
+/// waits again (waiting again without replying tells the sender the app didn't answer). If the
+/// app isn't running, maki starts it without the screen to answer, and ends it once it's had
+/// nothing to do for a while; the owner can still open it meanwhile. Messages and replies are
+/// up to 4096 bytes, and mean whatever the app and the software agree.
+pub mod link {
+    use super::{result, sys, Error};
+
+    /// The message, copied into `buf` as far as it fits; its whole length. None if there's
+    /// none to read (no `Event::Message`, or it's been answered).
+    pub fn read(buf: &mut [u8]) -> Option<usize> {
+        result(unsafe { sys::link_read(buf.as_mut_ptr(), buf.len()) }).ok().map(|n| n as usize)
+    }
+
+    /// Answers the message.
+    pub fn reply(answer: &[u8]) -> Result<(), Error> {
+        result(unsafe { sys::link_reply(answer.as_ptr(), answer.len()) }).map(|_| ())
+    }
+}
+
 /// Milliseconds since the app started.
 pub fn millis() -> u64 { unsafe { sys::millis() as u64 } }
 
@@ -312,6 +446,10 @@ impl<const N: usize> Buf<N> {
     pub const fn new() -> Self { Buf { bytes: [0; N], len: 0 } }
 
     pub fn as_str(&self) -> &str { core::str::from_utf8(&self.bytes[..self.len]).unwrap_or("") }
+
+    pub fn len(&self) -> usize { self.len }
+
+    pub fn is_empty(&self) -> bool { self.len == 0 }
 
     pub fn clear(&mut self) { self.len = 0 }
 }

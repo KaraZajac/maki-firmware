@@ -7,6 +7,8 @@ description = "Make maki apps: pack and sign .maki bundles, inspect them, and ru
 [dependencies]
 maki-bundle = { path = "../../libs/maki-bundle" }
 maki-wasm = { path = "../../libs/maki-wasm" }
+# apps' keys in the simulator: from the BIP39 test phrase, as maki derives them from yours
+maki-seed = { path = "../../libs/maki-seed" }
 serde = { version = "1", features = ["derive"] }
 toml = "1"
 png = "0.18"

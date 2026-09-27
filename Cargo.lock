@@ -5219,6 +5219,7 @@ dependencies = [
  "num-traits",
  "pddb",
  "rkyv 0.8.8",
+ "usb-bao1x",
  "ux-api",
  "xous 0.9.70 (registry+https://github.com/rust-lang/crates.io-index)",
  "xous-api-log",
@@ -5443,11 +5444,14 @@ name = "maki-wasm"
 version = "0.1.0"
 dependencies = [
  "blitstr2",
+ "ed25519-dalek-compat",
  "log",
  "maki-bundle",
  "qrcode",
+ "sha2 0.10.8",
  "wasmi",
  "wat",
+ "zeroize",
 ]
 
 [[package]]

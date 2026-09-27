@@ -80,3 +80,24 @@ fn fido_keys_are_hkdf_of_the_seed() {
     let b = backup_key(&seed(&words, ""));
     assert!(all.windows(32).all(|w| w != b));
 }
+
+#[test]
+fn app_secrets_are_hkdf_of_the_seed_for_each_app_developer_and_label() {
+    // computed apart from this crate: RFC 5869 HKDF-SHA256 (salt "maki", info "app v1", the ID
+    // and the label each after its length) written out in Python over the test phrase's seed
+    let words: Vec<&str> =
+        "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about".split(' ').collect();
+    let s = seed(&words, "");
+    let dev = [0x11u8; 32];
+    let app = |id: &str, dev: &[u8; 32], label: &str| app_secret(&s, id, dev, label).unwrap().to_vec();
+    assert_eq!(app("com.example.ssh", &dev, "ssh"), hex("dece6d0a8e7730741701528e79f1adce0b7f90402aff947c8b38797bc36554c9"));
+    assert_eq!(app("com.example.ssh", &dev, "ssh 2"), hex("cf40e19734dafaae00a8282457b74b75a322f5fc104aaf08728a7599f1997c4c"));
+    assert_eq!(app("com.example.ssh", &[0x22; 32], "ssh"), hex("7990b5e4643b6154d487d8798fcf8d3903d3ff8ca81f4fe783823265aa8f24d3"));
+    assert_eq!(app("com.example.ssh", &dev, ""), hex("979d716e471d2ee39c13b6184e70359b7566cfb8d2b9535f00795ad881efa0cf"));
+    // the lengths keep one app's ID and label from running into another's
+    assert_ne!(app("com.example.ss", &dev, "hssh"), app("com.example.ssh", &dev, "ssh"));
+    // nothing shared with maki's own keys
+    assert_ne!(app("com.example.ssh", &dev, "ssh"), backup_key(&s).to_vec());
+    assert!(app_secret(&s, &"x".repeat(256), &dev, "ssh").is_none());
+    assert!(app_secret(&s, "com.example.ssh", &dev, &"x".repeat(256)).is_none());
+}

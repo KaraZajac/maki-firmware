@@ -83,6 +83,13 @@ pub enum KeysOp {
     /// Blocking scalar with the `State` last seen in `arg1`: answered with the state once it's
     /// different. Held rather than polled for.
     WaitChange = 22,
+    /// Blocking scalar: the first process to call this is the app host (at boot), and only it
+    /// may have `AppSecret`. Returns 1 to it.
+    ClaimApps = 23,
+    /// Memory message (mutable lend) with an `AppSecretRequest`: an installed app's secret
+    /// from the recovery phrase (`maki_seed::app_secret`), for the app host, once there's a
+    /// phrase and maki is unlocked.
+    AppSecret = 24,
 }
 
 /// A question about the Ethereum account, and its answer.
@@ -208,6 +215,19 @@ pub enum PinResult {
     /// Not six to twelve digits.
     BadPin,
     Failed,
+}
+
+/// An app's secret: which app (its ID and developer key) and which of its secrets (a label of
+/// the app's choosing); on the way back, the secret.
+#[derive(Debug, Default, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
+pub struct AppSecretRequest {
+    pub id: String,
+    /// 32 bytes
+    pub developer: Vec<u8>,
+    pub label: String,
+    /// 32 bytes, when `result` is `RESULT_OK`
+    pub secret: Vec<u8>,
+    pub result: u32,
 }
 
 /// `PinRequest::result` codes.
@@ -375,6 +395,29 @@ impl Keys {
             xous::send_message(self.conn, xous::Message::new_blocking_scalar(KeysOp::ClaimFido.to_usize().unwrap(), 0, 0, 0, 0)),
             Ok(xous::Result::Scalar1(1))
         )
+    }
+
+    /// Take the app host's role (at boot). See `KeysOp::ClaimApps`.
+    pub fn claim_apps(&self) -> bool {
+        matches!(
+            xous::send_message(self.conn, xous::Message::new_blocking_scalar(KeysOp::ClaimApps.to_usize().unwrap(), 0, 0, 0, 0)),
+            Ok(xous::Result::Scalar1(1))
+        )
+    }
+
+    /// An installed app's secret: for the app with this ID and developer key, and the app's own
+    /// label. The error is a `RESULT_` code: `RESULT_NOT_NOW` if maki is locked or this isn't the
+    /// app host, `RESULT_NO_PHRASE` before there's a phrase. Overwrite it when done with it.
+    pub fn app_secret(&self, id: &str, developer: &[u8; 32], label: &str) -> Result<[u8; 32], u32> {
+        let request =
+            AppSecretRequest { id: id.into(), developer: developer.to_vec(), label: label.into(), secret: Vec::new(), result: RESULT_FAILED };
+        let mut buf = Buffer::into_buf(request).map_err(|_| RESULT_FAILED)?;
+        buf.lend_mut(self.conn, KeysOp::AppSecret.to_u32().unwrap()).map_err(|_| RESULT_FAILED)?;
+        let answer = buf.to_original::<AppSecretRequest, _>().map_err(|_| RESULT_FAILED)?;
+        match answer.result {
+            RESULT_OK => answer.secret.as_slice().try_into().map_err(|_| RESULT_FAILED),
+            code => Err(code),
+        }
     }
 
     /// The FIDO authenticator's secrets, from the phrase: encryption key, authentication key,

@@ -15,6 +15,9 @@ wasmi = { version = "2.0", default-features = false, features = [
     "portable-dispatch",
 ] }
 maki-bundle = { path = "../maki-bundle" }
+# apps' Ed25519 keys (the keys permission): the Baochip build, as maki-bundle has it
+ed25519-dalek = { package = "ed25519-dalek-compat", path = "../../bao1x-boot/ed25519-dalek-compat", default-features = false, features = ["zeroize"] }
+zeroize = "1.8.1"
 # maki's own fonts, so apps look the same in the simulator as on maki
 blitstr2 = { path = "../blitstr2", features = ["board-baosec", "bao1x"] }
 qrcode = { version = "0.12", default-features = false }
@@ -27,3 +30,4 @@ trace = ["log"]
 
 [dev-dependencies]
 wat = "1"
+sha2 = { version = "0.10.8", default-features = false }

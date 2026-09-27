@@ -10,7 +10,7 @@ use std::rc::Rc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use maki_bundle::Manifest;
-use maki_wasm::{Canvas, Color, Event, Platform, Style, TOP, WIDTH};
+use maki_wasm::{Answer, Ask, Canvas, Color, Event, Platform, Style, TOP, WIDTH};
 
 /// maki's screen, 128 pixels square, true for light.
 pub type Screen = [[bool; WIDTH]; WIDTH];
@@ -76,12 +76,16 @@ fn clock() -> String {
 }
 
 /// One scripted step.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Press {
     Event(Event),
     /// Opens the menu (left and right together) and picks this: an app item, App info (just
     /// after the app's items) or Exit (after that).
     Menu(u32),
+    /// The owner's answer to the app's next ask.
+    Answer(Answer),
+    /// A message from the computer: the app's answer is printed.
+    Message(Vec<u8>),
 }
 
 /// `left,right*3,centre,menu:0,timeout,exit`
@@ -98,10 +102,17 @@ pub fn parse_presses(s: &str) -> Result<Vec<Press>, String> {
             "centre" | "center" | "c" => Press::Event(Event::Centre),
             "timeout" | "t" => Press::Event(Event::Timeout),
             "exit" => Press::Event(Event::Exit),
+            "yes" => Press::Answer(Answer::Yes),
+            "no" => Press::Answer(Answer::No),
+            m if m.starts_with("msg:") => Press::Message(m[4..].as_bytes().to_vec()),
             m if m.starts_with("menu:") => {
                 Press::Menu(m[5..].parse().map_err(|_| format!("bad menu item in {part}"))?)
             }
-            other => return Err(format!("no press \"{other}\": left, right, centre, timeout, menu:N or exit")),
+            other => {
+                return Err(format!(
+                    "no press \"{other}\": left, right, centre, timeout, menu:N, exit, yes or no for an ask, msg:TEXT for a message"
+                ))
+            }
         };
         out.extend(std::iter::repeat_n(press, times));
     }
@@ -118,7 +129,13 @@ pub struct Options {
     pub verified: bool,
     pub storage: Option<PathBuf>,
     pub sideloaded: bool,
+    /// The key the bundle is signed with: apps' keys depend on it, as on maki.
+    pub developer: [u8; 32],
 }
+
+/// The BIP39 test phrase, whose seed the simulator derives apps' keys from. Never for anything
+/// real: everyone knows it.
+const TEST_PHRASE: &str = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
 
 struct Shared {
     manifest: Manifest,
@@ -133,6 +150,10 @@ struct Shared {
     started: Instant,
     logs: Vec<String>,
     interactive: bool,
+    /// the test phrase's seed, worked out the first time an app asks for a key
+    seed: Option<[u8; 64]>,
+    /// the message the app was given and hasn't answered
+    message: Option<Vec<u8>>,
 }
 
 pub struct Sim(Rc<RefCell<Shared>>);
@@ -198,6 +219,8 @@ impl Sim {
             started: Instant::now(),
             logs: Vec::new(),
             interactive,
+            seed: None,
+            message: None,
         })))
     }
 
@@ -271,6 +294,41 @@ impl Sim {
         }
     }
 
+    /// An ask in the terminal: y or n, or Esc (or the time running out) for no answer.
+    fn interactive_ask(s: &mut Shared, ask: &Ask) -> Answer {
+        use crossterm::event::{poll, read, Event as Term, KeyCode, KeyEventKind};
+        let label = |l: &str, default: &str| if l.is_empty() { default.to_string() } else { l.to_string() };
+        let prompt = format!(
+            "ask: {} {} · y {} · n {} · {} s",
+            ask.question,
+            ask.detail,
+            label(&ask.yes, "allow"),
+            label(&ask.no, "deny"),
+            ask.timeout_s
+        );
+        s.draw_terminal(&prompt);
+        let deadline = Instant::now() + Duration::from_secs(ask.timeout_s as u64);
+        loop {
+            let left = deadline.saturating_duration_since(Instant::now());
+            if left.is_zero() || !poll(left).unwrap_or(false) {
+                if Instant::now() >= deadline {
+                    return Answer::NoAnswer;
+                }
+                continue;
+            }
+            let Ok(Term::Key(k)) = read() else { continue };
+            if k.kind != KeyEventKind::Press {
+                continue;
+            }
+            match k.code {
+                KeyCode::Char('y') => return Answer::Yes,
+                KeyCode::Char('n') => return Answer::No,
+                KeyCode::Esc => return Answer::NoAnswer,
+                _ => {}
+            }
+        }
+    }
+
     fn interactive_menu(s: &mut Shared) -> u32 {
         use crossterm::event::{read, Event as Term, KeyCode, KeyEventKind};
         let mut items = s.menu.clone();
@@ -305,14 +363,31 @@ impl Platform for Sim {
         if s.interactive {
             return Self::interactive_wait(&mut s, timeout);
         }
-        match s.script.pop_front() {
-            Some(Press::Event(e)) => e,
-            Some(Press::Menu(pick)) => {
-                let event = Self::menu_event(&mut s, pick);
-                s.queued.push_back(event);
-                Event::Hidden
-            }
-            None => Event::Exit,
+        loop {
+            return match s.script.pop_front() {
+                Some(Press::Event(e)) => e,
+                Some(Press::Menu(pick)) => {
+                    let event = Self::menu_event(&mut s, pick);
+                    s.queued.push_back(event);
+                    Event::Hidden
+                }
+                Some(Press::Answer(a)) => {
+                    eprintln!("script: {a:?}, but the app asked nothing: skipped");
+                    continue;
+                }
+                Some(Press::Message(m)) => {
+                    if s.message.take().is_some() {
+                        eprintln!("message: the app went on without answering");
+                    }
+                    if !s.manifest.permissions.iter().any(|(p, _)| *p == maki_bundle::Permission::Link) {
+                        eprintln!("message: refused, the app hasn't the link permission");
+                        continue;
+                    }
+                    s.message = Some(m);
+                    Event::Message
+                }
+                None => Event::Exit,
+            };
         }
     }
 
@@ -360,4 +435,75 @@ impl Platform for Sim {
     fn storage_delete(&mut self, key: &str) -> bool { self.0.borrow_mut().storage.remove(key).is_some() }
 
     fn storage_keys(&mut self) -> Vec<String> { self.0.borrow().storage.keys().cloned().collect() }
+
+    fn ask(&mut self, ask: &Ask) -> Answer {
+        let mut s = self.0.borrow_mut();
+        let answer = if s.interactive {
+            Self::interactive_ask(&mut s, ask)
+        } else {
+            match s.script.front() {
+                Some(Press::Answer(a)) => {
+                    let a = *a;
+                    s.script.pop_front();
+                    a
+                }
+                _ => Answer::NoAnswer,
+            }
+        };
+        let line = format!("ask \"{}\" ({}): {answer:?}", ask.question, ask.detail);
+        if !s.interactive {
+            eprintln!("{line}");
+        }
+        s.logs.push(line);
+        // as on maki, the app was hidden while the ask showed
+        s.queued.push_back(Event::Hidden);
+        s.queued.push_back(Event::Shown);
+        answer
+    }
+
+    /// From the BIP39 test phrase, never the owner's: the same keys maki would give this app on
+    /// a maki set up with that phrase.
+    fn app_secret(&mut self, label: &str) -> Option<[u8; 32]> {
+        let mut s = self.0.borrow_mut();
+        if s.seed.is_none() {
+            let words: Vec<&str> = TEST_PHRASE.split(' ').collect();
+            s.seed = Some(maki_seed::seed(&words, ""));
+            let note = "keys: from the BIP39 test phrase (abandon ... about), as on a maki set up with it: never use them for anything real";
+            if !s.interactive {
+                eprintln!("{note}");
+            }
+            s.logs.push(note.into());
+        }
+        let (seed, id, developer) = (s.seed.unwrap(), s.manifest.id.clone(), s.options.developer);
+        maki_seed::app_secret(&seed, &id, &developer, label)
+    }
+
+    fn message(&mut self) -> Option<Vec<u8>> { self.0.borrow().message.clone() }
+
+    fn reply(&mut self, reply: &[u8]) -> bool {
+        let mut s = self.0.borrow_mut();
+        if s.message.take().is_none() {
+            return false;
+        }
+        let shown = match std::str::from_utf8(reply) {
+            Ok(text) if !text.chars().any(|c| c.is_control() && c != '\n') => format!("{text:?}"),
+            _ => reply.iter().map(|b| format!("{b:02x}")).collect(),
+        };
+        let line = format!("answer: {shown}");
+        if !s.interactive {
+            eprintln!("{line}");
+        }
+        s.logs.push(line);
+        true
+    }
+
+    fn type_text(&mut self, text: &str) -> bool {
+        let mut s = self.0.borrow_mut();
+        let line = format!("typed: {text:?}");
+        if !s.interactive {
+            eprintln!("{line}");
+        }
+        s.logs.push(line);
+        true
+    }
 }

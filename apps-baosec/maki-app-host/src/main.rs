@@ -394,6 +394,11 @@ fn main() -> ! {
     let sid = xns.register_name(SERVER_NAME_APP_HOST, None).expect("can't register server");
     log::info!("app host ready");
     let shared = Arc::new(Mutex::new(Shared::default()));
+    // the app host's role with maki-keys, before anything else can claim it: only it may have
+    // apps' secrets
+    if !maki_keys::Keys::new(&xns).map(|k| k.claim_apps()).unwrap_or(false) {
+        log::error!("another process claimed the app host's role with maki-keys first");
+    }
     let (to_runner, from_main) = mpsc::channel();
     // Three threads besides this one, each with a small stack.
     std::thread::Builder::new()
@@ -540,6 +545,25 @@ fn main() -> ! {
                 let Ok(req) = request else { continue };
                 // answered by the worker, once the owner decides
                 to_worker.send(Work::Remove(msg, req)).ok();
+            }
+            Some(HostOp::Message) => {
+                let request = {
+                    let buffer = unsafe { Buffer::from_memory_message(msg.body.memory_message().unwrap()) };
+                    buffer.to_original::<AppMessage, _>()
+                };
+                let Ok(req) = request else { continue };
+                let (unlocked, slot) = {
+                    let sh = shared.lock().unwrap();
+                    (sh.unlocked, sh.slots.iter().position(|s| s.as_ref().is_some_and(|s| s.id == req.id)))
+                };
+                match slot {
+                    _ if !unlocked => runner::answer(msg, RESULT_LOCKED, &[]),
+                    None => runner::answer(msg, RESULT_NO_APP, &[]),
+                    // answered once the app does: the runner starts it if need be
+                    Some(slot) => {
+                        to_runner.send(ToRunner::Message(slot, msg, req.message)).ok();
+                    }
+                }
             }
             Some(HostOp::TimeState) => {
                 if let Some(s) = msg.body.scalar_message() {

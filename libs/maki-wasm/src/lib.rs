@@ -6,6 +6,9 @@
 //! `link` defines, API version 1), and has no start function. `maki_main` runs until it
 //! returns, or until the app stops: it runs out of fuel between two waits (not responding),
 //! traps, calls `abort`, or waits again after being told to exit.
+//!
+//! Some functions need a permission (`GATED`): an app may import them only if its manifest
+//! asks for that permission, and maki refuses one that imports them without.
 
 mod canvas;
 
@@ -13,6 +16,7 @@ use std::collections::BTreeMap;
 use std::time::Duration;
 
 pub use canvas::{Canvas, Color, Style, HEIGHT, MAX_BLIT, TOP, WIDTH};
+use ed25519_dalek::Signer;
 use maki_bundle::{Kind, Manifest, Permission};
 use wasmi::{Caller, Config, Engine, Error, Extern, Linker, Memory, Module, Store, StoreLimits, StoreLimitsBuilder};
 
@@ -37,6 +41,32 @@ const MAX_TEXT: usize = 1024;
 const MAX_LOG: usize = 256;
 const MAX_RANDOM: usize = 4096;
 const MAX_QR: usize = 1024;
+/// A secret's label: the app's name for one of its secrets.
+pub const MAX_LABEL: usize = 32;
+/// The most an app has signed at once.
+pub const MAX_SIGN: usize = 16 * 1024;
+/// The most an app types at once.
+pub const MAX_TYPE: usize = 1024;
+/// The biggest message to or from an app over the link.
+pub const MAX_MESSAGE: usize = 4096;
+/// An ask's question, detail and answer labels, in bytes.
+pub const MAX_QUESTION: usize = 64;
+pub const MAX_DETAIL: usize = 128;
+pub const MAX_ANSWER_LABEL: usize = 16;
+/// How long an ask waits, if the app doesn't say, and the most it may.
+pub const ASK_TIMEOUT_S: u32 = 30;
+pub const MAX_ASK_TIMEOUT_S: u32 = 120;
+
+/// maki's functions that need a permission, and which.
+pub const GATED: &[(&str, Permission)] = &[
+    ("ask", Permission::Ask),
+    ("key_secret", Permission::Keys),
+    ("key_public", Permission::Keys),
+    ("key_sign", Permission::Keys),
+    ("type_text", Permission::Keyboard),
+    ("link_read", Permission::Link),
+    ("link_reply", Permission::Link),
+];
 
 /// What `wait` hands the app.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -54,6 +84,9 @@ pub enum Event {
     Exit,
     /// The owner picked this of the app's menu items.
     Menu(u32),
+    /// A message from software on the computer (the link permission): read it, and reply,
+    /// before waiting again.
+    Message,
 }
 
 impl Event {
@@ -66,7 +99,39 @@ impl Event {
             Event::Shown => 4,
             Event::Hidden => 5,
             Event::Exit => 6,
+            Event::Message => 7,
             Event::Menu(i) => 0x100 + i.min(0xff) as i32,
+        }
+    }
+}
+
+/// A question for the owner, on maki's own screen (the ask permission).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Ask {
+    pub question: String,
+    /// A line more about it; may be empty.
+    pub detail: String,
+    /// The answers' labels; empty for "allow" and "deny".
+    pub yes: String,
+    pub no: String,
+    pub timeout_s: u32,
+}
+
+/// What the owner said.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Answer {
+    Yes,
+    No,
+    /// They didn't answer in time, or maki couldn't ask (it's locked).
+    NoAnswer,
+}
+
+impl Answer {
+    pub fn code(self) -> i32 {
+        match self {
+            Answer::Yes => 0,
+            Answer::No => 1,
+            Answer::NoAnswer => 2,
         }
     }
 }
@@ -90,6 +155,36 @@ pub trait Platform {
     /// Whether there was such a key.
     fn storage_delete(&mut self, key: &str) -> bool;
     fn storage_keys(&mut self) -> Vec<String>;
+    /// Asks the owner (the ask permission) and waits for the answer. A platform that can't
+    /// ask gets no answer.
+    fn ask(&mut self, _ask: &Ask) -> Answer { Answer::NoAnswer }
+    /// The app's secret for `label` (the keys permission): from the recovery phrase, different
+    /// for every app, developer and label, and the same on any maki restored from the phrase.
+    /// `None` if there's none to have (maki is locked, or has no phrase yet).
+    fn app_secret(&mut self, _label: &str) -> Option<[u8; 32]> { None }
+    /// Types `text` (printable ASCII, newlines and tabs) into the computer as a USB keyboard
+    /// (the keyboard permission). Whether it did: maki types only for the app in front, and
+    /// only when plugged into a computer.
+    fn type_text(&mut self, _text: &str) -> bool { false }
+    /// The message the last `Event::Message` brought (the link permission), until it's
+    /// answered.
+    fn message(&mut self) -> Option<Vec<u8>> { None }
+    /// Answers that message. Whether there was one to answer.
+    fn reply(&mut self, _reply: &[u8]) -> bool { false }
+}
+
+/// Permissions an app has: those its manifest asks for (each of which maki offers).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Granted(u8);
+
+impl Granted {
+    pub const NONE: Granted = Granted(0);
+
+    pub fn of(permissions: &[Permission]) -> Granted {
+        Granted(permissions.iter().fold(0, |bits, p| bits | 1 << (*p as u8)))
+    }
+
+    pub fn has(self, p: Permission) -> bool { self.0 & 1 << (p as u8) != 0 }
 }
 
 /// What an app may use.
@@ -101,6 +196,8 @@ pub struct Limits {
     pub storage: usize,
     /// Work between two waits; running out means the app isn't responding.
     pub fuel: u64,
+    /// What it may do beyond what every app may.
+    pub granted: Granted,
 }
 
 /// The most memory maki gives an app, whatever its manifest asks for.
@@ -120,13 +217,13 @@ impl Limits {
         if storage_kib > MAX_STORAGE_KIB {
             return Err(format!("asks for {storage_kib} KiB of storage; maki gives an app {MAX_STORAGE_KIB} KiB at most"));
         }
-        Ok(Limits { memory: memory_kib as usize * 1024, storage: storage_kib as usize * 1024, fuel: FUEL })
+        Ok(Limits { memory: memory_kib as usize * 1024, storage: storage_kib as usize * 1024, fuel: FUEL, granted: Granted::NONE })
     }
 }
 
-/// The permissions this host can give, beyond what every app has. None yet: they come with
-/// the functions that use them.
-pub const PERMISSIONS: &[Permission] = &[];
+/// The permissions this host can give, beyond what every app has. The rest come with the
+/// functions that use them.
+pub const PERMISSIONS: &[Permission] = &[Permission::Ask, Permission::Link, Permission::Keys, Permission::Keyboard];
 
 /// Whether maki takes this app, and what it gives it if so: a WebAssembly app for a host API
 /// this maki has, asking only for permissions it offers and for no more than it gives an app,
@@ -153,7 +250,9 @@ pub fn load(manifest: &Manifest, code: &[u8]) -> Result<Loaded, String> {
     if let Some((p, _)) = manifest.permissions.iter().find(|(p, _)| !PERMISSIONS.contains(p)) {
         return Err(format!("it asks to {}, which this maki doesn't offer yet", p.title().to_lowercase()));
     }
-    let limits = Limits::for_app(manifest.memory_kib, manifest.storage_kib)?;
+    let mut limits = Limits::for_app(manifest.memory_kib, manifest.storage_kib)?;
+    let asked: Vec<Permission> = manifest.permissions.iter().map(|(p, _)| *p).collect();
+    limits.granted = Granted::of(&asked);
     let loaded = compile(code, limits)?;
     instantiate(&loaded, Box::new(Nothing))?;
     Ok(loaded)
@@ -259,6 +358,52 @@ fn color(v: i32) -> Result<Color, Error> { Color::from_i32(v).ok_or_else(|| trap
 fn style(v: i32) -> Result<Style, Error> { Style::from_i32(v).ok_or_else(|| trap(format_args!("no text style {v}"))) }
 
 fn key_ok(key: &str) -> bool { !key.is_empty() && key.len() <= MAX_KEY && !key.chars().any(|c| c.is_control()) }
+
+/// A gated function called without its permission. `compile` refuses apps that import one
+/// they didn't ask for, so this is a second line.
+fn permitted(c: &Caller<'_, State>, p: Permission, what: &str) -> Result<(), Error> {
+    if c.data().limits.granted.has(p) {
+        Ok(())
+    } else {
+        Err(trap(format_args!("{what} needs the {} permission", p.name())))
+    }
+}
+
+/// A secret's label, or `None` if it's not one (control characters).
+fn label(c: &Caller<'_, State>, ptr: i32, len: i32, what: &str) -> Result<Option<String>, Error> {
+    let label = read_str(c, ptr, len, MAX_LABEL, what)?;
+    Ok((!label.chars().any(|ch| ch.is_control())).then_some(label))
+}
+
+/// "question\ndetail\nyes\nno", the last three optional, as `ask` takes it.
+fn parse_ask(text: &str, timeout_s: i32) -> Option<Ask> {
+    let parts: Vec<&str> = text.split('\n').collect();
+    if parts.len() > 4 || parts.iter().any(|p| p.chars().any(|ch| ch.is_control())) {
+        return None;
+    }
+    let part = |i: usize| parts.get(i).copied().unwrap_or("").to_string();
+    let ask = Ask {
+        question: part(0),
+        detail: part(1),
+        yes: part(2),
+        no: part(3),
+        timeout_s: if timeout_s <= 0 { ASK_TIMEOUT_S } else { (timeout_s as u32).clamp(5, MAX_ASK_TIMEOUT_S) },
+    };
+    let fits = !ask.question.trim().is_empty()
+        && ask.question.len() <= MAX_QUESTION
+        && ask.detail.len() <= MAX_DETAIL
+        && ask.yes.len() <= MAX_ANSWER_LABEL
+        && ask.no.len() <= MAX_ANSWER_LABEL;
+    fits.then_some(ask)
+}
+
+/// The app's Ed25519 key for `label`: its secret for that label is the key's seed.
+fn signing_key(platform: &mut dyn Platform, label: &str) -> Option<ed25519_dalek::SigningKey> {
+    let mut secret = platform.app_secret(label)?;
+    let key = ed25519_dalek::SigningKey::from_bytes(&secret);
+    zeroize::Zeroize::zeroize(&mut secret);
+    Some(key)
+}
 
 /// maki's functions, as the `maki` import module.
 fn link(linker: &mut Linker<State>) -> Result<(), Error> {
@@ -457,6 +602,86 @@ fn link(linker: &mut Linker<State>) -> Result<(), Error> {
         c.data_mut().aborted = Some(message);
         Err(trap("aborted"))
     })?;
+    // the ask permission: "question\ndetail\nyes\nno" (the last three optional), and how long
+    // to wait (0 or less: 30 s; at most 120). 0 yes, 1 no, 2 no answer.
+    linker.func_wrap(M, "ask", |mut c: Caller<'_, State>, ptr: i32, len: i32, timeout_s: i32| -> Result<i32, Error> {
+        permitted(&c, Permission::Ask, "ask")?;
+        let most = MAX_QUESTION + MAX_DETAIL + 2 * MAX_ANSWER_LABEL + 3;
+        let text = read_str(&c, ptr, len, most, "ask")?;
+        let Some(ask) = parse_ask(&text, timeout_s) else { return Ok(INVALID) };
+        let answer = c.data_mut().platform.ask(&ask);
+        // the owner's time isn't the app's work
+        let fuel = c.data().limits.fuel;
+        c.set_fuel(fuel)?;
+        Ok(answer.code())
+    })?;
+    // the keys permission: the app's 32-byte secret for a label, and the Ed25519 key made from
+    // it, which maki holds and signs with, so the app needn't carry the key itself
+    linker.func_wrap(
+        M,
+        "key_secret",
+        |mut c: Caller<'_, State>, lptr: i32, llen: i32, out: i32| -> Result<i32, Error> {
+            permitted(&c, Permission::Keys, "key_secret")?;
+            let Some(label) = label(&c, lptr, llen, "key_secret")? else { return Ok(INVALID) };
+            let Some(mut secret) = c.data_mut().platform.app_secret(&label) else { return Ok(FAILED) };
+            let written = write(&mut c, out, &secret, "key_secret");
+            zeroize::Zeroize::zeroize(&mut secret);
+            written.map(|_| 0)
+        },
+    )?;
+    linker.func_wrap(
+        M,
+        "key_public",
+        |mut c: Caller<'_, State>, lptr: i32, llen: i32, out: i32| -> Result<i32, Error> {
+            permitted(&c, Permission::Keys, "key_public")?;
+            let Some(label) = label(&c, lptr, llen, "key_public")? else { return Ok(INVALID) };
+            let Some(key) = signing_key(c.data_mut().platform.as_mut(), &label) else { return Ok(FAILED) };
+            write(&mut c, out, &key.verifying_key().to_bytes(), "key_public").map(|_| 0)
+        },
+    )?;
+    linker.func_wrap(
+        M,
+        "key_sign",
+        |mut c: Caller<'_, State>, lptr: i32, llen: i32, mptr: i32, mlen: i32, out: i32| -> Result<i32, Error> {
+            permitted(&c, Permission::Keys, "key_sign")?;
+            let Some(label) = label(&c, lptr, llen, "key_sign")? else { return Ok(INVALID) };
+            if mlen as u32 as usize > MAX_SIGN {
+                return Ok(TOO_BIG);
+            }
+            let message = read(&c, mptr, mlen, MAX_SIGN, "key_sign")?;
+            let Some(key) = signing_key(c.data_mut().platform.as_mut(), &label) else { return Ok(FAILED) };
+            write(&mut c, out, &key.sign(&message).to_bytes(), "key_sign").map(|_| 0)
+        },
+    )?;
+    // the keyboard permission: printable ASCII, newlines and tabs
+    linker.func_wrap(M, "type_text", |mut c: Caller<'_, State>, ptr: i32, len: i32| -> Result<i32, Error> {
+        permitted(&c, Permission::Keyboard, "type_text")?;
+        if len as u32 as usize > MAX_TYPE {
+            return Ok(TOO_BIG);
+        }
+        let text = read_str(&c, ptr, len, MAX_TYPE, "type_text")?;
+        if !text.chars().all(|ch| ch == '\n' || ch == '\t' || (' '..='~').contains(&ch)) {
+            return Ok(INVALID);
+        }
+        Ok(if c.data_mut().platform.type_text(&text) { 0 } else { FAILED })
+    })?;
+    // the link permission: the message the last Message event brought, copied into the app's
+    // buffer as far as it fits (its whole length returned), and the app's answer to it
+    linker.func_wrap(M, "link_read", |mut c: Caller<'_, State>, ptr: i32, cap: i32| -> Result<i32, Error> {
+        permitted(&c, Permission::Link, "link_read")?;
+        let Some(message) = c.data_mut().platform.message() else { return Ok(NOT_FOUND) };
+        let n = message.len().min(cap.max(0) as usize);
+        write(&mut c, ptr, &message[..n], "link_read")?;
+        Ok(message.len() as i32)
+    })?;
+    linker.func_wrap(M, "link_reply", |mut c: Caller<'_, State>, ptr: i32, len: i32| -> Result<i32, Error> {
+        permitted(&c, Permission::Link, "link_reply")?;
+        if len as u32 as usize > MAX_MESSAGE {
+            return Ok(TOO_BIG);
+        }
+        let reply = read(&c, ptr, len, MAX_MESSAGE, "link_reply")?;
+        Ok(if c.data_mut().platform.reply(&reply) { 0 } else { NOT_FOUND })
+    })?;
     Ok(())
 }
 
@@ -509,6 +734,14 @@ fn compile(code: &[u8], limits: Limits) -> Result<Loaded, String> {
     for import in module.imports() {
         if import.module() != "maki" {
             return Err(format!("uses {}.{}, which maki doesn't have", import.module(), import.name()));
+        }
+        if let Some((name, p)) = GATED.iter().find(|(name, _)| *name == import.name()) {
+            if !limits.granted.has(*p) {
+                return Err(format!(
+                    "uses maki.{name}, which needs the {} permission, and its manifest doesn't ask for it",
+                    p.name()
+                ));
+            }
         }
     }
     Ok(Loaded { engine, module, limits })

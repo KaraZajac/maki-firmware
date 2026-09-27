@@ -46,6 +46,8 @@ pub mod kind {
     pub const APP_INSTALL: u8 = 0x51;
     /// An app to remove, answered once the owner decides.
     pub const APP_REMOVE: u8 = 0x52;
+    /// A message for an app with the link permission, answered with the app's reply.
+    pub const APP_MESSAGE: u8 = 0x53;
     pub const REPLY: u8 = 0x80;
     pub const ERROR: u8 = 0x7f;
 }

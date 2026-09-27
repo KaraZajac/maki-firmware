@@ -6,8 +6,9 @@ you can install"). Anyone can build one and sideload it through maki desktop; ma
 owner what it is, where it's from and what it may do before installing it, and a sideloaded
 app carries a mark in maki's top bar for as long as it's installed.
 
-This directory has the Rust crate apps are written with (`maki-app`), three examples, and the
-`maki` tool that packs, signs, checks and simulates them.
+This directory has the Rust crate apps are written with (`maki-app`), five examples (Hello,
+Dice, Tally; Signer, which uses permissions; and SSH, maki's SSH key, which answers maki
+desktop's SSH agent), and the `maki` tool that packs, signs, checks and simulates them.
 
 ## Quick start
 
@@ -33,9 +34,12 @@ you: what the app is, that it's sideloaded, your developer key (compare it with 
 printed), what it may do, and "install". Updates go the same way.
 
 In the simulator: left and right arrows are maki's left and right, enter is the centre, `m`
-opens the menu (on maki, left and right together), `q` leaves. `--press left,centre*3,menu:0`
-runs presses instead, `--shot out.png` saves the last frame, `--storage file` keeps the app's
-storage between runs.
+opens the menu (on maki, left and right together), `q` leaves; when the app asks, `y` or `n`
+answers. `--press left,centre*3,menu:0` runs presses instead (with `yes` or `no` for each
+ask, and `msg:TEXT` to send the app a message, whose answer is printed), `--shot out.png` saves the last frame, `--storage file` keeps the app's storage between
+runs. Typing is printed rather than typed, and an app's keys come from the BIP39 test phrase
+("abandon" eleven times, then "about"): the keys maki would give it with that phrase, never
+anything you'd use for real.
 
 ## An app
 
@@ -52,7 +56,8 @@ backup = true                # its data in maki's backup, unless the owner says 
 description = "Rolls dice."
 icon = "icon.png"            # 64x64, as it should look on maki: light shapes on dark
 
-[permissions]                # none yet: they come with the functions that use them
+[permissions]                # each with why, in your words: the owner reads it at install
+keys = "For a signing key of its own."
 ```
 
 ```rust
@@ -96,6 +101,30 @@ The app draws, then waits for the next event, and returns from `main` when told 
   `time_verified()`: whether it was checked against Roughtime rather than taken from the computer.
 - **Randomness** from maki's TRNG: `random`, `random_below`.
 - `log` for maki's debug log, and `abort` to stop with a message on screen (a panic does too).
+
+And with a permission, which the manifest asks for with a line saying why (maki shows the owner
+the line, and what the permission could do, before installing; it refuses an app that calls a
+function whose permission it didn't ask for):
+
+- **`ask`**: `Ask::new("Sign in?").detail("as kara").answers("sign", "cancel").show()` puts the
+  question on maki's own ask screen, under the app's bar, and waits: `Yes`, `No`, or `NoAnswer`
+  if the owner lets it time out (30 s unless `.timeout(s)` says, up to 120). The app gets
+  `Hidden` and `Shown` around it.
+- **`keys`**: secrets of the app's own from maki's recovery phrase, named by a label (up to 32
+  bytes): `keys::secret(label)` (32 bytes), or the Ed25519 key made from it, which maki holds and
+  signs with, `keys::public_key(label)` and `keys::sign(label, message)`. Different for every
+  app, developer key and label; the same on any maki restored from the phrase; none while maki
+  is locked. An update keeps them only if it's signed with the same developer key.
+- **`keyboard`**: `keyboard::type_text(text)` types printable ASCII, newlines and tabs (1024
+  bytes at a time) into the computer as a USB keyboard, while the app is in front, with "typing"
+  in maki's bar. The owner is warned at install: it could type commands.
+- **`link`**: messages with software on the computer, through maki desktop. The software sends
+  one (maki desktop's local socket takes `{"id":1,"type":"appMessage","app":"your.app.id",
+  "data":"<base64>"}`), the app gets `Event::Message`, `link::read`s it and `link::reply`s once
+  (up to 4096 bytes each way; what they mean is between the app and the software). If the app
+  isn't running, maki starts it without the screen to answer, unless another app is open, and
+  ends it once it's had nothing to do for 30 s; it can still `Ask` meanwhile, and the owner can
+  open it. The SSH example is one: maki desktop's SSH agent sends it ssh's requests.
 
 Left and right pressed together are always maki's: they open the app's menu, which ends with
 App info (where it's from, its permissions, its storage, whether it's backed up, Remove) and
