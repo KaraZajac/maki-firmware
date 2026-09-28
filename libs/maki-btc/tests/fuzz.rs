@@ -70,10 +70,10 @@ fn nothing_the_computer_sends_panics_the_wallet() {
             if let Ok(mut psbt) = Psbt::parse(&input) {
                 parsed += 1;
                 let _ = psbt.serialize();
-                if wallet::review(&psbt, &account).is_ok() {
+                if wallet::review(&psbt, std::slice::from_ref(&account)).is_ok() {
                     reviewed += 1;
                 }
-                let _ = wallet::sign(&mut psbt, &account);
+                let _ = wallet::sign(&mut psbt, std::slice::from_ref(&account), &[0; 32]);
             }
         }));
         assert!(outcome.is_ok(), "panicked on {:02x?}", input);

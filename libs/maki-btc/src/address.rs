@@ -67,6 +67,14 @@ pub fn p2wpkh_address(public_key: &[u8; 33], network: Network) -> String {
     address(&p2wpkh_script(public_key), network).expect("P2WPKH always has an address")
 }
 
+/// The output script that pays a taproot output key (P2TR): witness v1, the key's x.
+pub fn p2tr_script(output_key: &[u8; 32]) -> Vec<u8> {
+    let mut s = Vec::with_capacity(34);
+    s.extend_from_slice(&[0x51, 0x20]);
+    s.extend_from_slice(output_key);
+    s
+}
+
 /// The address an output script pays, or None for a script with no standard address (shown to
 /// the owner as raw script instead).
 pub fn address(script: &[u8], network: Network) -> Option<String> {

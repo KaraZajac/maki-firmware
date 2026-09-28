@@ -16,8 +16,14 @@ pub const IN_PARTIAL_SIG: u8 = 0x02;
 pub const IN_SIGHASH_TYPE: u8 = 0x03;
 pub const IN_BIP32_DERIVATION: u8 = 0x06;
 pub const IN_TAP_KEY_SIG: u8 = 0x13;
+pub const IN_TAP_SCRIPT_SIG: u8 = 0x14;
+pub const IN_TAP_LEAF_SCRIPT: u8 = 0x15;
 pub const IN_TAP_BIP32_DERIVATION: u8 = 0x16;
+pub const IN_TAP_INTERNAL_KEY: u8 = 0x17;
+pub const IN_TAP_MERKLE_ROOT: u8 = 0x18;
 pub const OUT_BIP32_DERIVATION: u8 = 0x02;
+pub const OUT_TAP_INTERNAL_KEY: u8 = 0x05;
+pub const OUT_TAP_BIP32_DERIVATION: u8 = 0x07;
 
 /// A PSBT is at most this big: the largest message maki takes in.
 pub const MAX_PSBT: usize = 512 * 1024;
@@ -112,6 +118,14 @@ impl Psbt {
         out
     }
 
+    /// Whether an input or output carries taproot data (BIP371): only then is the taproot
+    /// account worth deriving to check the PSBT against.
+    pub fn has_taproot(&self) -> bool {
+        let tap_in = |p: &Pair| matches!(p.key.first(), Some(&(IN_TAP_KEY_SIG..=IN_TAP_MERKLE_ROOT)));
+        let tap_out = |p: &Pair| matches!(p.key.first(), Some(&(OUT_TAP_INTERNAL_KEY | OUT_TAP_BIP32_DERIVATION)));
+        self.inputs.iter().flatten().any(tap_in) || self.outputs.iter().flatten().any(tap_out)
+    }
+
     /// An input's value for a key that's just its type.
     pub fn input(&self, i: usize, key_type: u8) -> Option<&[u8]> {
         self.inputs.get(i)?.iter().find(|p| p.key == [key_type]).map(|p| p.value.as_slice())
@@ -135,4 +149,18 @@ pub fn parse_derivation(value: &[u8]) -> Option<([u8; 4], Vec<u32>)> {
     let fp = [value[0], value[1], value[2], value[3]];
     let path = value[4..].chunks(4).map(|c| u32::from_le_bytes(c.try_into().unwrap())).collect();
     Some((fp, path))
+}
+
+/// A taproot BIP32 derivation value (BIP371): the leaf hashes the key signs for, then the master
+/// key's fingerprint and the path. The number of leaves, the fingerprint and the path.
+pub fn parse_tap_derivation(value: &[u8]) -> Option<(u64, [u8; 4], Vec<u32>)> {
+    let mut c = Cursor::new(value);
+    let leaves = c.varint().ok()?;
+    if leaves > 1_000 {
+        return None;
+    }
+    c.take(leaves as usize * 32).ok()?;
+    let rest = c.take(value.len() - c.position()).ok()?;
+    let (fp, path) = parse_derivation(rest)?;
+    Some((leaves, fp, path))
 }

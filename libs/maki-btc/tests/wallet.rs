@@ -227,7 +227,7 @@ impl Fixture {
 
     fn ours(&self) -> Psbt { Psbt::parse(&self.psbt.serialize()).unwrap() }
 
-    fn review(&self) -> Result<wallet::Review, Error> { wallet::review(&self.ours(), &self.account) }
+    fn review(&self) -> Result<wallet::Review, Error> { wallet::review(&self.ours(), std::slice::from_ref(&self.account)) }
 
     fn fingerprint(&self) -> Fingerprint { self.master.fingerprint(&self.secp) }
 }
@@ -258,7 +258,7 @@ fn review_shows_payments_change_and_fee() {
 fn signatures_match_rust_bitcoins_and_verify() {
     let f = Fixture::new();
     let mut ours = f.ours();
-    assert_eq!(wallet::sign(&mut ours, &f.account).unwrap(), 2);
+    assert_eq!(wallet::sign(&mut ours, std::slice::from_ref(&f.account), &[0; 32]).unwrap(), 2);
     let signed = BPsbt::deserialize(&ours.serialize()).unwrap();
 
     let mut theirs = f.psbt.clone();
@@ -354,12 +354,12 @@ fn inputs_that_arent_this_wallets_are_refused() {
     let f = Fixture::new();
     let stranger = Account::from_seed(&[9u8; 64], Network::Bitcoin).unwrap();
     let mut psbt = f.ours();
-    assert_eq!(wallet::sign(&mut psbt, &stranger), Err(Error::NotOurs(0)));
+    assert_eq!(wallet::sign(&mut psbt, std::slice::from_ref(&stranger), &[0; 32]), Err(Error::NotOurs(0)));
     assert_eq!(psbt.serialize(), f.psbt.serialize());
 
     // the testnet wallet doesn't sign for bitcoin's
     let testnet = Account::from_seed(&seed(ABANDON), Network::Testnet).unwrap();
-    assert_eq!(wallet::review(&f.ours(), &testnet), Err(Error::NotOurs(0)));
+    assert_eq!(wallet::review(&f.ours(), std::slice::from_ref(&testnet)), Err(Error::NotOurs(0)));
 }
 
 #[test]
@@ -400,16 +400,6 @@ fn outputs_beyond_the_inputs_are_refused() {
     assert_eq!(f.review(), Err(Error::NegativeFee));
     f.psbt.unsigned_tx.output[0].value = Amount::from_sat(u64::MAX - 10);
     assert_eq!(f.review(), Err(Error::Amount));
-}
-
-#[test]
-fn taproot_inputs_are_refused_for_now() {
-    let mut f = Fixture::new();
-    let (x_only, _) = f.master.private_key.public_key(&f.secp).x_only_public_key();
-    let fp = f.fingerprint();
-    f.psbt.inputs[0].tap_internal_key = Some(x_only);
-    f.psbt.inputs[0].tap_key_origins.insert(x_only, (vec![], (fp, key_path(0, 0))));
-    assert_eq!(f.review(), Err(Error::Taproot(0)));
 }
 
 #[test]
@@ -508,8 +498,9 @@ fn the_review_shows_each_payment_then_change_then_the_fee() {
 fn refusals_say_why() {
     assert_eq!(
         Error::NoPreviousTx(1).to_string(),
-        "input 1 doesn't come with the transaction it spends (the PSBT needs non_witness_utxo)"
+        "input 1 doesn't come with what it spends (the PSBT needs non_witness_utxo, or for taproot witness_utxo)"
     );
+    assert_eq!(Error::ScriptPath(2).to_string(), "input 2 spends a taproot script, and maki signs with its key alone");
     assert!(Error::NotOurs(0).to_string().starts_with("input 0 isn't this wallet's"));
 }
 
@@ -525,7 +516,7 @@ fn write_fixtures() {
     std::fs::create_dir_all(FIXTURES).unwrap();
     std::fs::write(format!("{FIXTURES}/abandon-unsigned.psbt"), f.psbt.serialize()).unwrap();
     let mut psbt = f.ours();
-    wallet::sign(&mut psbt, &f.account).unwrap();
+    wallet::sign(&mut psbt, std::slice::from_ref(&f.account), &[0; 32]).unwrap();
     std::fs::write(format!("{FIXTURES}/abandon-signed.psbt"), psbt.serialize()).unwrap();
 }
 
@@ -536,7 +527,7 @@ fn the_fixtures_are_current_and_rust_bitcoin_agrees() {
     let signed = std::fs::read(format!("{FIXTURES}/abandon-signed.psbt")).unwrap();
     assert_eq!(unsigned, f.psbt.serialize());
     let mut psbt = Psbt::parse(&unsigned).unwrap();
-    wallet::sign(&mut psbt, &f.account).unwrap();
+    wallet::sign(&mut psbt, std::slice::from_ref(&f.account), &[0; 32]).unwrap();
     assert_eq!(psbt.serialize(), signed);
     let mut theirs = f.psbt.clone();
     theirs.sign(&f.master, &f.secp).unwrap();
@@ -548,7 +539,7 @@ fn bitcoin_cores_script_interpreter_accepts_what_maki_signs() {
     // libbitcoinconsensus: Bitcoin Core's own consensus code, built from source
     let f = Fixture::new();
     let mut psbt = f.ours();
-    wallet::sign(&mut psbt, &f.account).unwrap();
+    wallet::sign(&mut psbt, std::slice::from_ref(&f.account), &[0; 32]).unwrap();
     let mut signed = BPsbt::deserialize(&psbt.serialize()).unwrap();
     for input in signed.inputs.iter_mut() {
         let (pk, sig) = input.partial_sigs.pop_first().unwrap();

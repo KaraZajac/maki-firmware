@@ -50,6 +50,8 @@ impl<'a> Cursor<'a> {
 
     pub(crate) fn done(&self) -> bool { self.pos == self.data.len() }
 
+    pub(crate) fn position(&self) -> usize { self.pos }
+
     pub(crate) fn take(&mut self, n: usize) -> Result<&'a [u8], ParseError> {
         let end = self.pos.checked_add(n).ok_or(ParseError("length overflows"))?;
         let s = self.data.get(self.pos..end).ok_or(ParseError("ends early"))?;
