@@ -650,6 +650,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "pomodoro"
+version = "0.1.0"
+dependencies = [
+ "maki-app",
+]
+
+[[package]]
 name = "proc-macro2"
 version = "1.0.107"
 source = "registry+https://github.com/rust-lang/crates.io-index"

@@ -1,15 +1,16 @@
 # Making apps for maki
 
 maki runs apps you install without flashing firmware: `.maki` bundles, each a WebAssembly
-module with a manifest, an icon and your signature (ARCHITECTURE.md in the BAOKEY repo, "Apps
+module with a manifest, an icon and your signature (ARCHITECTURE.md in the maki repo, "Apps
 you can install"). Anyone can build one and sideload it through maki desktop; maki shows the
 owner what it is, where it's from and what it may do before installing it, and a sideloaded
 app carries a mark in maki's top bar for as long as it's installed.
 
-This directory has the Rust crate apps are written with (`maki-app`), seven examples (Hello,
+This directory has the Rust crate apps are written with (`maki-app`), eight examples (Hello,
 Dice, Tally; Signer and Sensors, which use permissions; SSH, maki's SSH key, which answers
-maki desktop's SSH agent; and Hello Native, Hello built as a native app), and the `maki` tool
-that packs, signs, checks and simulates them.
+maki desktop's SSH agent; Hello Native, Hello built as a native app; and Pomodoro, a native
+focus timer whose circle shrinks while you work and grows back while you rest), and the `maki`
+tool that packs, signs, checks and simulates them.
 
 ## Quick start
 
@@ -40,7 +41,9 @@ answers. `--press left,centre*3,menu:0` runs presses instead (with `yes` or `no`
 ask, `msg:TEXT` to send the app a message, whose answer is printed, `qr:TEXT` for what the
 camera sees at its next scan, and `tilt:X;Y;Z` to move the accelerometer, which `--motion
 X,Y,Z` sets to start with), `--shot out.png` saves the last frame, `--storage file` keeps the app's storage between
-runs. Typing is printed rather than typed, and an app's keys come from the BIP39 test phrase
+runs. A scripted run keeps time of its own, so it comes out the same each time: only `timeout`
+lets time pass, the whole of the wait it ends (`timeout*60`, in an app that waits a second at a
+time, is a minute). Typing is printed rather than typed, and an app's keys come from the BIP39 test phrase
 ("abandon" eleven times, then "about"): the keys maki would give it with that phrase, never
 anything you'd use for real.
 
@@ -159,7 +162,8 @@ a library as well (`crate-type = ["cdylib", "rlib"]`), and give it the memory it
 heap and 64 KiB of stack need (`examples/hello-native` asks for 512 KiB). `maki build` builds it
 for Xous's target, `riscv32imac-unknown-xous-elf` (Xous's Rust toolchain has it: see Xous's
 README), in a small program that calls the app's `maki_main`; `maki pack`, `maki inspect` and
-`maki reproduce` work as for WebAssembly, and the simulator (`maki run`) runs WebAssembly only.
+`maki reproduce` work as for WebAssembly, and the simulator (`maki run`) runs WebAssembly only:
+to try a native app there, build it with `kind = "wasm"`.
 
 maki runs a native app confined by its kernel: the stub it starts in loads it, connects it to
 maki's app service (which does for it what a WebAssembly app's imports do, with the same
@@ -186,7 +190,7 @@ code). Builds come out the same wherever they're made, given the same Rust: pin 
 
 `maki inspect` says whether a bundle is stamped. The `maki store` commands are the store's own
 side (its keys, roots, stamps, revocation lists and index; `maki store` lists them), and
-DEVELOPMENT.md in the BAOKEY repo ("The maki store") says how they're used. Until the store
+DEVELOPMENT.md in the maki repo ("The maki store") says how they're used. Until the store
 opens, maki trusts a development store, which stamps these examples.
 
 ## Other languages
