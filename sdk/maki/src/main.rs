@@ -320,6 +320,112 @@ fn metadata(dir: &Path) -> Result<serde_json::Value, String> {
     serde_json::from_slice(&out.stdout).map_err(|e| format!("cargo metadata: {e}"))
 }
 
+/// Whether the app in `dir` builds a package from a path outside its workspace (what `cargo
+/// tree` lists for it, its features resolved as a build of it resolves them). Cargo tells
+/// crates apart by a hash of where they're from, and such a package's whole path goes into it:
+/// built where it is, the app would come out laid out differently in another directory.
+fn builds_from_outside(dir: &Path, meta: &serde_json::Value) -> Result<bool, String> {
+    let root = meta["workspace_root"].as_str().ok_or("cargo metadata named no workspace root")?;
+    let out = std::process::Command::new(std::env::var("CARGO").unwrap_or("cargo".into()))
+        .args(["tree", "--target", "wasm32-unknown-unknown", "-e", "normal", "--prefix", "none", "-f", "{p}"])
+        .current_dir(dir)
+        .stderr(std::process::Stdio::inherit())
+        .output()
+        .map_err(|e| format!("cargo tree: {e}"))?;
+    if !out.status.success() {
+        return Err("cargo tree failed".into());
+    }
+    // a local package: `name vX.Y.Z (/its/directory)`, perhaps with ` (*)` after
+    Ok(String::from_utf8_lossy(&out.stdout).lines().any(|line| {
+        line.split_once(" (").and_then(|(_, rest)| rest.split_once(')')).is_some_and(|(path, _)| {
+            Path::new(path).is_absolute() && !Path::new(path).starts_with(root)
+        })
+    }))
+}
+
+/// A WebAssembly app built as a native one is (`linked_source`): through a wrapper of its own
+/// in the app's target directory, a cdylib that links the app, which sees the app and every
+/// package it builds from a path through a link, `source`, inside the wrapper's workspace, so
+/// they hash the same wherever the source is. It builds from the app's own Cargo.lock and with
+/// its workspace's release profile, as a build where it is would.
+fn wasm_wrapper_build(app_dir: &Path, app_meta: &serde_json::Value) -> Result<(PathBuf, PathBuf), String> {
+    let cargo_toml = app_dir.join("Cargo.toml");
+    let text = std::fs::read_to_string(&cargo_toml).map_err(|e| format!("{}: {e}", cargo_toml.display()))?;
+    let t: toml::Value = toml::from_str(&text).map_err(|e| format!("{}: {e}", cargo_toml.display()))?;
+    let package = t["package"]["name"].as_str().ok_or("Cargo.toml names no package")?.to_string();
+    let types: Vec<&str> = t
+        .get("lib")
+        .and_then(|l| l.get("crate-type"))
+        .and_then(|c| c.as_array())
+        .map(|a| a.iter().filter_map(|v| v.as_str()).collect())
+        .unwrap_or_else(|| vec!["rlib"]);
+    if !types.contains(&"rlib") && !types.contains(&"lib") {
+        return Err(format!(
+            "{}: it builds from paths outside its workspace, so it's linked as a library to build the same anywhere: \
+             make it crate-type = [\"cdylib\", \"rlib\"]",
+            cargo_toml.display()
+        ));
+    }
+    let root = PathBuf::from(app_meta["workspace_root"].as_str().ok_or("cargo metadata named no workspace root")?);
+    let target = app_meta["target_directory"].as_str().map(PathBuf::from).unwrap_or_else(|| app_dir.join("target"));
+    let wrapper = target.join("maki-wasm").join(&package);
+    std::fs::create_dir_all(wrapper.join("src")).map_err(|e| format!("{}: {e}", wrapper.display()))?;
+    let app_path = linked_source(&wrapper, app_dir, app_meta)?;
+    // the release profile the app's workspace builds with
+    let workspace_toml = root.join("Cargo.toml");
+    let profile = std::fs::read_to_string(&workspace_toml)
+        .ok()
+        .and_then(|text| toml::from_str::<toml::Value>(&text).ok())
+        .and_then(|w| w.get("profile").and_then(|p| p.get("release")).cloned());
+    let profile = match profile {
+        Some(p) => toml::to_string(&p).map_err(|e| format!("{}: {e}", workspace_toml.display()))?,
+        None => String::new(),
+    };
+    let manifest = format!(
+        "# written by `maki build` for a WebAssembly build of {package}: don't edit\n\
+         [package]\nname = \"{package}-wasm\"\nversion = \"0.1.0\"\nedition = \"2021\"\npublish = false\nexclude = [\"source\"]\n\n\
+         [lib]\ncrate-type = [\"cdylib\"]\n\n\
+         [dependencies]\napp = {{ package = \"{package}\", path = {app_path:?} }}\n\n\
+         [profile.release]\n{profile}\n\
+         [workspace]\nexclude = [\"source\"]\n"
+    );
+    let lib = "// written by `maki build`: the app, as a WebAssembly module of its own\nextern crate app;\n";
+    let write = |path: PathBuf, text: &[u8]| -> Result<(), String> {
+        // untouched if unchanged, so cargo doesn't rebuild for nothing
+        if std::fs::read(&path).ok().as_deref() != Some(text) {
+            std::fs::write(&path, text).map_err(|e| format!("{}: {e}", path.display()))?;
+        }
+        Ok(())
+    };
+    write(wrapper.join("Cargo.toml"), manifest.as_bytes())?;
+    write(wrapper.join("src").join("lib.rs"), lib.as_bytes())?;
+    // the versions the app's lock names, whatever the registry has since
+    if let Ok(lock) = std::fs::read(root.join("Cargo.lock")) {
+        write(wrapper.join("Cargo.lock"), &lock)?;
+    }
+    let theirs = std::env::var("RUSTFLAGS").or_else(|_| std::env::var("CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS"));
+    let mut flags: Vec<String> = match theirs {
+        Ok(f) => f.split_whitespace().map(String::from).collect(),
+        Err(_) => vec!["-C".into(), "link-arg=-zstack-size=16384".into()],
+    };
+    flags.extend(remaps(&wrapper)?);
+    let status = std::process::Command::new(std::env::var("CARGO").unwrap_or("cargo".into()))
+        .args(["build", "--release", "--target", "wasm32-unknown-unknown"])
+        .current_dir(&wrapper)
+        .env("CARGO_ENCODED_RUSTFLAGS", flags.join("\x1f"))
+        .env_remove("RUSTFLAGS")
+        .status()
+        .map_err(|e| format!("cargo: {e}"))?;
+    if !status.success() {
+        return Err("cargo build failed".into());
+    }
+    let wasm = wrapper.join("target").join("wasm32-unknown-unknown").join("release").join(format!("{}_wasm.wasm", package.replace('-', "_")));
+    if !wasm.exists() {
+        return Err(format!("cargo built no {}", wasm.display()));
+    }
+    Ok((wasm, target))
+}
+
 /// Where the source a build compiles came from, as rustc should name it in the program
 /// (panic locations): each local package's directory as its name, and the registry's as
 /// `registry`. Absolute paths would make the build depend on where it's made; with these,
@@ -382,8 +488,14 @@ fn build_code(dir: &Path, kind: Kind) -> Result<(PathBuf, PathBuf), String> {
 
 /// Builds the cdylib in `dir` for wasm32 and returns the .wasm and cargo's target directory.
 /// Apps get a 16 KiB stack rather than wasm-ld's 1 MiB (it lives in the app's memory), unless
-/// the developer set flags of their own.
+/// the developer set flags of their own. An app that builds packages from paths outside its
+/// workspace is built through a wrapper (`wasm_wrapper_build`), so it builds the same anywhere.
 fn cargo_build(dir: &Path) -> Result<(PathBuf, PathBuf), String> {
+    let app_dir = std::fs::canonicalize(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+    let app_meta = metadata(&app_dir)?;
+    if builds_from_outside(&app_dir, &app_meta)? {
+        return wasm_wrapper_build(&app_dir, &app_meta);
+    }
     let mut cargo = std::process::Command::new(std::env::var("CARGO").unwrap_or("cargo".into()));
     // the developer's flags if they set any, else the stack; and every source named as it is
     // everywhere (remaps: the registry's crates, local packages, Rust's own library), as cargo

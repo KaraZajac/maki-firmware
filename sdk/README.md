@@ -240,7 +240,11 @@ builds the app in DIR and checks that the bundle holds what that makes (its mani
 code). Builds come out the same wherever they're made, given the same Rust: pin it with a
 `rust-toolchain.toml` beside your `maki.toml` so the store builds with yours. An app that uses
 crates by path (this SDK's, say) also needs them where they were, relative to the app: the store
-checks out the whole repository the app's source names, so keep them in it.
+checks out the whole repository the app's source names, so keep them in it. Cargo tells crates
+apart by a hash of where they're from, and one outside your workspace goes into it with its
+whole path; so an app that builds any (the wallet examples use `libs/maki-btc` and `libs/maki-eth`)
+is built through a wrapper that sees them all inside it, as native apps are, and needs
+`crate-type = ["cdylib", "rlib"]` to be linked from it.
 
 `maki inspect` says whether a bundle is stamped. The `maki store` commands are the store's own
 side (its keys, roots, stamps, revocation lists and index; `maki store` lists them), and
