@@ -343,3 +343,96 @@ fn sensors_levels_and_scans() {
     let none = run_with(None, None, &[Event::Timeout]);
     assert_eq!(none.frames.len(), 2);
 }
+
+fn words_list() -> Vec<String> {
+    std::fs::read_to_string(format!("{}/../../sdk/examples/passphrase/src/words.txt", env!("CARGO_MANIFEST_DIR")))
+        .unwrap()
+        .lines()
+        .map(String::from)
+        .collect()
+}
+
+#[test]
+fn passphrase_types_words_from_the_list_as_many_as_asked() {
+    let events = [
+        Event::Menu(0),
+        Event::Right,
+        Event::Menu(1),
+        Event::Menu(0),
+        Event::Left,
+        Event::Left,
+        Event::Left,
+        Event::Left,
+        Event::Left,
+        Event::Menu(0),
+    ];
+    let (stop, r) = run_fixture("passphrase", &events, BTreeMap::new());
+    assert_eq!(stop, Stop::Finished);
+    assert_eq!(r.menu, ["Type it", "Separator"]);
+    let list = words_list();
+    assert_eq!(list.len(), 7776);
+    let typed: Vec<Vec<&str>> = r
+        .typed
+        .iter()
+        .zip([" ", "-", "-"])
+        .map(|(t, sep)| t.split(sep).collect())
+        .collect();
+    // six to start with, then one more, then down to the fewest, four
+    assert_eq!(typed.iter().map(|w| w.len()).collect::<Vec<_>>(), [6, 7, 4]);
+    assert!(typed.iter().flatten().all(|w| list.iter().any(|l| l == w)), "{typed:?}");
+    // the count and the separator are kept; the passphrase isn't
+    assert_eq!(r.storage.get("words").unwrap(), &4u32.to_le_bytes());
+    assert_eq!(r.storage.get("separator").unwrap(), &1u32.to_le_bytes());
+    assert_eq!(r.storage.len(), 2);
+}
+
+#[test]
+fn snake_eats_grows_and_ends_at_the_wall() {
+    // the counting random puts the first food 25 free cells in: the top row, 25 across. The
+    // snake starts heading right from 7 across, 12 down: right to 25, up to the top, and on
+    let mut events = vec![Event::Centre];
+    events.extend([Event::Timeout; 18]);
+    events.push(Event::Left);
+    events.extend([Event::Timeout; 13]);
+    let (stop, r) = run_fixture("snake", &events, BTreeMap::new());
+    assert_eq!(stop, Stop::Finished);
+    // it ate once before the wall: its best is 1
+    assert_eq!(r.storage.get("best").unwrap(), &1u32.to_le_bytes());
+    // five cells long at the end, not four: the field (below the score) of the last frame of
+    // play has one cell more lit than the first, 3 by 3 pixels
+    let field = |c: &Canvas| (12..HEIGHT as i32).flat_map(|y| (0..WIDTH as i32).map(move |x| (x, y))).filter(|&(x, y)| c.get(x, y)).count();
+    let frames = &r.frames;
+    assert_eq!(field(&frames[frames.len() - 2]), field(&frames[2]) + 9);
+
+    // no food, no best: straight into the wall
+    let mut events = vec![Event::Centre];
+    events.extend([Event::Timeout; 25]);
+    let (_, r) = run_fixture("snake", &events, BTreeMap::new());
+    assert!(r.storage.get("best").is_none());
+}
+
+#[test]
+fn status_shows_what_the_computer_says_and_says_what_it_shows() {
+    let msg = |s: &str| s.as_bytes().to_vec();
+    let events = [Event::Message, Event::Message, Event::Message, Event::Message, Event::Right, Event::Centre, Event::Message];
+    let record = Rc::new(RefCell::new(Record {
+        events: events.iter().copied().collect(),
+        inbox: [msg("on A call"), msg(""), msg("  Back \n at\t3 "), msg("")].into_iter().chain([msg("")]).collect(),
+        ..Default::default()
+    }));
+    let bytes = std::fs::read(format!("{}/tests/fixtures/status.maki", env!("CARGO_MANIFEST_DIR"))).unwrap();
+    let bundle = maki_bundle::read(&bytes).unwrap();
+    let limits = admit(&bundle.manifest, bundle.code).unwrap();
+    let stop = run(bundle.code, Box::new(Script(record.clone())), limits);
+    assert_eq!(stop, Stop::Finished);
+    let r = record.borrow();
+    let replies: Vec<&str> = r.replies.iter().map(|b| std::str::from_utf8(b).unwrap()).collect();
+    // a sign by name, whatever its capitals; its own text, tidied; and what's showing, when asked
+    assert_eq!(replies, ["ok", "On a call", "ok", "Back at 3", "Available"]);
+    assert_eq!(r.storage.get("own").unwrap(), b"Back at 3");
+    // right from its own text goes round to the first sign; the centre lights the screen
+    assert_eq!(r.storage.get("at").unwrap(), &0u32.to_le_bytes());
+    assert_eq!(r.storage.get("light").unwrap(), &1u32.to_le_bytes());
+    let last = r.frames.last().unwrap();
+    assert!(lit(last) > (WIDTH * HEIGHT) as usize / 2, "light: more lit than not");
+}

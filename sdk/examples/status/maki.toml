@@ -1,0 +1,12 @@
+id = "com.leviathan.maki.status"
+name = "Status"
+version = 1
+label = "1.0"
+api = 1
+storage = 1
+memory = 128
+backup = true
+description = "A sign on maki's screen, big enough to read across the room: Available, Busy, On a call and the like. Software on your computer can set it too."
+
+[permissions]
+link = "So software on your computer can set the status (when a call starts, say) or ask what it is."

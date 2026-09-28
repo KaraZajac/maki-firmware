@@ -1,0 +1,12 @@
+id = "com.leviathan.maki.passphrase"
+name = "Passphrase"
+version = 1
+label = "1.0"
+api = 1
+storage = 1
+memory = 128
+backup = true
+description = "Passphrases from maki's random number generator: four to eight words from the EFF's long word list, about 13 bits each. Never stored; typed into your computer only if you ask."
+
+[permissions]
+keyboard = "To type the passphrase into your computer when you pick Type it, so you needn't copy it by hand."

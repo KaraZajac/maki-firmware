@@ -6,11 +6,20 @@ you can install"). Anyone can build one and sideload it through maki desktop; ma
 owner what it is, where it's from and what it may do before installing it, and a sideloaded
 app carries a mark in maki's top bar for as long as it's installed.
 
-This directory has the Rust crate apps are written with (`maki-app`), eight examples (Hello,
-Dice, Tally; Signer and Sensors, which use permissions; SSH, maki's SSH key, which answers
-maki desktop's SSH agent; Hello Native, Hello built as a native app; and Pomodoro, a native
-focus timer whose pie empties like a clock while you work and fills back up while you rest), and the `maki`
-tool that packs, signs, checks and simulates them.
+This directory has the Rust crate apps are written with (`maki-app`), eleven examples, and the
+`maki` tool that packs, signs, checks and simulates them. The examples:
+
+- **Hello**, **Dice** and **Tally**: a screen, the buttons, storage and randomness.
+- **Signer** and **Sensors**, which use permissions: asking the owner, keys of their own, the
+  camera and the accelerometer.
+- **SSH**: maki's SSH key, which answers maki desktop's SSH agent (the link permission).
+- **Passphrase**: diceware passphrases from maki's random number generator and the EFF's long
+  word list, typed into the computer on request (the keyboard permission).
+- **Snake**: the game, with three buttons, timed with `wait`.
+- **Status**: a sign readable across the room, in big letters it draws itself with `blit`, which
+  software on the computer can set (the link permission).
+- **Hello Native**, Hello built as a native app, and **Pomodoro**, a native focus timer whose
+  pie empties like a clock while you work and fills back up while you rest.
 
 ## Quick start
 
@@ -186,7 +195,9 @@ still yours: an update needs your key as well as a new stamp.
 The store builds each app from its source before stamping it: `maki reproduce APP.maki DIR`
 builds the app in DIR and checks that the bundle holds what that makes (its manifest, icon and
 code). Builds come out the same wherever they're made, given the same Rust: pin it with a
-`rust-toolchain.toml` beside your `maki.toml` so the store builds with yours.
+`rust-toolchain.toml` beside your `maki.toml` so the store builds with yours. An app that uses
+crates by path (this SDK's, say) also needs them where they were, relative to the app: the store
+checks out the whole repository the app's source names, so keep them in it.
 
 `maki inspect` says whether a bundle is stamped. The `maki store` commands are the store's own
 side (its keys, roots, stamps, revocation lists and index; `maki store` lists them), and
