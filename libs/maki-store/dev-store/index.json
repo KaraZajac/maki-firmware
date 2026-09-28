@@ -7,12 +7,13 @@
       "developer": "3d0dae13e118a151f2d3714323fb9ed0a2addd8a758de416f5452dcc3ced84fa",
       "icon": "/////////////////////////////////////////////////////////////////////////////////////////////////////////////wMAAMD///9/AAAAAP7//x8AAAAA+P//DwAAAADw//8P+P//H/D//wf/////4P//h//////h//+H/////+H//4O////9wf//ww/+f/DD///DB/w/4MP//8MH/D/gw///wwP4H8DD///DB/w/4MP//8MH/D/gw///ww/+f/DD///Dv////cP//8P/////w///w/8//P/D///D/x/4/8P//8P/D/D/w///w/8P8P/D///D/w/w/8P//8P/D/D/w///w/8f+P/D///D/z/8/8P//8P/////w///w7////3D///DD/5/8MP//8MH/D/gw///wwf8P+DD///DA/gfwMP//8MH/D/gw///wwf8P+DD///DD/5/8MP//4O////9wf//h//////h//+H/////+H//wf/////4P//D/j//x/w//8PAAAAAPD//x8AAAAA+P//fwAAAAD+////AwAAwP////////////////////////////////////////////////////////////////////////////////////////////////////////////8=",
       "id": "com.leviathan.maki.dice",
+      "kind": "wasm",
       "label": "1.0",
       "memory_kib": 64,
       "name": "Dice",
       "path": "apps/com.leviathan.maki.dice/1.maki",
       "permissions": [],
-      "sha256": "1800468adca8155f84234da774cfea9a9e380cedbc98d6d58161642f58835955",
+      "sha256": "6a9a0bf9c62fe29a43e5bfa5693ab20662c6e6e61a04dd746a0a877fe55a06d4",
       "storage_kib": 1,
       "version": 1
     },
@@ -23,6 +24,7 @@
       "developer": "3d0dae13e118a151f2d3714323fb9ed0a2addd8a758de416f5452dcc3ced84fa",
       "icon": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAQAAAAAAAP7/AAAAAADA//8HAAAAAPD//x8AAAAA/P//fwAAAAD+A4D/AAAAgH8AAPwDAADAHwAA8AcAAOAHAADADwAA8AMAAIAfAAD4AQAAAD8AAPwAAAAAfgAAfAAAAAB8AAA+AAAAAPgAAB8AAAAA8AEADwAAAADgAYAPAAAAAOADgAcAAEAAwAPABwAA+APAB8ADAAD8B4AHwAMAAP4PgAfgAwAA/g+AD+ABAAD+DwAP4AEAAP8fAA/gAQAA/w8AD+ABAAD/DwAP4AEAAP8PAA/gAQAA/QcAD/ABAPD/AwAf4AEAAEEAAA/gAQAAAQAAD+ABAAABAAAP4AEAAAEAAA/gAQAAAAAAD+ABAAAAAAAP4AMAAAAAgA/AAwAAAACAB8ADAAAAAIAHwAcAAAAAwAeABwAAAADAA4APAAAAAOADAA8AAAAA4AEAHwAAAADwAQA+AAAAAPgAAHwAAAAAfAAA/AAAAAB+AAD4AQAAAD8AAPADAACAHwAA4AcAAMAPAADAHwAA8AcAAIB/AAD8AwAAAP4DgP8AAAAA/P//fwAAAADw//8fAAAAAMD//wcAAAAAAP7/AAAAAAAAAAEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
       "id": "com.leviathan.maki.sensors",
+      "kind": "wasm",
       "label": "1.0",
       "memory_kib": 64,
       "name": "Sensors",
@@ -37,7 +39,7 @@
           "reason": "For the spirit level."
         }
       ],
-      "sha256": "79dbd6926117c9f33ede7e1cc6ebcaf377a330ef91777c4c63265ae22a458654",
+      "sha256": "53eca85313daf0fb784fc41e4edd793aab1000f82016597af62186c10ccae028",
       "storage_kib": 1,
       "version": 1
     },
@@ -48,6 +50,7 @@
       "developer": "3d0dae13e118a151f2d3714323fb9ed0a2addd8a758de416f5452dcc3ced84fa",
       "icon": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAgD8AAAAAAADw/wEAAAAAAPj/AwAAAAAA/v8PAAAAAAD//x8AAAAAAP//HwAAAACA/+A/AAAAAMA/gH8AAAAAwB8AfwAAAADADwB+AAAAAOAPAP7///8D4AcA/P///wPgBwD8////A+AHAPz///8D4AcA/P///wPgBwD8////A+APAP7///8DwA8AfgDw8AHAHwB/APDwAcA/gH8A8PABgP/gPwDw8AEA//8fAPDwAQD//x8A8PABAP7/DwDw8AEA+P8DAPDwAQDw/wEAAPABAIA/AAAA8AEAAAAAAADwAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
       "id": "com.leviathan.maki.signer",
+      "kind": "wasm",
       "label": "1.0",
       "memory_kib": 64,
       "name": "Signer",
@@ -66,7 +69,7 @@
           "reason": "To type a test line into your computer."
         }
       ],
-      "sha256": "f1df05729605c3cc8a0aa44176982f7e419bce140f2cda54d941d7bd2bbccf42",
+      "sha256": "24b825e2ea91e4b2d18a65943c339777d86122a06091e171d17fb6088f9f0e6a",
       "storage_kib": 1,
       "version": 1
     },
@@ -77,6 +80,7 @@
       "developer": "3d0dae13e118a151f2d3714323fb9ed0a2addd8a758de416f5452dcc3ced84fa",
       "icon": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAADw////////D/D///////8P8P///////w/w////////D/D///////8P8P///////w/w////////D/D///////8PMAAAAAAAAAwwAAAAAAAADDAAAAAAAAAMMAAAAAAAAAwwAAAAAAAADDAAAAAAAAAMMAAAAAAAAAwwAAAAAAAADDDAAQAAAAAMMIADAAAAAAwwAAcAAAAADDAADgAAAAAMMAAcAAAAAAwwADgAAAAADDAAcAAAAAAMMADgAAAAAAwwAOAAAAAADDAAcAAAAAAMMAA4AAAAAAwwABwAAAAADDAADgAAAAAMMAAHAAAAAAwwgAPw/w8ADDDAAfD/DwAMMAAA8P8PAAwwAAAAAAAADDAAAAAAAAAMMAAAAAAAAAwwAAAAAAAADDAAAAAAAAAMMAAAAAAAAAwwAAAAAAAADDAAAAAAAAAMMAAAAAAAAAzw////////D/D///////8PAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
       "id": "com.leviathan.maki.ssh",
+      "kind": "wasm",
       "label": "1.0",
       "memory_kib": 64,
       "name": "SSH",
@@ -95,13 +99,13 @@
           "reason": "For your SSH key, made from your recovery phrase and never leaving maki."
         }
       ],
-      "sha256": "71e56ec53a70267add969bfa2154cfddc644884e8602e887803803fd4328a6a9",
+      "sha256": "41728293d9fba19fc3cdc2c97f869128b4454b953bf4b7f1e034778e5bc72d51",
       "storage_kib": 1,
       "version": 1
     }
   ],
-  "expires": 2105896832,
+  "expires": 2105922000,
   "format": 1,
   "root": 2,
-  "version": 8
+  "version": 12
 }
