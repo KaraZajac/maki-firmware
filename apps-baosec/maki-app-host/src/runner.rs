@@ -55,6 +55,10 @@ pub fn tell(to_runner: &std::sync::mpsc::Sender<ToRunner>, shared: &Mutex<Shared
 const MESSAGE_WAIT: Duration = Duration::from_secs(60);
 /// How long an app started for a message runs with nothing more to do.
 const HEADLESS_IDLE: Duration = Duration::from_secs(30);
+/// How long such an app keeps maki after each message when another app's is waiting: long
+/// enough for the next of its own exchange (a PSBT's pieces, then the signed one), which comes
+/// at once. Then it ends, and the other app runs for its message.
+const HEADLESS_HOLD: Duration = Duration::from_secs(5);
 
 /// Answers a message from maki-link: dropping it hands the buffer back.
 pub fn answer(mut msg: xous::MessageEnvelope, result: u32, answer: &[u8]) {
@@ -207,6 +211,9 @@ struct RunState {
     current: Option<(xous::MessageEnvelope, Vec<u8>)>,
     /// Started for a message, and not opened by the owner: it ends once idle a while.
     headless: bool,
+    /// Another app's message, which this one (started for a message) gives way to once its own
+    /// exchange is over: that app runs next, for it.
+    handover: Option<(usize, xous::MessageEnvelope, Vec<u8>)>,
     idle_since: Instant,
     /// What the main thread sent that a native app hasn't waited for yet: looked through for an
     /// exit while it's busy (`ExitWatch::exit_waiting`), then handed to its next wait.
@@ -449,10 +456,11 @@ impl Platform for Device {
         }
         let deadline = timeout.map(|t| Instant::now() + t);
         loop {
-            // started for a message and left alone since: it ends
+            // started for a message and left alone since: it ends, sooner if another app's
+            // message is waiting for it to
             let idle_end = {
                 let st = self.state.borrow();
-                st.headless.then(|| st.idle_since + HEADLESS_IDLE)
+                st.headless.then(|| st.idle_since + if st.handover.is_some() { HEADLESS_HOLD } else { HEADLESS_IDLE })
             };
             // while App info is up, the app's own timers wait
             let timer = deadline.filter(|_| self.state.borrow().info.is_none());
@@ -489,7 +497,12 @@ impl Platform for Device {
                         return e;
                     }
                 }
-                // another app's: this one is running
+                // another app's: one started for a message gives way once its own exchange is
+                // over, and that app runs next for it; one the owner opened keeps maki
+                ToRunner::Message(s, msg, bytes) if self.state.borrow().headless && self.state.borrow().handover.is_none() => {
+                    log::info!("{}: another app's message waits for it", self.id);
+                    self.state.borrow_mut().handover = Some((s, msg, bytes));
+                }
                 ToRunner::Message(_, msg, _) => answer(msg, RESULT_BUSY, &[]),
                 ToRunner::Stop => {
                     self.state.borrow_mut().stopping = true;
@@ -505,8 +518,11 @@ impl Platform for Device {
                     {
                         let mut st = self.state.borrow_mut();
                         st.front = true;
-                        // the owner opened it: it stays until they leave
+                        // the owner opened it: it stays until they leave, and keeps maki
                         st.headless = false;
+                        if let Some((_, msg, _)) = st.handover.take() {
+                            answer(msg, RESULT_BUSY, &[]);
+                        }
                     }
                     let info = self.state.borrow().info;
                     match info {
@@ -752,9 +768,13 @@ fn stopped(ctx: &Ctx, name: &str, sideloaded: bool, why: &str) {
     s.end();
 }
 
+/// What runs next: an app, and the message it's started for, if it is.
+type Next = Option<(usize, Option<(xous::MessageEnvelope, Vec<u8>)>)>;
+
 /// Runs the app in `slot` until it stops, opened by the owner, or without the screen for a
-/// message from the computer (`message`). Returns a slot opened meanwhile, to run next.
-fn run(ctx: &Rc<Ctx>, slot: usize, message: Option<(xous::MessageEnvelope, Vec<u8>)>) -> Option<usize> {
+/// message from the computer (`message`). Returns what runs next: an app opened meanwhile, or
+/// another app's message this one gave way to.
+fn run(ctx: &Rc<Ctx>, slot: usize, message: Option<(xous::MessageEnvelope, Vec<u8>)>) -> Next {
     let opened = crate::tt().elapsed_ms();
     let headless = message.is_some();
     // the message gets an answer whatever happens: unanswered, it says why
@@ -868,6 +888,7 @@ fn run(ctx: &Rc<Ctx>, slot: usize, message: Option<(xous::MessageEnvelope, Vec<u
         inbox,
         current: None,
         headless,
+        handover: None,
         idle_since: Instant::now(),
         deferred: VecDeque::new(),
     }));
@@ -898,7 +919,7 @@ fn run(ctx: &Rc<Ctx>, slot: usize, message: Option<(xous::MessageEnvelope, Vec<u
     }
     log::info!("{} stopped: {:?}", info.id, stop);
     state.borrow_mut().answer_all();
-    let st = state.borrow();
+    let mut st = state.borrow_mut();
     let why = match &stop {
         Stop::Finished | Stop::Exited => None,
         Stop::NotResponding => Some("it stopped responding".to_string()),
@@ -919,7 +940,17 @@ fn run(ctx: &Rc<Ctx>, slot: usize, message: Option<(xous::MessageEnvelope, Vec<u
         }
         return None;
     }
-    st.pending
+    // an app the owner opened meanwhile comes first: another app's message waits no longer
+    match (st.pending, st.handover.take()) {
+        (Some(s), handover) => {
+            if let Some((_, msg, _)) = handover {
+                answer(msg, RESULT_BUSY, &[]);
+            }
+            Some((s, None))
+        }
+        (None, Some((s, msg, bytes))) => Some((s, Some((msg, bytes)))),
+        (None, None) => None,
+    }
 }
 
 /// An app's code, ready to run.
@@ -960,18 +991,14 @@ pub fn runner(rx: Receiver<ToRunner>, shared: Arc<Mutex<Shared>>) {
         rx,
         service: xous::create_server_with_address(&maki_native::service::SID).expect("the app service"),
     });
-    let mut next = None;
+    let mut next: Next = None;
     loop {
-        let mut message = None;
-        let slot = match next.take() {
-            Some(s) => s,
+        let (slot, message) = match next.take() {
+            Some(n) => n,
             None => match ctx.rx.recv() {
-                Ok(ToRunner::Open(s)) => s,
+                Ok(ToRunner::Open(s)) => (s, None),
                 // no app running: start this one without the screen, for the message
-                Ok(ToRunner::Message(s, msg, bytes)) => {
-                    message = Some((msg, bytes));
-                    s
-                }
+                Ok(ToRunner::Message(s, msg, bytes)) => (s, Some((msg, bytes))),
                 Ok(ToRunner::Loaded(id, version, app)) => {
                     ctx.keep(id, version, app);
                     continue;

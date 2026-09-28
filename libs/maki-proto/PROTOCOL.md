@@ -195,11 +195,13 @@ the owner before installing or removing anything: whoever sends these can't do e
   1 denied, 2 no such app, 3 timed out, 6 locked.
 - **APP_MESSAGE** hands `message` (at most 4096 bytes) to the app with ID `id`, which must have
   the link permission, and returns its answer (at most 4096 bytes). If the app isn't running,
-  maki starts it without the screen, unless another app is open on maki; it may ask the owner
-  before it answers, so the answer can take as long as that. `status`: 0 answered, 1 the app
-  didn't answer (it went on to its next event), 2 no such app, 3 timed out (60 s, or an ask's
-  time), 4 busy (another app is open on maki, or at most three requests wait at once) or no app
-  host, 6 locked, 9 refused (the app hasn't the link permission). Only an answered reply carries
+  maki starts it without the screen, unless the owner has another app open; one started without
+  the screen for another app's message first finishes its exchange (it keeps maki for 5 s after
+  each of its own messages). The app may ask the owner before it answers, so the answer can take
+  as long as that. `status`: 0 answered, 1 the app didn't answer (it went on to its next event),
+  2 no such app, 3 timed out (60 s, or an ask's time), 4 busy (the owner has another app open,
+  another message already waits for the one running, or at most three requests wait at once) or
+  no app host, 6 locked, 9 refused (the app hasn't the link permission). Only an answered reply carries
   the app's answer. What the messages mean is up to the app and the software talking to it.
 - **STORE_UPDATE** hands maki a record from the maki store (`libs/maki-store`): a newer root,
   or a newer revocation list. It goes in pieces of up to 4096 bytes, in order, with the same
