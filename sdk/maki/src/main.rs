@@ -236,7 +236,7 @@ fn native_build(dir: &Path) -> Result<(PathBuf, PathBuf), String> {
          [package]\nname = \"{name}\"\nversion = \"0.1.0\"\nedition = \"2021\"\npublish = false\nexclude = [\"source\"]\n\n\
          [dependencies]\napp = {{ package = \"{package}\", path = {app_path:?} }}\n\n\
          [profile.release]\nopt-level = \"s\"\nlto = true\ncodegen-units = 1\npanic = \"abort\"\nstrip = true\n\n\
-         [workspace]\n"
+         [workspace]\nexclude = [\"source\"]\n"
     );
     let main = "// written by `maki build`: the app, as a program of its own for maki\n\
          extern crate app;\n\n\
@@ -275,7 +275,8 @@ fn native_build(dir: &Path) -> Result<(PathBuf, PathBuf), String> {
 /// apart by a hash of where they're from, and a path outside the workspace goes into it whole:
 /// the wrapper is its own workspace, so the app, maki-app and the rest would all hash their
 /// absolute paths, and a build in another directory could lay the program out differently. Seen
-/// through the link they're inside the workspace, and hash the same wherever the source is.
+/// through the link they're inside the workspace, and hash the same wherever the source is. (Not
+/// its members, though: an app that's a workspace of its own would make two.)
 fn linked_source(wrapper: &Path, app_dir: &Path, app_meta: &serde_json::Value) -> Result<String, String> {
     // the directory holding the app and every package it builds from a path
     let mut root = app_dir.to_path_buf();
