@@ -7,7 +7,9 @@ use alloc::vec;
 use alloc::vec::Vec;
 
 use crate::account::checksum;
+use crate::json::Value;
 use crate::tx::{Error, Tx};
+use crate::typed::{self, TypedData};
 
 /// A screen's worth: a heading at the top, the thing to check in bold, and fixed-width text
 /// under it across as many lines as it takes.
@@ -57,7 +59,7 @@ fn gwei(wei: u128) -> String {
 }
 
 /// A 256-bit number, in decimal.
-fn decimal(n: &[u8; 32]) -> String {
+pub(crate) fn decimal(n: &[u8; 32]) -> String {
     let mut digits: Vec<u8> = Vec::new();
     for &byte in n {
         let mut carry = byte as u32;
@@ -204,4 +206,224 @@ pub fn message_pages(site: &str, message_bytes: &[u8]) -> Vec<Page> {
     }
     pages.push(message(message_bytes));
     pages
+}
+
+/// The most pages typed data may take: more, and maki won't show it.
+pub const MAX_TYPED_PAGES: usize = 48;
+
+/// A Unix time, in seconds, as a UTC date and time: `2026-10-01 14:30 UTC`.
+pub fn utc(seconds: u64) -> String {
+    let days = (seconds / 86_400) as i64;
+    let rest = seconds % 86_400;
+    // days since 1970-01-01 to a date (Howard Hinnant's civil_from_days)
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = doy - (153 * mp + 2) / 5 + 1;
+    let month = if mp < 10 { mp + 3 } else { mp - 9 };
+    let year = yoe + era * 400 + (month <= 2) as i64;
+    format!("{:04}-{:02}-{:02} {:02}:{:02} UTC", year, month, day, rest / 3_600, rest % 3_600 / 60)
+}
+
+/// A deadline a permit gives, in seconds, for a page: the date, then the time (UTC), or "no end"
+/// if it's the most the field holds or past the year 9999.
+fn until(v: Option<&Value>, bits: u32) -> (String, String) {
+    let Some(v) = v else { return (String::from("none given"), String::new()) };
+    if typed::is_max(v, bits) {
+        return (String::from("no end"), String::new());
+    }
+    match typed::integer_u64(v) {
+        Some(s) if s < 253_402_300_800 => {
+            let when = utc(s);
+            let (date, time) = when.split_once(' ').unwrap_or((&when, ""));
+            (String::from(date), String::from(time))
+        }
+        _ => (String::from("no end"), String::new()),
+    }
+}
+
+fn address_text(v: Option<&Value>) -> String {
+    match v.and_then(Value::as_str).and_then(typed::hex_bytes) {
+        Some(b) if b.len() == 20 => checksum(&b.try_into().unwrap()),
+        _ => String::from("none given"),
+    }
+}
+
+/// A token amount a permit gives: "any amount" if it's the most the field holds.
+fn allowance(v: Option<&Value>, bits: u32) -> String {
+    match v {
+        Some(v) if typed::is_max(v, bits) => String::from("any amount"),
+        Some(v) => typed::integer_text(v).unwrap_or_default(),
+        None => String::from("none given"),
+    }
+}
+
+/// Whether `name` is declared exactly so: these fields, of these types, in this order.
+fn declared(td: &TypedData, name: &str, fields: &[(&str, &str)]) -> bool {
+    td.fields(name)
+        .is_some_and(|f| f.len() == fields.len() && f.iter().zip(fields).all(|(a, (n, t))| a.name == *n && a.ty == *t))
+}
+
+const PERMIT: [(&str, &str); 5] =
+    [("owner", "address"), ("spender", "address"), ("value", "uint256"), ("nonce", "uint256"), ("deadline", "uint256")];
+const PERMIT_DETAILS: [(&str, &str); 4] =
+    [("token", "address"), ("amount", "uint160"), ("expiration", "uint48"), ("nonce", "uint48")];
+const PERMIT_SINGLE: [(&str, &str); 3] = [("details", "PermitDetails"), ("spender", "address"), ("sigDeadline", "uint256")];
+const PERMIT_BATCH: [(&str, &str); 3] = [("details", "PermitDetails[]"), ("spender", "address"), ("sigDeadline", "uint256")];
+const TOKEN_PERMISSIONS: [(&str, &str); 2] = [("token", "address"), ("amount", "uint256")];
+const PERMIT_TRANSFER: [(&str, &str); 4] =
+    [("permitted", "TokenPermissions"), ("spender", "address"), ("nonce", "uint256"), ("deadline", "uint256")];
+const PERMIT_BATCH_TRANSFER: [(&str, &str); 4] =
+    [("permitted", "TokenPermissions[]"), ("spender", "address"), ("nonce", "uint256"), ("deadline", "uint256")];
+
+/// A permit, spelled out: who may spend what, of which token, until when. Known by its types'
+/// exact shape, not their names alone. None for anything else.
+fn permit_pages(td: &TypedData) -> Option<Vec<Page>> {
+    let m = &td.message;
+    let spender = || address_text(m.get("spender"));
+    let mut pages = Vec::new();
+    match td.primary_type.as_str() {
+        // EIP-2612: the token is the contract the domain names
+        "Permit" if declared(td, "Permit", &PERMIT) => {
+            pages.push(page("Permit!", String::from("lets it spend tokens"), spender()));
+            pages.push(page("Up to", String::from("in its smallest units"), allowance(m.get("value"), 256)));
+            let (date, time) = until(m.get("deadline"), 256);
+            pages.push(page("Until", date, time));
+            pages.push(page("Token", String::from("its contract"), address_text(td.domain.get("verifyingContract"))));
+        }
+        // Uniswap's Permit2, allowances: for each token, how much and until when
+        "PermitSingle" | "PermitBatch"
+            if declared(td, "PermitDetails", &PERMIT_DETAILS)
+                && (declared(td, "PermitSingle", &PERMIT_SINGLE) || declared(td, "PermitBatch", &PERMIT_BATCH)) =>
+        {
+            pages.push(page("Permit!", String::from("lets it spend tokens"), spender()));
+            let details: Vec<&Value> = match m.get("details")? {
+                Value::Array(items) => items.iter().collect(),
+                one => alloc::vec![one],
+            };
+            for (i, d) in details.iter().enumerate() {
+                let n = if details.len() > 1 { format!(" {}", i + 1) } else { String::new() };
+                pages.push(page(&format!("Token{}", n), String::from("its contract"), address_text(d.get("token"))));
+                pages.push(page(&format!("Up to{}", n), String::from("in its smallest units"), allowance(d.get("amount"), 160)));
+                let (date, time) = match d.get("expiration").and_then(typed::integer_u64) {
+                    // Permit2 takes 0 as the block it's used in
+                    Some(0) => (String::from("its first use"), String::new()),
+                    _ => until(d.get("expiration"), 48),
+                };
+                pages.push(page(&format!("Until{}", n), date, time));
+            }
+        }
+        // Permit2, one-time transfers: it may take up to so much, once, before the deadline
+        "PermitTransferFrom" | "PermitBatchTransferFrom"
+            if declared(td, "TokenPermissions", &TOKEN_PERMISSIONS)
+                && (declared(td, "PermitTransferFrom", &PERMIT_TRANSFER)
+                    || declared(td, "PermitBatchTransferFrom", &PERMIT_BATCH_TRANSFER)) =>
+        {
+            pages.push(page("Transfer!", String::from("lets it take tokens"), spender()));
+            let permitted: Vec<&Value> = match m.get("permitted")? {
+                Value::Array(items) => items.iter().collect(),
+                one => alloc::vec![one],
+            };
+            for (i, t) in permitted.iter().enumerate() {
+                let n = if permitted.len() > 1 { format!(" {}", i + 1) } else { String::new() };
+                pages.push(page(&format!("Token{}", n), String::from("its contract"), address_text(t.get("token"))));
+                pages.push(page(&format!("Up to{}", n), String::from("in its smallest units"), allowance(t.get("amount"), 256)));
+            }
+            let (date, time) = until(m.get("deadline"), 256);
+            pages.push(page("Until", date, time));
+        }
+        _ => return None,
+    }
+    Some(pages)
+}
+
+/// Text as maki shows it: control characters (but new lines) as `\u{..}`.
+fn shown_text(s: &str) -> String {
+    s.chars().map(|c| if c.is_control() && c != '\n' { format!("\\u{{{:x}}}", c as u32) } else { String::from(c) }).collect()
+}
+
+/// A field's page: its path as the heading, what kind of value, and the value.
+fn value_page(td: &TypedData, ty: &str, v: &Value, path: &str, pages: &mut Vec<Page>) -> Result<(), typed::Error> {
+    if pages.len() > MAX_TYPED_PAGES {
+        return Err(typed::Error::Shape(String::from("too much to show on maki")));
+    }
+    if let Some(open) = ty.rfind('[').filter(|_| ty.ends_with(']')) {
+        let items = v.as_array().unwrap_or(&[]);
+        if items.is_empty() {
+            pages.push(page(path, String::from("an empty list"), String::new()));
+        }
+        for (i, item) in items.iter().enumerate() {
+            value_page(td, &ty[..open], item, &format!("{}[{}]", path, i), pages)?;
+        }
+        return Ok(());
+    }
+    if td.fields(ty).is_some() {
+        return match v {
+            Value::Null => {
+                pages.push(page(path, String::from("none"), String::new()));
+                Ok(())
+            }
+            _ => struct_pages(td, ty, v, path, pages),
+        };
+    }
+    let p = match ty {
+        "address" => page(path, String::from("address"), address_text(Some(v))),
+        "bool" => page(path, String::from(if *v == Value::Bool(true) { "yes" } else { "no" }), String::new()),
+        "string" => page(path, String::from("text"), shown_text(v.as_str().unwrap_or(""))),
+        _ if ty.starts_with("bytes") => {
+            let bytes = v.as_str().and_then(typed::hex_bytes).unwrap_or_default();
+            let hex: String = bytes.iter().map(|b| format!("{:02x}", b)).collect();
+            page(path, format!("{} bytes", bytes.len()), hex)
+        }
+        _ => page(path, String::from("number"), typed::integer_text(v).unwrap_or_default()),
+    };
+    pages.push(p);
+    Ok(())
+}
+
+fn struct_pages(td: &TypedData, ty: &str, v: &Value, path: &str, pages: &mut Vec<Page>) -> Result<(), typed::Error> {
+    for f in td.fields(ty).unwrap_or(&[]) {
+        let p = if path.is_empty() { f.name.clone() } else { format!("{}.{}", path, f.name) };
+        value_page(td, &f.ty, v.get(&f.name).unwrap_or(&Value::Null), &p, pages)?;
+    }
+    Ok(())
+}
+
+/// Typed data (EIP-712) for the screen: the pages, then the ask's title and the line under it.
+/// The network and the app it's for come first. A permit (EIP-2612, or Uniswap's Permit2) is
+/// spelled out as what it lets someone do; anything else goes field by field, every one that's
+/// signed.
+pub fn typed_review(td: &TypedData) -> Result<(Vec<Page>, &'static str, &'static str), typed::Error> {
+    let mut pages = Vec::new();
+    match (td.chain_id(), td.domain.get("chainId")) {
+        (Some(id), _) => {
+            let (name, _) = network(id);
+            pages.push(page("Network", name, format!("chain ID {}", id)));
+        }
+        (None, Some(v)) => pages.push(page("Network", String::from("unknown"), typed::integer_text(v).unwrap_or_default())),
+        (None, None) => {}
+    }
+    let name = td.domain.get("name").and_then(Value::as_str).map(shown_text).unwrap_or_default();
+    let mut about = String::new();
+    if let Some(version) = td.domain.get("version").and_then(Value::as_str) {
+        about.push_str(&format!("version {}\n", shown_text(version)));
+    }
+    about.push_str(&match td.domain.get("verifyingContract") {
+        Some(c) => address_text(Some(c)),
+        None => String::from("no contract named"),
+    });
+    pages.push(page("App", if name.is_empty() { String::from("unnamed") } else { name }, about));
+    if let Some(permit) = permit_pages(td) {
+        pages.extend(permit);
+        return Ok((pages, "Sign permit?", "it can spend tokens"));
+    }
+    pages.push(page("Data", td.primary_type.clone(), String::new()));
+    struct_pages(td, &td.primary_type, &td.message, "", &mut pages)?;
+    if pages.len() > MAX_TYPED_PAGES {
+        return Err(typed::Error::Shape(String::from("too much to show on maki")));
+    }
+    Ok((pages, "Sign data?", "apps may act on it"))
 }

@@ -220,10 +220,12 @@ fn messages_show_as_text_or_hex() {
 const FIXTURES: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures");
 
 /// The emulator demo's transaction (0.05 ETH to Bob on Ethereum), unsigned and as maki signs it
-/// for the test phrase's first account, and its message's signature. Regenerate (only if the fixture changes) with
+/// for the test phrase's first account, and its message's and typed data's signatures. Regenerate (only if the fixture changes) with
 ///     cargo test -p maki-eth -- --ignored write_fixtures
 fn fixture_tx() -> TxEip1559 { eip1559(Some(bob()), 50_000_000_000_000_000, vec![], AccessList::default()) }
 const FIXTURE_MESSAGE: &[u8] = b"Sign in to demo.maki";
+/// Typed data: a permit to spend 1 USDC on Ethereum, from the test phrase's first account.
+const FIXTURE_TYPED: &str = r#"{"types":{"EIP712Domain":[{"name":"name","type":"string"},{"name":"version","type":"string"},{"name":"chainId","type":"uint256"},{"name":"verifyingContract","type":"address"}],"Permit":[{"name":"owner","type":"address"},{"name":"spender","type":"address"},{"name":"value","type":"uint256"},{"name":"nonce","type":"uint256"},{"name":"deadline","type":"uint256"}]},"primaryType":"Permit","domain":{"name":"USD Coin","version":"2","chainId":1,"verifyingContract":"0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48"},"message":{"owner":"0x9858EfFD232B4033E47d90003D41EC34EcaEda94","spender":"0x3fC91A3afd70395Cd496C647d5a6CC9D4B2b7FAD","value":"1000000","nonce":0,"deadline":1790000000}}"#;
 
 #[test]
 #[ignore]
@@ -234,6 +236,9 @@ fn write_fixtures() {
     std::fs::write(format!("{FIXTURES}/abandon-tx-unsigned.bin"), &unsigned).unwrap();
     std::fs::write(format!("{FIXTURES}/abandon-tx-signed.bin"), Tx::parse(&unsigned).unwrap().sign(&account).unwrap()).unwrap();
     std::fs::write(format!("{FIXTURES}/abandon-message.sig"), account.sign_message(FIXTURE_MESSAGE).unwrap()).unwrap();
+    std::fs::write(format!("{FIXTURES}/abandon-typed.json"), FIXTURE_TYPED).unwrap();
+    let typed = maki_eth::TypedData::parse(FIXTURE_TYPED).unwrap();
+    std::fs::write(format!("{FIXTURES}/abandon-typed.sig"), account.sign_typed(&typed).unwrap()).unwrap();
 }
 
 #[test]
@@ -245,6 +250,10 @@ fn the_fixtures_are_current() {
     assert_eq!(Tx::parse(&unsigned).unwrap().sign(&account).unwrap(), signed);
     let sig = std::fs::read(format!("{FIXTURES}/abandon-message.sig")).unwrap();
     assert_eq!(account.sign_message(FIXTURE_MESSAGE).unwrap().to_vec(), sig);
+    assert_eq!(std::fs::read_to_string(format!("{FIXTURES}/abandon-typed.json")).unwrap(), FIXTURE_TYPED);
+    let typed = maki_eth::TypedData::parse(FIXTURE_TYPED).unwrap();
+    let sig = std::fs::read(format!("{FIXTURES}/abandon-typed.sig")).unwrap();
+    assert_eq!(account.sign_typed(&typed).unwrap().to_vec(), sig);
 }
 
 #[test]

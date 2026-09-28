@@ -1,9 +1,9 @@
-//! Ethereum transactions and messages from sites are parsed on maki: anything, however broken,
-//! must get an error, never a panic. Random bytes, and mutations of a real transaction.
+//! Ethereum transactions, messages and typed data from sites are parsed on maki: anything,
+//! however broken, must get an error, never a panic. Random bytes, and mutations of real ones.
 
 use std::panic::{catch_unwind, AssertUnwindSafe};
 
-use maki_eth::{display, rlp, Account, Tx};
+use maki_eth::{display, json, rlp, Account, Tx, TypedData};
 
 struct Rng(u64);
 impl Rng {
@@ -90,4 +90,77 @@ fn nothing_a_site_sends_panics_the_account() {
         assert!(outcome.is_ok(), "panicked on {:02x?}", input);
     }
     assert!(parsed > 500 && reviewed > 500, "parsed {parsed}, reviewed {reviewed}");
+}
+
+/// Typed data to start from: a permit, Permit2's batch and one with arrays of structs.
+const TYPED: [&str; 3] = [
+    r#"{"types": {"EIP712Domain": [{"name": "name", "type": "string"}, {"name": "version", "type": "string"},
+        {"name": "chainId", "type": "uint256"}, {"name": "verifyingContract", "type": "address"}],
+      "Permit": [{"name": "owner", "type": "address"}, {"name": "spender", "type": "address"}, {"name": "value", "type": "uint256"},
+        {"name": "nonce", "type": "uint256"}, {"name": "deadline", "type": "uint256"}]},
+     "primaryType": "Permit", "domain": {"name": "USD Coin", "version": "2", "chainId": 8453, "verifyingContract": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913"},
+     "message": {"owner": "0x9858EfFD232B4033E47d90003D41EC34EcaEda94", "spender": "0x3fc91a3afd70395cd496c647d5a6cc9d4b2b7fad",
+       "value": "1000", "nonce": 0, "deadline": 1790000000}}"#,
+    r#"{"types": {"EIP712Domain": [{"name": "name", "type": "string"}, {"name": "chainId", "type": "uint256"}, {"name": "verifyingContract", "type": "address"}],
+      "PermitDetails": [{"name": "token", "type": "address"}, {"name": "amount", "type": "uint160"}, {"name": "expiration", "type": "uint48"}, {"name": "nonce", "type": "uint48"}],
+      "PermitBatch": [{"name": "details", "type": "PermitDetails[]"}, {"name": "spender", "type": "address"}, {"name": "sigDeadline", "type": "uint256"}]},
+     "primaryType": "PermitBatch", "domain": {"name": "Permit2", "chainId": 1, "verifyingContract": "0x000000000022D473030F116dDEE9F6B43aC78BA3"},
+     "message": {"details": [{"token": "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48", "amount": "0xffff", "expiration": "1790000000", "nonce": 0}],
+       "spender": "0x3fC91A3afd70395Cd496C647d5a6CC9D4B2b7FAD", "sigDeadline": "1790001800"}}"#,
+    r#"{"types": {"EIP712Domain": [{"name": "name", "type": "string"}],
+      "Item": [{"name": "id", "type": "int64"}, {"name": "tags", "type": "string[]"}, {"name": "blob", "type": "bytes"}, {"name": "b4", "type": "bytes4"}],
+      "Order": [{"name": "items", "type": "Item[2]"}, {"name": "grid", "type": "uint8[2][]"}, {"name": "ok", "type": "bool"}]},
+     "primaryType": "Order", "domain": {"name": "Shop"},
+     "message": {"items": [{"id": -5, "tags": ["a", "é"], "blob": "0x00ff", "b4": "0x01020304"}, {"id": "0x10", "tags": [], "blob": "0x", "b4": "0x00000000"}],
+       "grid": [[1, 2], [3, 4]], "ok": true}}"#,
+];
+
+/// Mutations that keep to JSON's alphabet, so more of them get far into the parser.
+fn mutate_json(rng: &mut Rng, base: &str) -> String {
+    const PIECES: [&str; 16] = ["{", "}", "[", "]", ",", ":", "\"", "\\u", "-", "0x", "1", "99999999999999999999999999999999999999999999999999999999999999999999999999999", "null", "[]", "\"uint256\"", "\"Item[]\""];
+    let mut b = base.as_bytes().to_vec();
+    // mostly one change: more of them still parse, and reach the checks on types and values
+    for _ in 0..if rng.below(4) == 0 { 2 + rng.below(2) } else { 1 } {
+        let i = rng.below(b.len() + 1);
+        match rng.below(3) {
+            0 => {
+                let piece = PIECES[rng.below(PIECES.len())].as_bytes();
+                b.splice(i..i, piece.iter().copied());
+            }
+            1 if i < b.len() => {
+                let end = (i + 1 + rng.below(8)).min(b.len());
+                b.drain(i..end);
+            }
+            _ => b = mutate(rng, &b),
+        }
+    }
+    String::from_utf8_lossy(&b).into_owned()
+}
+
+#[test]
+fn no_typed_data_a_site_sends_panics_the_account() {
+    for t in TYPED {
+        assert!(TypedData::parse(t).is_ok(), "{}", t);
+    }
+    let account = Account::from_private_key(&[9u8; 32]).unwrap();
+    let mut rng = Rng(0x9e37_79b9_7f4a_7c15);
+    let (mut parsed, mut reviewed) = (0, 0);
+    for i in 0..30_000 {
+        let input = match i % 4 {
+            0 => String::from_utf8_lossy(&(0..rng.below(120)).map(|_| rng.next() as u8).collect::<Vec<u8>>()).into_owned(),
+            n => mutate_json(&mut rng, TYPED[n - 1]),
+        };
+        let outcome = catch_unwind(AssertUnwindSafe(|| {
+            let _ = json::parse(&input);
+            if let Ok(td) = TypedData::parse(&input) {
+                parsed += 1;
+                if display::typed_review(&td).is_ok() {
+                    reviewed += 1;
+                }
+                let _ = account.sign_typed(&td);
+            }
+        }));
+        assert!(outcome.is_ok(), "panicked on {}", input);
+    }
+    assert!(parsed > 300 && reviewed > 300, "parsed {parsed}, reviewed {reviewed}");
 }

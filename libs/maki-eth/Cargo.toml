@@ -15,3 +15,6 @@ maki-seed = { path = "../maki-seed" }
 alloy = { version = "1", default-features = false, features = ["consensus", "eips", "signers", "signer-local"] }
 # its derive macros, held to the same release (cargo otherwise picks a newer, incompatible one)
 alloy-tx-macros = "=1.0.30"
+# hashes typed data (EIP-712) independently; held to the alloy-core release alloy uses
+alloy-dyn-abi = { version = "=1.5.7", features = ["eip712"] }
+serde_json = "1"
