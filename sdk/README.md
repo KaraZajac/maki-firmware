@@ -9,7 +9,7 @@ app carries a mark in maki's top bar for as long as it's installed.
 This directory has the Rust crate apps are written with (`maki-app`), eight examples (Hello,
 Dice, Tally; Signer and Sensors, which use permissions; SSH, maki's SSH key, which answers
 maki desktop's SSH agent; Hello Native, Hello built as a native app; and Pomodoro, a native
-focus timer whose circle shrinks while you work and grows back while you rest), and the `maki`
+focus timer whose pie empties like a clock while you work and fills back up while you rest), and the `maki`
 tool that packs, signs, checks and simulates them.
 
 ## Quick start

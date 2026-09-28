@@ -1,11 +1,12 @@
-//! A focus timer. A filled circle shrinks to a dot while you focus; when it's gone the screen
-//! flashes until the centre starts a break, and the dot grows back into the circle while you
-//! rest. Then it flashes again, and the centre starts the next focus.
+//! A focus timer, as a pie: whole when a focus starts, it empties clockwise like a clock's hand
+//! sweeping round until nothing's left. Then the screen flashes until the centre starts a break,
+//! and over the break the pie fills back up, clockwise, until it's whole again; it flashes, and
+//! the centre starts the next focus. Nothing else is on the screen while it runs.
 //!
-//! Before the first focus, left and right set how long it is. Every fourth break is three
-//! times as long. The centre pauses, and the menu skips ahead, starts over or changes the
-//! breaks. Leaving the app doesn't stop the timer when maki knows the time: it picks up where
-//! it would be when opened again.
+//! Before a focus its minutes show on the pie, and left and right set them. The centre pauses
+//! (two bars on the pie). Every fourth break is three times as long. The menu skips ahead,
+//! starts over or changes the breaks. Leaving the app doesn't stop the timer when maki knows the
+//! time: it picks up where it would be when opened again.
 
 #![no_std]
 
@@ -13,19 +14,29 @@ use core::fmt::Write;
 
 use maki_app::*;
 
-/// The circle: its centre, how big it is when whole, and the dot it shrinks to.
+/// The pie: its centre and radius, and the twelve marks round it, like a clock's.
 const CX: i32 = WIDTH / 2;
-const CY: i32 = 49;
-const FULL: i32 = 42;
-const DOT: i32 = 2;
-/// A quarter of the ring of 60 marks around it, from the top, a little outside the whole
-/// circle; the other quarters are this one turned.
-const RING: [(i32, i32); 15] = [
-    (0, -47), (5, -47), (10, -46), (15, -45), (19, -43), (23, -41), (28, -38), (31, -35),
-    (35, -31), (38, -28), (41, -24), (43, -19), (45, -15), (46, -10), (47, -5),
+const CY: i32 = HEIGHT / 2;
+const R: i32 = 45;
+const MARKS: i32 = R + 5;
+/// A turn, in the steps the pie moves by: half a degree each.
+const TURN: i32 = 720;
+/// sin of 0, 0.5, 1, ... 90 degrees, times 4096.
+const SIN: [i32; 181] = [
+    0, 36, 71, 107, 143, 179, 214, 250, 286, 321, 357, 393, 428, 464, 499,
+    535, 570, 605, 641, 676, 711, 746, 782, 817, 852, 887, 921, 956, 991, 1026,
+    1060, 1095, 1129, 1163, 1198, 1232, 1266, 1300, 1334, 1367, 1401, 1434, 1468, 1501, 1534,
+    1567, 1600, 1633, 1666, 1699, 1731, 1763, 1796, 1828, 1860, 1891, 1923, 1954, 1986, 2017,
+    2048, 2079, 2110, 2140, 2171, 2201, 2231, 2261, 2290, 2320, 2349, 2379, 2408, 2436, 2465,
+    2493, 2522, 2550, 2578, 2605, 2633, 2660, 2687, 2714, 2741, 2767, 2793, 2820, 2845, 2871,
+    2896, 2921, 2946, 2971, 2996, 3020, 3044, 3068, 3091, 3115, 3138, 3161, 3183, 3206, 3228,
+    3250, 3271, 3293, 3314, 3335, 3355, 3376, 3396, 3416, 3435, 3455, 3474, 3492, 3511, 3529,
+    3547, 3565, 3582, 3600, 3617, 3633, 3650, 3666, 3681, 3697, 3712, 3727, 3742, 3756, 3770,
+    3784, 3798, 3811, 3824, 3837, 3849, 3861, 3873, 3884, 3896, 3906, 3917, 3927, 3937, 3947,
+    3956, 3966, 3974, 3983, 3991, 3999, 4006, 4014, 4021, 4027, 4034, 4040, 4046, 4051, 4056,
+    4061, 4065, 4070, 4074, 4077, 4080, 4083, 4086, 4088, 4090, 4092, 4094, 4095, 4095, 4096,
+    4096,
 ];
-/// The line of text under it.
-const LINE: i32 = HEIGHT - 12;
 
 /// A minute, in maki's milliseconds.
 const MINUTE: u64 = 60_000;
@@ -74,12 +85,16 @@ struct Timer {
 /// What's on the screen, to draw again only when it changes.
 #[derive(PartialEq, Eq)]
 struct Look {
-    radius: i32,
+    /// How much of the pie there is: `TURN` whole, 0 none.
+    pie: i32,
+    /// Where it starts: at twelve o'clock (a break filling it), or at its edge, which sweeps
+    /// round to twelve as a focus empties it.
+    from_top: bool,
+    /// Flashing: light, the pie dark.
     light: bool,
-    ready: bool,
+    /// Before a focus: its minutes, on the pie.
+    ready: Option<u32>,
     paused: bool,
-    done: u32,
-    line: [u8; 24],
 }
 
 fn isqrt(n: i32) -> i32 {
@@ -94,29 +109,81 @@ fn isqrt(n: i32) -> i32 {
     x
 }
 
-/// A filled circle: the rows of pixels within `r` and a half of the centre.
-fn disc(r: i32, color: Color) {
-    for dy in -r..=r {
-        let dx = isqrt(r * r + r - dy * dy);
-        screen::fill_rect(CX - dx, CY + dy, 2 * dx + 1, 1, color);
+/// A direction `step`s clockwise from straight up, as (x, y) on the screen (y down), x4096.
+fn hand(step: i32) -> (i32, i32) {
+    let s = step.rem_euclid(TURN);
+    let (quarter, r) = (s / 180, (s % 180) as usize);
+    let (sin, cos) = (SIN[r], SIN[180 - r]);
+    match quarter {
+        0 => (sin, -cos),
+        1 => (cos, sin),
+        2 => (-sin, cos),
+        _ => (-cos, -sin),
     }
 }
 
-fn ring(color: Color) {
-    for turn in 0..4 {
-        for &(x, y) in &RING {
-            let (x, y) = match turn {
-                0 => (x, y),
-                1 => (-y, x),
-                2 => (-x, -y),
-                _ => (y, -x),
-            };
-            screen::pixel(CX + x, CY + y, color);
+/// Whether (x, y), from the centre, is less far round clockwise from straight up than `step`.
+/// No angles: which half it's in, and which side of the hand, by their cross product.
+fn before(x: i32, y: i32, step: i32) -> bool {
+    if step <= 0 {
+        return false;
+    }
+    if step >= TURN {
+        return true;
+    }
+    let (hx, hy) = hand(step);
+    let right = x > 0 || (x == 0 && y < 0);
+    // the hand is less than half a turn clockwise of the point
+    let ahead = x * hy - y * hx > 0;
+    if step <= TURN / 2 { right && ahead } else { right || ahead }
+}
+
+/// The pie, a row at a time: `pie` steps of it, from twelve o'clock or ending there.
+fn pie(pie: i32, from_top: bool, color: Color) {
+    for dy in -R..=R {
+        let w = isqrt(R * R + R - dy * dy);
+        let mut run: Option<i32> = None;
+        for dx in -w..=w + 1 {
+            let inside = dx <= w
+                && if from_top { before(dx, dy, pie) } else { !before(dx, dy, TURN - pie) };
+            match (inside, run) {
+                (true, None) => run = Some(dx),
+                (false, Some(start)) => {
+                    screen::fill_rect(CX + start, CY + dy, dx - start, 1, color);
+                    run = None;
+                }
+                _ => {}
+            }
         }
     }
 }
 
-fn minutes(ms: u64) -> u64 { ms.div_ceil(MINUTE) }
+/// The pie's edge, a pixel wide, so it shows when there's little or none of it.
+fn edge(color: Color) {
+    let (mut x, mut y, mut d) = (R, 0, 1 - R);
+    while x >= y {
+        for (px, py) in [(x, y), (y, x), (-y, x), (-x, y), (-x, -y), (-y, -x), (y, -x), (x, -y)] {
+            screen::pixel(CX + px, CY + py, color);
+        }
+        y += 1;
+        if d < 0 {
+            d += 2 * y + 1;
+        } else {
+            x -= 1;
+            d += 2 * (y - x) + 1;
+        }
+    }
+}
+
+/// Twelve marks round it, as a clock has: dots, a little bigger at twelve, three, six and nine.
+fn marks(color: Color) {
+    for hour in 0..12 {
+        let (hx, hy) = hand(hour * TURN / 12);
+        let (x, y) = (CX + (hx * MARKS + 2048).div_euclid(4096), CY + (hy * MARKS + 2048).div_euclid(4096));
+        let big = hour % 3 == 0;
+        screen::fill_rect(x - big as i32, y - big as i32, 2 + big as i32, 2 + big as i32, color);
+    }
+}
 
 impl Timer {
     fn restore(now: u64) -> Timer {
@@ -260,13 +327,12 @@ impl Timer {
     fn wake(&self, now: u64) -> Option<u32> {
         match self.state {
             State::Ready | State::Paused { .. } => None,
-            // each second, for the seconds of the last minute and the circle
-            State::Running { ends, .. } => {
-                let left = ends.saturating_sub(now);
-                Some(match left % 1000 {
-                    0 => left.min(1000),
-                    part => part,
-                } as u32)
+            // when the pie next moves a step (or it's over)
+            State::Running { ends, total, .. } => {
+                let (total, left) = (total.max(1), ends.saturating_sub(now));
+                let gone = total - left.min(total);
+                let next = (gone * TURN as u64 / total + 1) * total;
+                Some((next.div_ceil(TURN as u64) - gone).clamp(1, left.max(1)) as u32)
             }
             State::Over { since, .. } => {
                 let t = now - since;
@@ -281,76 +347,50 @@ impl Timer {
     }
 
     fn look(&self, now: u64) -> Look {
-        let span = (FULL - DOT) as u64;
-        let mut line = Buf::<24>::new();
-        let (radius, light, paused) = match self.state {
-            State::Ready => {
-                let _ = write!(line, "focus {} min", self.focus);
-                (FULL, false, false)
-            }
+        let plain = Look { pie: TURN, from_top: true, light: false, ready: None, paused: false };
+        match self.state {
+            State::Ready => Look { ready: Some(self.focus), ..plain },
             State::Running { phase, ends, total } | State::Paused { phase, left: ends, total } => {
                 let paused = matches!(self.state, State::Paused { .. });
-                let left = if paused { ends } else { ends.saturating_sub(now) };
-                let word = match (paused, phase) {
-                    (true, _) => "paused",
-                    (false, Phase::Focus) => "focus",
-                    (false, Phase::Break) => "break",
-                };
-                if left < MINUTE {
-                    let _ = write!(line, "{word} {} s", left.div_ceil(1000));
-                } else {
-                    let _ = write!(line, "{word} {} min", minutes(left));
+                let (total, left) = (total.max(1), if paused { ends } else { ends.saturating_sub(now) });
+                let gone = (total - left.min(total)) * TURN as u64 / total;
+                match phase {
+                    // what's left of it, its edge sweeping round to twelve
+                    Phase::Focus => Look { pie: TURN - gone as i32, from_top: false, paused, ..plain },
+                    // what's gone by, from twelve
+                    Phase::Break => Look { pie: gone as i32, paused, ..plain },
                 }
-                let total = total.max(1);
-                let radius = match phase {
-                    // shrinks as it runs out, and is a dot only once it has
-                    Phase::Focus => DOT + (span * left).div_ceil(total) as i32,
-                    Phase::Break => FULL - (span * left).div_ceil(total) as i32,
-                };
-                (radius, false, paused)
             }
             State::Over { phase, since } => {
                 let t = now - since;
                 let light = if t < FLASHING { t / FLASH % 2 == 0 } else { (t - FLASHING) % BLINK < BLINK_ON };
-                let _ = write!(line, "{}", if phase == Phase::Focus { "time for a break" } else { "back to it" });
-                (if phase == Phase::Focus { DOT } else { FULL }, light, false)
+                Look { pie: if phase == Phase::Focus { 0 } else { TURN }, light, ..plain }
             }
-        };
-        let mut bytes = [0u8; 24];
-        bytes[..line.len()].copy_from_slice(line.as_str().as_bytes());
-        Look { radius, light, ready: self.state == State::Ready, paused, done: self.done, line: bytes }
+        }
     }
 }
 
 fn draw(look: &Look) {
     let (back, fore) = if look.light { (Color::Light, Color::Dark) } else { (Color::Dark, Color::Light) };
     screen::clear(back);
-    ring(fore);
-    disc(look.radius, fore);
-    if look.paused && look.radius >= 10 {
-        // two bars cut out of the circle
-        let h = look.radius;
-        screen::fill_rect(CX - h / 3 - 1, CY - h / 2, h / 4 + 1, h, back);
-        screen::fill_rect(CX + h / 3 - h / 4, CY - h / 2, h / 4 + 1, h, back);
+    marks(fore);
+    edge(fore);
+    pie(look.pie, look.from_top, fore);
+    // what's said on the pie shows against it, and against the screen where it isn't
+    if let Some(minutes) = look.ready {
+        let mut n = Buf::<4>::new();
+        let _ = write!(n, "{minutes}");
+        screen::text_centred(CY - Style::Tall.height() / 2, n.as_str(), Style::Tall, Color::Invert);
     }
-    if look.ready {
-        // a triangle cut out of it: the centre starts
-        let (h, w) = (FULL / 3, FULL * 2 / 3);
-        for dy in -h..=h {
-            screen::fill_rect(CX - w / 3, CY + dy, w * (h - dy.abs()) / h, 1, back);
+    if look.paused {
+        // on a disc of its own, so it reads the same wherever the pie has got to
+        let r = 14;
+        for dy in -r..=r {
+            let w = isqrt(r * r + r - dy * dy);
+            screen::fill_rect(CX - w, CY + dy, 2 * w + 1, 1, back);
         }
-    }
-    let len = look.line.iter().position(|&b| b == 0).unwrap_or(look.line.len());
-    let line = core::str::from_utf8(&look.line[..len]).unwrap_or("");
-    screen::text(2, LINE, line, Style::Small, fore);
-    // this set's focuses, done and to go
-    for i in 0..SET as i32 {
-        let x = WIDTH - 2 - (SET as i32 - i) * 7 + 2;
-        if (i as u32) < look.done {
-            screen::fill_rect(x, LINE + 4, 5, 5, fore);
-        } else {
-            screen::rect(x, LINE + 4, 5, 5, fore);
-        }
+        screen::fill_rect(CX - 6, CY - 7, 4, 15, fore);
+        screen::fill_rect(CX + 3, CY - 7, 4, 15, fore);
     }
     screen::present();
 }
