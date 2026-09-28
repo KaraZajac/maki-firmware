@@ -12,7 +12,7 @@ use std::sync::{Arc, Mutex};
 
 use maki_app_host_api as app_host;
 use maki_proto::device::{
-    reply, AppEntry, Apps, Approval, Ask, Backup, Bitcoin, Device, Ethereum, Handled, Platform, StoreState, TimeState,
+    reply, AppEntry, AppSpace, Apps, Approval, Ask, Backup, Bitcoin, Device, Ethereum, Handled, Platform, StoreState, TimeState,
     ACCOUNT_TAPROOT,
 };
 use maki_proto::frame::{self, Deframer};
@@ -122,8 +122,26 @@ fn app_list(host: Option<app_host::AppHost>, index: u32) -> (u8, Vec<u8>) {
         backup: a.backup,
         used: a.used,
         icon: a.icon.iter().flat_map(|w| w.to_le_bytes()).collect(),
+        bundle: a.bundle,
+        storage: a.storage,
     });
     reply::app_list(Approval::Approved, list.apps.len() as u32, entry.as_ref())
+}
+
+/// maki's room for apps, and what the ones installed take of it.
+fn app_space(host: Option<app_host::AppHost>) -> (u8, Vec<u8>) {
+    let Some(host) = host else { return reply::app_space(Approval::Unavailable, &AppSpace::default()) };
+    let list = host.list();
+    if list.result != app_host::RESULT_OK {
+        return reply::app_space(app_approval(list.result), &AppSpace::default());
+    }
+    let space = AppSpace {
+        apps: list.apps.len() as u32,
+        max_apps: app_host::MAX_APPS as u32,
+        space: app_host::APP_SPACE,
+        taken: list.apps.iter().map(|a| a.bundle + a.storage).sum(),
+    };
+    reply::app_space(Approval::Approved, &space)
 }
 
 /// maki-keys' answers, as the protocol's.
@@ -828,6 +846,7 @@ fn main() -> ! {
                             }
                         }
                         Handled::Apps(Apps::List { index }) => app_list(app_host::AppHost::try_new(&xns), index),
+                        Handled::Apps(Apps::Space) => app_space(app_host::AppHost::try_new(&xns)),
                         Handled::Apps(Apps::StoreUpdate { total, offset, data }) => {
                             store_update(app_host::AppHost::try_new(&xns), total, offset, data)
                         }
@@ -855,7 +874,7 @@ fn main() -> ! {
                                     }
                                     Apps::Remove { id } => Work::AppRemove { id: packet.id, app: id },
                                     Apps::Message { id, message } => Work::AppMessage { id: packet.id, app: id, message },
-                                    Apps::List { .. } | Apps::StoreUpdate { .. } => unreachable!(),
+                                    Apps::List { .. } | Apps::StoreUpdate { .. } | Apps::Space => unreachable!(),
                                 };
                                 match to_vault.send(work) {
                                     Ok(()) => continue,

@@ -230,6 +230,13 @@ fn install(w: &Worker, bytes: Vec<u8>) -> (u32, String) {
         }
         None => {}
     }
+    // the room it takes, less what the version it replaces took
+    let taken: u32 = store.records().iter().filter(|(id, _)| *id != m.id).map(|(_, r)| r.bundle + r.storage).sum();
+    let free = APP_SPACE.saturating_sub(taken);
+    let needs = bytes.len() as u32 + m.storage_kib * 1024;
+    if needs > free {
+        return (RESULT_REFUSED, format!("maki hasn't the room: it needs {} KiB, and {} KiB is free", needs.div_ceil(1024), free / 1024));
+    }
 
     // the owner decides, having seen everything
     let version = if m.label.is_empty() { format!("version {}", m.version) } else { m.label.clone() };
@@ -323,6 +330,8 @@ fn install(w: &Worker, bytes: Vec<u8>) -> (u32, String) {
         name: m.name.clone(),
         label: m.label.clone(),
         icon: b.icon,
+        bundle: bytes.len() as u32,
+        storage: m.storage_kib * 1024,
     };
     if let Err(e) = store.install(&m.id, &record, &bytes) {
         log::error!("couldn't store {}: {:?}", m.id, e);
@@ -599,6 +608,8 @@ fn main() -> ! {
                             from_store: r.from_store,
                             backup: r.backup,
                             icon: r.icon.map(|i| i.to_vec()).unwrap_or_default(),
+                            bundle: r.bundle,
+                            storage: r.storage,
                         })
                         .collect();
                     AppList { apps, result: RESULT_OK }

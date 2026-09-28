@@ -75,6 +75,10 @@ pub struct AppInfo {
     pub used: u32,
     /// 64x64, `maki_icons` form, or empty.
     pub icon: Vec<u32>,
+    /// Bytes its bundle takes.
+    pub bundle: u32,
+    /// Bytes of storage its manifest asks for, kept for it.
+    pub storage: u32,
 }
 
 #[derive(Debug, Clone, Default, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
@@ -122,6 +126,12 @@ pub const MAX_STORE_RECORD: usize = 64 * 1024;
 
 /// The most apps maki keeps.
 pub const MAX_APPS: usize = 32;
+
+/// The room apps have in maki's encrypted database, which they share with its logins, codes and
+/// passkeys: their bundles, and the storage each asks for, kept for it whether it's used or not.
+/// (The database won't say how much of it is free, by design: that would say how much is hidden
+/// in it.)
+pub const APP_SPACE: u32 = 2 * 1024 * 1024;
 
 #[derive(Clone, Copy)]
 pub struct AppHost {
@@ -227,6 +237,11 @@ pub struct Record {
     pub name: String,
     pub label: String,
     pub icon: Option<[u32; 128]>,
+    /// Bytes its bundle takes, and of storage its manifest asks for: what it takes of
+    /// `APP_SPACE`. Records from before maki kept these (in backups) have 0; installing sets
+    /// them.
+    pub bundle: u32,
+    pub storage: u32,
 }
 
 impl Record {
@@ -247,6 +262,8 @@ impl Record {
             }
             None => out.push(0),
         }
+        out.extend_from_slice(&self.bundle.to_le_bytes());
+        out.extend_from_slice(&self.storage.to_le_bytes());
         out
     }
 
@@ -276,7 +293,13 @@ impl Record {
                 Some(icon)
             }
         };
-        Some(Record { version, backup, from_store, developer, name, label, icon })
+        let sizes = take(8);
+        let (bundle, storage) = match (sizes, b.len() - at) {
+            (Some(s), 0) => (u32::from_le_bytes(s[..4].try_into().ok()?), u32::from_le_bytes(s[4..].try_into().ok()?)),
+            (None, 0) => (0, 0),
+            _ => return None,
+        };
+        Some(Record { version, backup, from_store, developer, name, label, icon, bundle, storage })
     }
 }
 
@@ -295,12 +318,20 @@ mod tests {
             name: "Dice".into(),
             label: "1.2".into(),
             icon: Some(core::array::from_fn(|i| i as u32)),
+            bundle: 9417,
+            storage: 1024,
         };
         let b = r.encode();
         assert_eq!(Record::decode(&b), Some(r.clone()));
-        for len in 0..b.len() {
+        // a record from before maki kept the sizes, as a backup may hold one
+        let old = b.len() - 8;
+        assert_eq!(Record::decode(&b[..old]), Some(Record { bundle: 0, storage: 0, ..r.clone() }));
+        for len in (0..b.len()).filter(|&len| len != old) {
             assert_eq!(Record::decode(&b[..len]), None, "cut to {len}");
         }
+        let mut longer = b.clone();
+        longer.push(0);
+        assert_eq!(Record::decode(&longer), None);
         let plain = Record { icon: None, label: String::new(), ..r };
         assert_eq!(Record::decode(&plain.encode()), Some(plain));
     }

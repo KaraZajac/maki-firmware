@@ -129,6 +129,7 @@ pub enum Apps {
     Message { id: String, message: Vec<u8> },
     /// `total` 0: just what maki has.
     StoreUpdate { total: u32, offset: u32, data: Vec<u8> },
+    Space,
 }
 
 /// Pieces of a bundle are at most this big.
@@ -172,6 +173,21 @@ pub struct AppEntry {
     pub used: u32,
     /// 64x64 in `maki_icons` form as little-endian words (512 bytes), or empty.
     pub icon: Vec<u8>,
+    /// Bytes its bundle takes on maki.
+    pub bundle: u32,
+    /// Bytes of storage its manifest asks for: what it may use, kept for it.
+    pub storage: u32,
+}
+
+/// maki's room for apps: its bundles and the storage each asks for, within `space` bytes, and
+/// at most `max_apps` of them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct AppSpace {
+    pub apps: u32,
+    pub max_apps: u32,
+    pub space: u32,
+    /// What the apps installed take: their bundles and the storage each asks for.
+    pub taken: u32,
 }
 
 /// Whether `id` is an app ID as bundles have them: reverse-DNS, lower case.
@@ -403,9 +419,19 @@ pub mod reply {
                 .u8(e.from_store as u8)
                 .u8(e.backup as u8)
                 .u32(e.used)
-                .bytes16(&e.icon);
+                .bytes16(&e.icon)
+                .u32(e.bundle)
+                .u32(e.storage);
         }
         (kind::APP_LIST | kind::REPLY, w.finish())
+    }
+
+    /// maki's room for apps; `status` is `Approved`, or why not (`Locked`, `Unavailable`)
+    /// with nothing.
+    pub fn app_space(status: Approval, space: &super::AppSpace) -> (u8, Vec<u8>) {
+        let s = if status == Approval::Approved { *space } else { super::AppSpace::default() };
+        let body = Writer::new().u8(status as u8).u32(s.apps).u32(s.max_apps).u32(s.space).u32(s.taken).finish();
+        (kind::APP_SPACE | kind::REPLY, body)
     }
 
     /// A piece of a bundle taken (`done` false, `Approved`), or the outcome once the owner
@@ -520,7 +546,7 @@ impl<P: Platform> Device<P> {
             kind::ETH_ACCOUNT | kind::ETH_SIGN_TX | kind::ETH_SIGNED | kind::ETH_SIGN_MESSAGE | kind::ETH_SIGN_TYPED => {
                 return Self::ethereum(packet.kind, body)
             }
-            kind::APP_LIST | kind::APP_INSTALL | kind::APP_REMOVE | kind::APP_MESSAGE | kind::STORE_UPDATE => {
+            kind::APP_LIST | kind::APP_INSTALL | kind::APP_REMOVE | kind::APP_MESSAGE | kind::STORE_UPDATE | kind::APP_SPACE => {
                 return Self::apps(packet.kind, body)
             }
             _ => Ok(error(ErrorCode::UnknownKind, "unknown message kind")),
@@ -578,6 +604,7 @@ impl<P: Platform> Device<P> {
                 kind::APP_INSTALL => Apps::Install { total: r.u32()?, offset: r.u32()?, data: r.bytes16()?.to_vec() },
                 kind::APP_MESSAGE => Apps::Message { id: r.str8()?.to_string(), message: r.bytes16()?.to_vec() },
                 kind::STORE_UPDATE => Apps::StoreUpdate { total: r.u32()?, offset: r.u32()?, data: r.bytes16()?.to_vec() },
+                kind::APP_SPACE => Apps::Space,
                 _ => Apps::Remove { id: r.str8()?.to_string() },
             };
             r.end()?;

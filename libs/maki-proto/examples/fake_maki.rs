@@ -27,7 +27,7 @@ use hmac::{Hmac, Mac};
 use maki_btc::psbt::Psbt;
 use maki_btc::{display, wallet, Account, Network};
 use maki_proto::device::{
-    reply, AppEntry, Approval, Apps, Ask, Backup, Bitcoin, Device, Ethereum, Handled, Platform, StoreState, TimeState,
+    reply, AppEntry, AppSpace, Approval, Apps, Ask, Backup, Bitcoin, Device, Ethereum, Handled, Platform, StoreState, TimeState,
     ACCOUNT_TAPROOT, BACKUP_PIECE, PSBT_PIECE, TX_PIECE,
 };
 use maki_proto::frame::{self, Deframer};
@@ -85,6 +85,16 @@ struct Store {
     store_incoming: Vec<u8>,
 }
 
+/// maki's room for apps, as its app host has it (`maki-app-host-api`).
+const MAX_APPS: usize = 32;
+const APP_SPACE: u32 = 2 * 1024 * 1024;
+
+/// What an app takes of maki's room for apps: its bundle, and the storage it asks for.
+fn takes(bundle: &[u8]) -> u32 {
+    let storage = maki_bundle::read(bundle).map(|b| b.manifest.storage_kib).unwrap_or(0);
+    bundle.len() as u32 + storage * 1024
+}
+
 #[derive(Clone)]
 struct Installed {
     bundle: Vec<u8>,
@@ -96,6 +106,15 @@ struct Installed {
 
 impl Store {
     fn root(&self) -> &maki_store::Root { self.store_root.as_ref().expect("the store root is set at start") }
+
+    fn space(&self) -> AppSpace {
+        AppSpace {
+            apps: self.apps.len() as u32,
+            max_apps: MAX_APPS as u32,
+            space: APP_SPACE,
+            taken: self.apps.values().map(|a| takes(&a.bundle)).sum(),
+        }
+    }
 
     fn store_state(&self) -> StoreState {
         let list = self.revocations.as_ref().map(|r| &r.list);
@@ -527,6 +546,17 @@ fn finish_install(bundle: Vec<u8>, store: &Mutex<Store>, policy: Policy, now: Op
         if let Err(e) = maki_bundle::may_update(&old_b.developer, old_b.manifest.version, &b) {
             return refused(&e);
         }
+    } else if store.lock().unwrap().apps.len() >= MAX_APPS {
+        return refused(&format!("maki has room for {MAX_APPS} apps: remove one first"));
+    }
+    // the room it takes, less what the version it replaces took
+    let free = {
+        let space = store.lock().unwrap().space();
+        let freed = installed.as_ref().map(|old| takes(&old.bundle)).unwrap_or(0);
+        space.space.saturating_sub(space.taken - freed)
+    };
+    if takes(&bundle) > free {
+        return refused(&format!("maki hasn't the room: it needs {} KiB, and {} KiB is free", takes(&bundle).div_ceil(1024), free / 1024));
     }
     let replacing = if installed.as_ref().is_some_and(|old| old.from_store) && !from_store {
         ", replacing the store's app"
@@ -624,6 +654,8 @@ fn app_entry(app: &Installed) -> AppEntry {
         backup: app.backup,
         used: 0,
         icon: b.icon.map(|i| i.iter().flat_map(|w| w.to_le_bytes()).collect()).unwrap_or_default(),
+        bundle: app.bundle.len() as u32,
+        storage: b.manifest.storage_kib * 1024,
     }
 }
 
@@ -768,6 +800,11 @@ fn main() {
                                 });
                             }
                         }
+                    }
+                    Handled::Apps(Apps::Space) => {
+                        let space = store.lock().unwrap().space();
+                        let (kind, body) = reply::app_space(Approval::Approved, &space);
+                        writer.lock().unwrap().write_all(&frame::encode(kind, packet.id, &body)).ok();
                     }
                     Handled::Apps(Apps::List { index }) => {
                         let st = store.lock().unwrap();

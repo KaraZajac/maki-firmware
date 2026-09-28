@@ -260,7 +260,7 @@ fn nonsense_arguments_and_messages_are_refused() {
     let tz = ask(&mut d, kind::TIME_UNVERIFIED, Writer::new().u64(MIDPOINT_MS).i32(15 * 3600).finish());
     assert_eq!(error_code(&tz), ErrorCode::BadArgument as u8);
     assert_eq!(error_code(&ask(&mut d, kind::HELLO, vec![1])), ErrorCode::Malformed as u8);
-    assert_eq!(error_code(&ask(&mut d, 0x55, vec![])), ErrorCode::UnknownKind as u8);
+    assert_eq!(error_code(&ask(&mut d, 0x56, vec![])), ErrorCode::UnknownKind as u8);
     let (k, body) = ask(&mut d, kind::STATUS, vec![]);
     assert_eq!((k, body[0]), (kind::STATUS | kind::REPLY, TimeState::Unset as u8));
 }
@@ -588,6 +588,7 @@ fn ethereum_replies_carry_only_what_the_answer_allows() {
 fn app_requests_go_to_the_host() {
     let mut d = device();
     assert_eq!(handled(&mut d, kind::APP_LIST, Writer::new().u32(2).finish()), Handled::Apps(Apps::List { index: 2 }));
+    assert_eq!(handled(&mut d, kind::APP_SPACE, Vec::new()), Handled::Apps(Apps::Space));
     let piece = vec![b'M', b'A', b'K', b'I'];
     assert_eq!(
         handled(&mut d, kind::APP_INSTALL, Writer::new().u32(9000).u32(4096).bytes16(&piece).finish()),
@@ -637,6 +638,9 @@ fn app_requests_out_of_range_are_refused() {
     }
     let reply = ask(&mut d, kind::APP_LIST, Writer::new().u32(1).u8(0).finish());
     assert_eq!(error_code(&reply), ErrorCode::Malformed as u8);
+    // APP_SPACE carries nothing
+    let reply = ask(&mut d, kind::APP_SPACE, vec![0]);
+    assert_eq!(error_code(&reply), ErrorCode::Malformed as u8);
 }
 
 #[test]
@@ -651,6 +655,8 @@ fn app_replies_carry_only_what_the_answer_allows() {
         backup: true,
         used: 4,
         icon: vec![0xff; 512],
+        bundle: 9417,
+        storage: 1024,
     };
     let (k, body) = reply::app_list(Approval::Approved, 2, Some(&entry));
     assert_eq!(k, kind::APP_LIST | kind::REPLY);
@@ -659,6 +665,7 @@ fn app_replies_carry_only_what_the_answer_allows() {
     assert_eq!((r.str8().unwrap(), r.str8().unwrap(), r.u32().unwrap(), r.str8().unwrap()), ("com.leviathan.maki.dice", "Dice", 3, "1.2"));
     assert_eq!((r.bytes16().unwrap(), r.u8().unwrap(), r.u8().unwrap(), r.u32().unwrap()), (&[7u8; 32][..], 0, 1, 4));
     assert_eq!(r.bytes16().unwrap().len(), 512);
+    assert_eq!((r.u32().unwrap(), r.u32().unwrap()), (9417, 1024));
     r.end().unwrap();
     // past the end: the count, no app
     let (_, body) = reply::app_list(Approval::Approved, 2, None);
@@ -666,6 +673,17 @@ fn app_replies_carry_only_what_the_answer_allows() {
     // locked: nothing, not even the count
     let (_, body) = reply::app_list(Approval::Locked, 2, Some(&entry));
     assert_eq!(body, [Approval::Locked as u8, 0, 0, 0, 0, 0]);
+
+    let space = AppSpace { apps: 2, max_apps: 32, space: 2 << 20, taken: 11465 };
+    let (k, body) = reply::app_space(Approval::Approved, &space);
+    assert_eq!(k, kind::APP_SPACE | kind::REPLY);
+    let mut r = Reader::new(&body);
+    assert_eq!(r.u8().unwrap(), 0);
+    assert_eq!((r.u32().unwrap(), r.u32().unwrap(), r.u32().unwrap(), r.u32().unwrap()), (2, 32, 2 << 20, 11465));
+    r.end().unwrap();
+    // locked: none of it
+    let (_, body) = reply::app_space(Approval::Locked, &space);
+    assert_eq!(body, [[Approval::Locked as u8].as_slice(), &[0; 16]].concat());
 
     let (k, body) = reply::app_install(false, Approval::Approved, "ignored");
     assert_eq!((k, body), (kind::APP_INSTALL | kind::REPLY, vec![0, 0, 0]));

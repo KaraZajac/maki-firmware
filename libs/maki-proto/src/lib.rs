@@ -54,6 +54,8 @@ pub mod kind {
     /// A piece of a maki store record (a new root, a revocation list), checked and kept by
     /// maki; or, with nothing, what maki has.
     pub const STORE_UPDATE: u8 = 0x54;
+    /// How much of maki's room for apps is taken, and how many more apps it has room for.
+    pub const APP_SPACE: u8 = 0x55;
     pub const REPLY: u8 = 0x80;
     pub const ERROR: u8 = 0x7f;
 }
