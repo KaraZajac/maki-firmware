@@ -252,7 +252,8 @@ checks out the whole repository the app's source names, so keep them in it. Carg
 apart by a hash of where they're from, and one outside your workspace goes into it with its
 whole path; so an app that builds any (the wallet examples use `libs/maki-btc` and `libs/maki-eth`)
 is built through a wrapper that sees them all inside it, as native apps are, and needs
-`crate-type = ["cdylib", "rlib"]` to be linked from it.
+`crate-type = ["cdylib", "rlib"]` to be linked from it. The wrappers build in your cache
+(`$XDG_CACHE_HOME/maki`, or `~/.cache/maki`), outside the source they link to.
 
 `maki inspect` says whether a bundle is stamped. The `maki store` commands are the store's own
 side (its keys, roots, stamps, revocation lists and index; `maki store` lists them), and

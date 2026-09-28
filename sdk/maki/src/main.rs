@@ -227,8 +227,7 @@ fn native_build(dir: &Path) -> Result<(PathBuf, PathBuf), String> {
     // the app's workspace's target directory, as for a WebAssembly build
     let app_meta = metadata(&app_dir)?;
     let target = app_meta["target_directory"].as_str().map(PathBuf::from).unwrap_or_else(|| app_dir.join("target"));
-    let wrapper = target.join("maki-native").join(&package);
-    std::fs::create_dir_all(wrapper.join("src")).map_err(|e| format!("{}: {e}", wrapper.display()))?;
+    let wrapper = wrapper_dir("maki-native", &package, &app_dir, &target)?;
     let name = format!("{package}-native");
     let app_path = linked_source(&wrapper, &app_dir, &app_meta)?;
     let manifest = format!(
@@ -268,6 +267,49 @@ fn native_build(dir: &Path) -> Result<(PathBuf, PathBuf), String> {
         return Err(format!("cargo built no {}", elf.display()));
     }
     Ok((elf, target))
+}
+
+/// The directory a wrapper for `package` builds in (`kind` says which: `maki-wasm` or
+/// `maki-native`), made ready: outside the source, in the user's cache. Its link to the source
+/// (`linked_source`) would loop back into it otherwise, and anything that follows links through
+/// the source, as the firmware's locales build script does, would go round forever. One for each
+/// copy of the source, where they may be of different versions. The Rust the source pins, with a
+/// rust-toolchain.toml or rust-toolchain file in the app's directory or one above it, goes there
+/// too: rustup looks for one above where cargo runs.
+fn wrapper_dir(kind: &str, package: &str, app_dir: &Path, target: &Path) -> Result<PathBuf, String> {
+    // the link a maki before this one left in the target directory
+    let old = target.join(kind).join(package).join("source");
+    if std::fs::symlink_metadata(&old).is_ok_and(|m| m.file_type().is_symlink()) {
+        std::fs::remove_file(&old).ok();
+    }
+    let cache = std::env::var_os("XDG_CACHE_HOME")
+        .filter(|d| !d.is_empty())
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").filter(|d| !d.is_empty()).map(|h| PathBuf::from(h).join(".cache")))
+        .unwrap_or_else(std::env::temp_dir);
+    let digest = Sha256::digest(app_dir.to_string_lossy().as_bytes());
+    let copy: String = digest[..6].iter().map(|b| format!("{b:02x}")).collect();
+    let wrapper = cache.join("maki").join(kind).join(format!("{package}-{copy}"));
+    std::fs::create_dir_all(wrapper.join("src")).map_err(|e| format!("{}: {e}", wrapper.display()))?;
+    let pin = app_dir.ancestors().find_map(|dir| {
+        ["rust-toolchain", "rust-toolchain.toml"]
+            .into_iter()
+            .find_map(|name| std::fs::read(dir.join(name)).ok().map(|text| (name, text)))
+    });
+    for name in ["rust-toolchain", "rust-toolchain.toml"] {
+        let path = wrapper.join(name);
+        match &pin {
+            Some((pinned, text)) if *pinned == name => {
+                if std::fs::read(&path).ok().as_ref() != Some(text) {
+                    std::fs::write(&path, text).map_err(|e| format!("{}: {e}", path.display()))?;
+                }
+            }
+            _ => {
+                std::fs::remove_file(&path).ok();
+            }
+        }
+    }
+    Ok(wrapper)
 }
 
 /// The app, as the wrapper names it: through a link, `source`, in the wrapper's directory, to
@@ -368,8 +410,7 @@ fn wasm_wrapper_build(app_dir: &Path, app_meta: &serde_json::Value) -> Result<(P
     }
     let root = PathBuf::from(app_meta["workspace_root"].as_str().ok_or("cargo metadata named no workspace root")?);
     let target = app_meta["target_directory"].as_str().map(PathBuf::from).unwrap_or_else(|| app_dir.join("target"));
-    let wrapper = target.join("maki-wasm").join(&package);
-    std::fs::create_dir_all(wrapper.join("src")).map_err(|e| format!("{}: {e}", wrapper.display()))?;
+    let wrapper = wrapper_dir("maki-wasm", &package, app_dir, &target)?;
     let app_path = linked_source(&wrapper, app_dir, app_meta)?;
     // the release profile the app's workspace builds with
     let workspace_toml = root.join("Cargo.toml");
