@@ -545,7 +545,8 @@ impl MemoryManager {
     /// Note that this will be backed by a real page.
     #[cfg(baremetal)]
     pub fn map_zeroed_page(&mut self, pid: PID, is_user: bool) -> Result<*mut usize, xous_kernel::Error> {
-        let virt =
+        #[allow(unused_mut)]
+        let mut virt =
             self.find_virtual_address(core::ptr::null_mut(), PAGE_SIZE, xous_kernel::MemoryType::Default)?
                 as usize;
 
@@ -554,6 +555,22 @@ impl MemoryManager {
         let phys = self.alloc_page(pid)?;
         #[cfg(feature = "swap")]
         let phys = self.alloc_page_oomable(pid, Some(virt))?;
+        // maki: finding a page may have run the swapper, which maps memory of its own as it
+        // goes. For the swapper itself (making its server at boot, say), that can be the very
+        // address chosen above: then another, and the page's record says so.
+        #[cfg(all(feature = "swap", baremetal))]
+        if !crate::arch::mem::address_available(virt) {
+            virt = match self.find_virtual_address(core::ptr::null_mut(), PAGE_SIZE, xous_kernel::MemoryType::Default)
+            {
+                Ok(v) => v as usize,
+                Err(e) => {
+                    self.release_page(phys as *mut usize, pid).ok();
+                    return Err(e);
+                }
+            };
+            let offset = (phys - self.ram_start) / PAGE_SIZE;
+            unsafe { (&mut *(&raw mut MEMORY_ALLOCATIONS))[offset].set_vaddr(virt) };
+        }
 
         // Actually perform the map.  At this stage, every physical page should be owned by us.
         if let Err(e) = crate::arch::mem::map_page_inner(

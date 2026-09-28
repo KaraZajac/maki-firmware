@@ -170,6 +170,10 @@ impl SwapAlloc {
 
     pub fn set_timestamp(&mut self, val: u32) { self.timestamp = val }
 
+    /// maki: the page is mapped at `va` now, not where it was allocated for (see
+    /// `MemoryManager::map_zeroed_page`).
+    pub fn set_vaddr(&mut self, va: usize) { self.vpn = (va as u32) & !0xFFF | self.vpn & 0xFFF; }
+
     pub unsafe fn reparent(&mut self, pid: PID) {
         self.timestamp = crate::swap::Swap::with_mut(|s| s.next_epoch());
         self.vpn = self.vpn & !&0xFFu32 | pid.get() as u32;
