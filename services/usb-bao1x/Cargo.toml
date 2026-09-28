@@ -43,7 +43,8 @@ usb-device = { git = "https://github.com/betrusted-io/usb-device.git", branch = 
 # ] }
 
 # Serial support
-usbd-serial = { git = "https://github.com/betrusted-io/usbd-serial.git", branch = "v0.1.1-betrusted", features = [
+# maki: betrusted's fork, vendored so the port sends no full packets (libs/usbd-serial/MAKI.md)
+usbd-serial = { path = "../../libs/usbd-serial", features = [
     "max-packet-size-512",
 ] }
 # usbd-serial = { path = "../../../usbd-serial", features = [

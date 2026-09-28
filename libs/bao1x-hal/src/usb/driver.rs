@@ -2615,6 +2615,12 @@ impl UsbBus for CorigineWrapper {
                 buf.len(),
                 &buf[..8.min(buf.len())]
             );
+            // maki: interrupts go back to however the caller had them, not on. The serial port
+            // writes from inside a section with them off (`serial_write_irq_safe`); switching them
+            // on here let the last packet's completion run the port's flush before this packet
+            // was counted as taken, and the same bytes went out twice. Nor are pending events
+            // cleared: they're handled once the caller turns interrupts back on.
+            let saved_enable = self.irq_csr.r(utralib::utra::irqarray1::EV_ENABLE);
             self.disable_interrupts();
             let addr = match self.core().get_app_buf_ptr(ep_addr.index() as u8, CRG_IN) {
                 Some(addr) => addr,
@@ -2622,9 +2628,9 @@ impl UsbBus for CorigineWrapper {
                     #[cfg(feature = "verbose-debug")]
                     crate::println!("would block");
 
-                    // `disable_interrupts()` was called above, so every return
-                    // path after that point must restore the USB interrupts.
-                    self.enable_interrupts();
+                    // interrupts were turned off above, so every return path after that point
+                    // must put them back
+                    self.irq_csr.wo(utralib::utra::irqarray1::EV_ENABLE, saved_enable);
                     return Err(UsbError::WouldBlock);
                 }
             };
@@ -2660,7 +2666,7 @@ impl UsbBus for CorigineWrapper {
             }
             #[cfg(feature = "verbose-debug")]
             crate::println!("ep{} initiated {}", ep_addr.index(), buf.len());
-            self.enable_interrupts();
+            self.irq_csr.wo(utralib::utra::irqarray1::EV_ENABLE, saved_enable);
             Ok(buf.len())
         }
     }
