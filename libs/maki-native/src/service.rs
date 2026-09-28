@@ -53,6 +53,9 @@ pub const SCAN_QR: usize = 26;
 /// against an older maki gets INVALID for them, as for anything it doesn't know.
 pub const KEY_SCHNORR_PUBLIC: usize = 27;
 pub const KEY_SCHNORR_SIGN: usize = 28;
+/// X25519 keys (host API 2's `key_x25519_public` and `key_x25519_agree`), likewise.
+pub const KEY_X25519_PUBLIC: usize = 29;
+pub const KEY_X25519_AGREE: usize = 31;
 // a plain scalar
 pub const EXIT: usize = 30;
 /// maki's own, from the app host to itself: look at what's waiting (the owner left the app, or

@@ -24,6 +24,9 @@ zeroize = "1.8.1"
 k256 = { version = "0.13", default-features = false, features = ["schnorr"] }
 # and the tag that keeps them apart from the same label's Ed25519 key
 sha2 = { version = "0.10.8", default-features = false }
+# apps' X25519 keys (age's): Montgomery points, from the Baochip build of curve25519-dalek that
+# the Ed25519 keys use (the tree's patched curve25519-dalek is the Precursor's)
+curve25519-dalek = { package = "curve25519-dalek-bao1x", path = "../../bao1x-boot/curve25519-dalek-bao1x", default-features = false, features = ["zeroize"] }
 # maki's own fonts, so apps look the same in the simulator as on maki
 blitstr2 = { path = "../blitstr2", features = ["board-baosec", "bao1x"] }
 qrcode = { version = "0.12", default-features = false }
@@ -36,4 +39,8 @@ trace = ["log"]
 
 [dev-dependencies]
 wat = "1"
+# the Age example's test wraps file keys as age does, with an X25519 of its own
+hkdf = "0.12"
+chacha20poly1305 = "0.10"
+x25519-dalek = { version = "=2.0.1", default-features = false, features = ["static_secrets"] }
 sha2 = { version = "0.10.8", default-features = false }

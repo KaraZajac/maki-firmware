@@ -555,6 +555,8 @@ fn gated_functions_need_their_permission() {
         ("key_sign", "(param i32 i32 i32 i32 i32) (result i32)"),
         ("key_schnorr_public", "(param i32 i32 i32) (result i32)"),
         ("key_schnorr_sign", "(param i32 i32 i32 i32) (result i32)"),
+        ("key_x25519_public", "(param i32 i32 i32) (result i32)"),
+        ("key_x25519_agree", "(param i32 i32 i32 i32) (result i32)"),
         ("type_text", "(param i32 i32) (result i32)"),
         ("link_read", "(param i32 i32) (result i32)"),
         ("link_reply", "(param i32 i32) (result i32)"),

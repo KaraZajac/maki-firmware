@@ -6,7 +6,7 @@ you can install"). Anyone can build one and sideload it through maki desktop; ma
 owner what it is, where it's from and what it may do before installing it, and a sideloaded
 app carries a mark in maki's top bar for as long as it's installed.
 
-This directory has the Rust crate apps are written with (`maki-app`), twelve examples, and the
+This directory has the Rust crate apps are written with (`maki-app`), fourteen examples, and the
 `maki` tool that packs, signs, checks and simulates them. The examples:
 
 - **Hello**, **Dice** and **Tally**: a screen, the buttons, storage and randomness.
@@ -16,6 +16,11 @@ This directory has the Rust crate apps are written with (`maki-app`), twelve exa
 - **Nostr**: your Nostr key, which sites use through the maki extension's `window.nostr`
   (NIP-07): maki asks before a site sees it and shows each event before signing it with the key
   it holds (host API 2's Schnorr keys). Opened, it shows the npub as a QR code.
+- **Age**: your age key, which maki holds (host API 2's X25519 keys): anyone encrypts files to its
+  recipient with age as it is, and maki desktop's `age-plugin-maki` asks it to decrypt one, which
+  it asks its owner about first.
+- **Wi-Fi**: networks as QR codes for guests to join, from a QR code the camera reads (a router's
+  sticker, a phone's share screen) or from the computer (the link permission).
 - **Passphrase**: diceware passphrases from maki's random number generator and the EFF's long
   word list, typed into the computer on request (the keyboard permission).
 - **Snake**: the game, with three buttons, timed with `wait`.
@@ -136,8 +141,10 @@ function whose permission it didn't ask for):
   adds a BIP340 (Schnorr, secp256k1) key for each label too, as Nostr and Taproot use:
   `keys::schnorr_public_key(label)` (x-only) and `keys::schnorr_sign(label, &hash)`, which signs a
   32-byte hash with fresh randomness from maki's TRNG; its secret is tagged apart from the
-  Ed25519 one. An app that calls them says `api = 2` in its `maki.toml`, and maki's install
-  check holds it to that.
+  Ed25519 one. And an X25519 key (RFC 7748), as age uses: `keys::x25519_public_key(label)` and
+  `keys::x25519_agree(label, &peer)`, the shared secret to derive a key from; tagged apart too. An
+  app that calls them says `api = 2` in its `maki.toml`, and maki's install check holds it to
+  that.
 - **`keyboard`**: `keyboard::type_text(text)` types printable ASCII, newlines and tabs (1024
   bytes at a time) into the computer as a USB keyboard, while the app is in front, with "typing"
   in maki's bar. The owner is warned at install: it could type commands.

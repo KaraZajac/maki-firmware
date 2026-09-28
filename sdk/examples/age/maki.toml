@@ -1,0 +1,14 @@
+id = "com.leviathan.maki.age"
+name = "Age"
+version = 1
+label = "1.0"
+api = 2
+storage = 1
+memory = 64
+backup = true
+description = "Your age encryption key, from maki's recovery phrase. Anyone can encrypt files to it with age; decrypting one asks you on maki first. Open it for your recipient as a QR code."
+
+[permissions]
+keys = "For your age key: maki's, from your recovery phrase, the same on a restored maki."
+link = "So age on your computer can ask maki to decrypt a file for you."
+ask = "To ask you on maki's screen before each file it decrypts."

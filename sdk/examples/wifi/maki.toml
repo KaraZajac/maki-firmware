@@ -1,0 +1,13 @@
+id = "com.leviathan.maki.wifi"
+name = "Wi-Fi"
+version = 1
+label = "1.0"
+api = 1
+storage = 2
+memory = 64
+backup = true
+description = "Your Wi-Fi networks as QR codes: guests scan maki's screen to join. Add a network by scanning its QR code (a router's sticker, a phone's share screen) or send it from your computer."
+
+[permissions]
+camera = "To read a network's QR code, from a router's sticker or a phone's share screen."
+link = "So your computer can send it networks to show, or ask which it has."

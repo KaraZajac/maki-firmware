@@ -343,6 +343,20 @@ fn lent(session: &mut Session, id: usize, request: &[u8], last_log: &mut String)
             },
             None => (maki_wasm::INVALID, vec![]),
         },
+        service::KEY_X25519_PUBLIC => match text() {
+            Some(label) => match session.key_x25519_public(label) {
+                Ok(k) => (0, k.to_vec()),
+                Err(code) => (code, vec![]),
+            },
+            None => (maki_wasm::INVALID, vec![]),
+        },
+        service::KEY_X25519_AGREE => match split() {
+            Some((label, peer)) => match session.key_x25519_agree(label, peer) {
+                Ok(shared) => (0, shared.to_vec()),
+                Err(code) => (code, vec![]),
+            },
+            None => (maki_wasm::INVALID, vec![]),
+        },
         service::TYPE_TEXT => match text() {
             Some(t) => (session.type_text(t), vec![]),
             None => (maki_wasm::INVALID, vec![]),

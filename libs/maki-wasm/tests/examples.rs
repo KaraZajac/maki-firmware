@@ -481,3 +481,80 @@ fn nostr_shows_its_key_and_signs_events_as_nip01_hashes_them() {
     let vk = VerifyingKey::from_bytes(&key[1..]).unwrap();
     vk.verify_raw(&signed[1..33], &Signature::try_from(&signed[33..97]).unwrap()).unwrap();
 }
+
+/// A file key wrapped for `recipient` as age's X25519 stanza is: the ephemeral share and the body.
+fn age_stanza(recipient: &[u8; 32], file_key: &[u8; 16], ephemeral: [u8; 32]) -> Vec<u8> {
+    use chacha20poly1305::aead::{Aead, KeyInit};
+    let secret = x25519_dalek::StaticSecret::from(ephemeral);
+    let share = x25519_dalek::PublicKey::from(&secret).to_bytes();
+    let shared = secret.diffie_hellman(&x25519_dalek::PublicKey::from(*recipient));
+    let salt = [share.as_slice(), recipient.as_slice()].concat();
+    let mut wrap = [0u8; 32];
+    hkdf::Hkdf::<sha2::Sha256>::new(Some(&salt), shared.as_bytes()).expand(b"age-encryption.org/v1/X25519", &mut wrap).unwrap();
+    let body = chacha20poly1305::ChaCha20Poly1305::new(&wrap.into()).encrypt(&Default::default(), file_key.as_slice()).unwrap();
+    [share.to_vec(), body].concat()
+}
+
+#[test]
+fn age_finds_its_stanza_and_unwraps_it_once_asked() {
+    let bytes = std::fs::read(format!("{}/tests/fixtures/age.maki", env!("CARGO_MANIFEST_DIR"))).unwrap();
+    let bundle = maki_bundle::read(&bytes).unwrap();
+    let run_with = |inbox: Vec<Vec<u8>>, answers: Vec<Answer>| {
+        let record = Rc::new(RefCell::new(Record {
+            events: inbox.iter().map(|_| Event::Message).collect(),
+            inbox: inbox.into_iter().collect(),
+            answers: answers.into_iter().collect(),
+            ..Default::default()
+        }));
+        let limits = admit(&bundle.manifest, bundle.code).unwrap();
+        assert_eq!(run(bundle.code, Box::new(Script(record.clone())), limits), Stop::Finished);
+        Rc::try_unwrap(record).ok().unwrap().into_inner()
+    };
+    // its recipient
+    let r = run_with(vec![vec![1]], vec![]);
+    assert_eq!((r.replies[0][0], r.replies[0].len()), (0, 33));
+    let recipient: [u8; 32] = r.replies[0][1..].try_into().unwrap();
+
+    // a file for someone else, and one for this key: it says which is its own without asking
+    let file_key = [0x5a; 16];
+    let theirs = age_stanza(&[9; 32], &file_key, [1; 32]);
+    let mine = age_stanza(&recipient, &file_key, [2; 32]);
+    let find = [vec![2, 2], theirs.clone(), mine.clone()].concat();
+    let unwrap = |stanza: &[u8]| [&[3u8][..], stanza, &[3], b"age"].concat();
+    let r = run_with(vec![find, unwrap(&mine), unwrap(&theirs), unwrap(&mine)], vec![Answer::Yes, Answer::No]);
+    assert_eq!(r.replies[0], [0, 1]);
+    // asked, and yes: the file key
+    assert_eq!(r.replies[1], [&[0u8][..], &file_key].concat());
+    assert_eq!(r.asks[0].question, "Decrypt a file with your age key?");
+    assert_eq!(r.asks[0].detail, "for age, on this computer");
+    // someone else's: not its own, and nobody's asked
+    assert_eq!(r.replies[2], [4]);
+    // asked again, and no
+    assert_eq!(r.replies[3], [1]);
+    assert_eq!(r.asks.len(), 2);
+}
+
+#[test]
+fn wifi_keeps_networks_from_the_camera_and_the_computer() {
+    let bytes = std::fs::read(format!("{}/tests/fixtures/wifi.maki", env!("CARGO_MANIFEST_DIR"))).unwrap();
+    let bundle = maki_bundle::read(&bytes).unwrap();
+    let msg = |s: &str| s.as_bytes().to_vec();
+    let record = Rc::new(RefCell::new(Record {
+        // scan one; one from the computer; the names; something that isn't a network; forget
+        // the one showing (the computer's); the names again
+        events: [Event::Menu(0), Event::Message, Event::Message, Event::Message, Event::Menu(2), Event::Message]
+            .into_iter()
+            .collect(),
+        qr: Some("WIFI:T:WPA;S:maki guests;P:correct horse;;".into()),
+        inbox: [msg(r"WIFI:S:Cafe\;Bar;T:nopass;;"), msg(""), msg("hello"), msg("")].into_iter().collect(),
+        ..Default::default()
+    }));
+    let limits = admit(&bundle.manifest, bundle.code).unwrap();
+    assert_eq!(run(bundle.code, Box::new(Script(record.clone())), limits), Stop::Finished);
+    let r = record.borrow();
+    assert_eq!(r.menu, ["Scan a network", "Show the password", "Forget this one"]);
+    let replies: Vec<&str> = r.replies.iter().map(|b| std::str::from_utf8(b).unwrap()).collect();
+    assert_eq!(replies, ["ok", "maki guests\nCafe;Bar\n", "that isn't a network: a WIFI: text with a name", "maki guests\n"]);
+    // kept as its QR code had it, for the next time
+    assert_eq!(r.storage.get("networks").unwrap(), b"WIFI:T:WPA;S:maki guests;P:correct horse;;\n");
+}

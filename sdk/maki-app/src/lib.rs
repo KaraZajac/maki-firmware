@@ -78,6 +78,8 @@ mod sys {
         pub fn key_sign(lptr: *const u8, llen: usize, mptr: *const u8, mlen: usize, out: *mut u8) -> i32;
         pub fn key_schnorr_public(lptr: *const u8, llen: usize, out: *mut u8) -> i32;
         pub fn key_schnorr_sign(lptr: *const u8, llen: usize, mptr: *const u8, out: *mut u8) -> i32;
+        pub fn key_x25519_public(lptr: *const u8, llen: usize, out: *mut u8) -> i32;
+        pub fn key_x25519_agree(lptr: *const u8, llen: usize, pptr: *const u8, out: *mut u8) -> i32;
         pub fn type_text(ptr: *const u8, len: usize) -> i32;
         pub fn link_read(ptr: *mut u8, cap: usize) -> i32;
         pub fn link_reply(ptr: *const u8, len: usize) -> i32;
@@ -388,6 +390,24 @@ pub mod keys {
         let mut out = [0u8; 64];
         let code = unsafe { sys::key_schnorr_sign(label.as_ptr(), label.len(), message.as_ptr(), out.as_mut_ptr()) };
         result(code)?;
+        Ok(out)
+    }
+
+    /// The X25519 public key for `label` (RFC 7748), as age writes recipients. maki holds the
+    /// private key (from the same secret, tagged apart) and agrees with it (`x25519_agree`).
+    /// Host API 2.
+    pub fn x25519_public_key(label: &str) -> Result<[u8; 32], Error> {
+        let mut out = [0u8; 32];
+        result(unsafe { sys::key_x25519_public(label.as_ptr(), label.len(), out.as_mut_ptr()) })?;
+        Ok(out)
+    }
+
+    /// What the key for `label` and `peer`'s public key agree on (X25519): the shared secret, to
+    /// derive a key from (as age does, with HKDF). `Invalid` for a peer of small order, whose
+    /// agreement would be all zeros. Host API 2.
+    pub fn x25519_agree(label: &str, peer: &[u8; 32]) -> Result<[u8; 32], Error> {
+        let mut out = [0u8; 32];
+        result(unsafe { sys::key_x25519_agree(label.as_ptr(), label.len(), peer.as_ptr(), out.as_mut_ptr()) })?;
         Ok(out)
     }
 }

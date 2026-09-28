@@ -24,7 +24,8 @@ use wasmi::{Caller, Config, Engine, Error, Extern, Linker, Memory, Module, Store
 pub const API_VERSION: u16 = 2;
 
 /// Functions that came after host API 1, and with which: an app calling one says that API or later.
-pub const SINCE: &[(&str, u16)] = &[("key_schnorr_public", 2), ("key_schnorr_sign", 2)];
+pub const SINCE: &[(&str, u16)] =
+    &[("key_schnorr_public", 2), ("key_schnorr_sign", 2), ("key_x25519_public", 2), ("key_x25519_agree", 2)];
 
 /// What maki's functions return for failures they report (rather than stopping the app).
 pub const NOT_FOUND: i32 = -1;
@@ -72,6 +73,8 @@ pub const GATED: &[(&str, Permission)] = &[
     ("key_sign", Permission::Keys),
     ("key_schnorr_public", Permission::Keys),
     ("key_schnorr_sign", Permission::Keys),
+    ("key_x25519_public", Permission::Keys),
+    ("key_x25519_agree", Permission::Keys),
     ("type_text", Permission::Keyboard),
     ("link_read", Permission::Link),
     ("link_reply", Permission::Link),
@@ -636,6 +639,34 @@ fn link(linker: &mut Linker<State>) -> Result<(), Error> {
                 Ok(sig) => write(&mut c, out, &sig, "key_schnorr_sign").map(|_| 0),
                 Err(code) => Ok(code),
             }
+        },
+    )?;
+    linker.func_wrap(
+        M,
+        "key_x25519_public",
+        |mut c: Caller<'_, State>, lptr: i32, llen: i32, out: i32| -> Result<i32, Error> {
+            permitted(&c, Permission::Keys, "key_x25519_public")?;
+            let label = read_str(&c, lptr, llen, MAX_LABEL, "key_x25519_public")?;
+            match c.data_mut().session.key_x25519_public(&label) {
+                Ok(key) => write(&mut c, out, &key, "key_x25519_public").map(|_| 0),
+                Err(code) => Ok(code),
+            }
+        },
+    )?;
+    linker.func_wrap(
+        M,
+        "key_x25519_agree",
+        |mut c: Caller<'_, State>, lptr: i32, llen: i32, pptr: i32, out: i32| -> Result<i32, Error> {
+            permitted(&c, Permission::Keys, "key_x25519_agree")?;
+            let label = read_str(&c, lptr, llen, MAX_LABEL, "key_x25519_agree")?;
+            let peer = read(&c, pptr, 32, 32, "key_x25519_agree")?;
+            let mut shared = match c.data_mut().session.key_x25519_agree(&label, &peer) {
+                Ok(s) => s,
+                Err(code) => return Ok(code),
+            };
+            let written = write(&mut c, out, &shared, "key_x25519_agree");
+            zeroize::Zeroize::zeroize(&mut shared);
+            written.map(|_| 0)
         },
     )?;
     linker.func_wrap(M, "type_text", |mut c: Caller<'_, State>, ptr: i32, len: i32| -> Result<i32, Error> {

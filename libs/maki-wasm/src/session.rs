@@ -223,6 +223,38 @@ impl Session {
         key.sign_prehash_with_aux_rand(message, &aux).map(|s| s.to_bytes()).map_err(|_| FAILED)
     }
 
+    /// The X25519 key (RFC 7748) made from the app's secret for a label: its public half, as
+    /// age writes recipients.
+    pub fn key_x25519_public(&mut self, label: &str) -> Result<[u8; 32], i32> {
+        self.needs(Permission::Keys)?;
+        if !Self::label_ok(label) {
+            return Err(INVALID);
+        }
+        let mut key = x25519_key(self.platform.as_mut(), label).ok_or(FAILED)?;
+        let public = curve25519_dalek::MontgomeryPoint::mul_base_clamped(key).to_bytes();
+        zeroize::Zeroize::zeroize(&mut key);
+        Ok(public)
+    }
+
+    /// What that key and `peer`'s public key agree on (X25519), for what was encrypted to the
+    /// app's key: an age file key, say. maki holds the key; the app gets the shared secret. A
+    /// peer whose agreement is all zeros (a point of small order) is refused, as age requires.
+    pub fn key_x25519_agree(&mut self, label: &str, peer: &[u8]) -> Result<[u8; 32], i32> {
+        self.needs(Permission::Keys)?;
+        if !Self::label_ok(label) {
+            return Err(INVALID);
+        }
+        let peer: [u8; 32] = peer.try_into().map_err(|_| INVALID)?;
+        let mut key = x25519_key(self.platform.as_mut(), label).ok_or(FAILED)?;
+        // RFC 7748's X25519: the scalar clamped, times the peer's point
+        let shared = curve25519_dalek::MontgomeryPoint(peer).mul_clamped(key).to_bytes();
+        zeroize::Zeroize::zeroize(&mut key);
+        if shared == [0u8; 32] {
+            return Err(INVALID);
+        }
+        Ok(shared)
+    }
+
     /// The keyboard permission: printable ASCII, newlines and tabs.
     pub fn type_text(&mut self, text: &str) -> i32 {
         if let Err(e) = self.needs(Permission::Keyboard) {
@@ -306,6 +338,16 @@ fn schnorr_key(platform: &mut dyn Platform, label: &str) -> Option<k256::schnorr
     zeroize::Zeroize::zeroize(&mut secret);
     zeroize::Zeroize::zeroize(&mut scalar);
     key
+}
+
+/** The X25519 key for a label: the app's secret for it, tagged apart as the BIP340 key is. */
+fn x25519_key(platform: &mut dyn Platform, label: &str) -> Option<[u8; 32]> {
+    use sha2::{Digest, Sha256};
+    let mut secret = platform.app_secret(label)?;
+    let tag = Sha256::digest(b"maki/x25519");
+    let key: [u8; 32] = Sha256::new().chain_update(tag).chain_update(tag).chain_update(secret).finalize().into();
+    zeroize::Zeroize::zeroize(&mut secret);
+    Some(key)
 }
 
 fn signing_key(platform: &mut dyn Platform, label: &str) -> Option<ed25519_dalek::SigningKey> {
