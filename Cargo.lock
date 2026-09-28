@@ -1063,7 +1063,7 @@ dependencies = [
  "digest 0.10.7",
  "ed25519-dalek-bao1x",
  "hex 0.4.3",
- "hex-literal 1.0.0",
+ "hex-literal 1.1.0",
  "linked_list_allocator",
  "rand_chacha 0.3.1",
  "riscv",
@@ -1208,7 +1208,7 @@ dependencies = [
  "digest 0.10.7",
  "ed25519-dalek-bao1x",
  "hex 0.4.3",
- "hex-literal 1.0.0",
+ "hex-literal 1.1.0",
  "linked_list_allocator",
  "riscv",
  "sha2 0.10.8",
@@ -1249,6 +1249,15 @@ name = "base45"
 version = "3.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b3103f6d6af63726e86b026ac66769fc578ea38aba33f409e5855a4def97a564"
+
+[[package]]
+name = "base58-monero"
+version = "2.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "174416d4074aa8a817937521f15c35d50f70bf0dcb4662a2795d49f777803265"
+dependencies = [
+ "thiserror 2.0.21",
+]
 
 [[package]]
 name = "base58ck"
@@ -1625,7 +1634,7 @@ dependencies = [
  "digest 0.10.7",
  "ed25519-dalek-bao1x",
  "hex 0.4.3",
- "hex-literal 1.0.0",
+ "hex-literal 1.1.0",
  "linked_list_allocator",
  "rand_chacha 0.3.1",
  "riscv",
@@ -2863,7 +2872,7 @@ dependencies = [
  "bao1x-api 0.1.4",
  "bytemuck",
  "getrandom 0.2.12",
- "hex-literal 1.0.0",
+ "hex-literal 1.1.0",
  "log",
  "num-derive 0.4.2",
  "num-traits",
@@ -4425,9 +4434,9 @@ checksum = "6fe2267d4ed49bc07b63801559be28c718ea06c4738b7a03c94df7386d2cde46"
 
 [[package]]
 name = "hex-literal"
-version = "1.0.0"
+version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bcaaec4551594c969335c98c903c1397853d4198408ea609190f420500f6be71"
+checksum = "e712f64ec3850b98572bffac52e2c6f282b29fe6c5fa6d42334b30be438d95c1"
 
 [[package]]
 name = "hex_lit"
@@ -5273,6 +5282,7 @@ dependencies = [
  "xous-api-names",
  "xous-api-ticktimer",
  "xous-ipc 0.10.10 (registry+https://github.com/rust-lang/crates.io-index)",
+ "zeroize",
 ]
 
 [[package]]
@@ -5356,6 +5366,7 @@ dependencies = [
  "k256",
  "maki-hd",
  "maki-seed",
+ "maki-xmr",
  "ripemd",
  "sha2 0.10.8",
  "sha3 0.10.8",
@@ -5541,11 +5552,23 @@ dependencies = [
  "maki-hd",
  "maki-native",
  "maki-seed",
+ "maki-xmr",
  "qrcode",
  "sha2 0.10.8",
  "wasmi",
  "wat",
  "x25519-dalek",
+ "zeroize",
+]
+
+[[package]]
+name = "maki-xmr"
+version = "0.1.0"
+dependencies = [
+ "curve25519-dalek-bao1x",
+ "maki-xmr",
+ "monero",
+ "sha3 0.10.8",
  "zeroize",
 ]
 
@@ -5685,6 +5708,22 @@ dependencies = [
  "xous-api-names",
  "xous-api-ticktimer",
  "xous-ipc 0.10.10 (registry+https://github.com/rust-lang/crates.io-index)",
+]
+
+[[package]]
+name = "monero"
+version = "0.22.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a69858fa38267958bb7159f176fe95d6602fa1109ead4c1a33618c1a8b3bd016"
+dependencies = [
+ "base58-monero",
+ "curve25519-dalek",
+ "fixed-hash",
+ "hex 0.4.3",
+ "hex-literal 1.1.0",
+ "sealed",
+ "thiserror 2.0.21",
+ "tiny-keccak",
 ]
 
 [[package]]
@@ -7691,6 +7730,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "sealed"
+version = "0.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "22f968c5ea23d555e670b449c1c5e7b2fc399fdaec1d304a17cd48e288abc107"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
 name = "sec1"
 version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -8217,7 +8267,7 @@ dependencies = [
  "ctr 0.10.1",
  "digest 0.11.3",
  "hex 0.4.3",
- "hex-literal 1.0.0",
+ "hex-literal 1.1.0",
  "hmac 0.13.0",
  "hybrid-array",
  "paste",
@@ -10531,7 +10581,7 @@ dependencies = [
  "csv",
  "ed25519-dalek",
  "env_logger 0.7.1",
- "hex-literal 1.0.0",
+ "hex-literal 1.1.0",
  "log",
  "pem",
  "pkcs8 0.8.0",

@@ -28,6 +28,8 @@ struct Record {
     locked: bool,
     /// what wallet apps put on maki's review screen
     reviews: Vec<Review>,
+    /// backup words maki showed its owner (never the app)
+    backups: Vec<String>,
 }
 
 /// The BIP39 test phrase's seed: wallet apps' keys here, as on a maki set up with it.
@@ -92,12 +94,29 @@ impl Platform for Script {
         }
         let keys = maki_hd::seed::SeedKeys::from_seed(&test_seed()).unwrap();
         // no randomness in Schnorr signatures: the same as maki-btc's fixtures
-        maki_hd::seed::answer(&keys, op, path, digest, &[0; 32]).map_err(|_| FAILED)
+        maki_hd::seed::answer(&keys, op, path, digest, &[0; 32]).map_err(|e| match e {
+            maki_hd::Error::Path => REFUSED,
+            _ => FAILED,
+        })
     }
     fn review(&mut self, review: &Review) -> Answer {
         let mut r = self.0.borrow_mut();
         r.reviews.push(review.clone());
         r.answers.pop_front().unwrap_or(Answer::NoAnswer)
+    }
+    fn show_backup(&mut self, path: &[u32]) -> Result<Answer, i32> {
+        let mut r = self.0.borrow_mut();
+        if r.locked {
+            return Err(LOCKED);
+        }
+        // the owner's say first, as maki asks it; then maki shows the words, here noted
+        let answer = r.answers.pop_front().unwrap_or(Answer::NoAnswer);
+        if answer == Answer::Yes {
+            let keys = maki_hd::seed::SeedKeys::from_seed(&test_seed()).unwrap();
+            let words = maki_hd::seed::answer(&keys, maki_hd::op::MONERO_WORDS, path, &[], &[0; 32]).map_err(|_| NOT_FOUND)?;
+            r.backups.push(String::from_utf8(words).unwrap());
+        }
+        Ok(answer)
     }
 }
 
@@ -585,10 +604,16 @@ fn wifi_keeps_networks_from_the_camera_and_the_computer() {
 /// A wallet app, run as maki runs it (its manifest's paths and all), on these messages and
 /// answers.
 fn run_wallet(name: &str, inbox: Vec<Vec<u8>>, answers: Vec<Answer>, locked: bool) -> Record {
+    let events = inbox.iter().map(|_| Event::Message).collect();
+    run_wallet_with(name, events, inbox, answers, locked)
+}
+
+/// The same, on these events (a `Message` delivers the next message).
+fn run_wallet_with(name: &str, events: Vec<Event>, inbox: Vec<Vec<u8>>, answers: Vec<Answer>, locked: bool) -> Record {
     let bytes = std::fs::read(format!("{}/tests/fixtures/{name}.maki", env!("CARGO_MANIFEST_DIR"))).unwrap();
     let bundle = maki_bundle::read(&bytes).unwrap();
     let record = Rc::new(RefCell::new(Record {
-        events: inbox.iter().map(|_| Event::Message).collect(),
+        events: events.into(),
         inbox: inbox.into_iter().collect(),
         answers: answers.into_iter().collect(),
         locked,
@@ -792,4 +817,55 @@ fn ethereum_signs_what_the_owner_read_as_maki_always_has() {
     let r = run_wallet("ethereum", eth_pieces(b'T', "demo.maki", b"\x02not rlp"), vec![], false);
     assert_eq!(r.replies[0][0], 5);
     assert!(r.reviews.is_empty());
+}
+
+/// A Monero app's `D`: an address to compare, on a network (0 Monero, 1 testnet, 2 stagenet).
+fn xmr_address(net: u8, major: u32, minor: u32) -> Vec<u8> { [&[b'D', net][..], &major.to_le_bytes(), &minor.to_le_bytes()].concat() }
+
+#[test]
+fn monero_shows_the_addresses_every_wallet_makes() {
+    // the test phrase's: as Ledger's Monero app and monero-python make them
+    let inbox = vec![xmr_address(0, 0, 0), xmr_address(2, 0, 0), xmr_address(0, 0, 1), xmr_address(0, 0, 2), xmr_address(0, 2, 7), xmr_address(1, 0, 1)];
+    let answers = vec![Answer::Yes, Answer::Yes, Answer::Yes, Answer::No, Answer::Yes, Answer::NoAnswer];
+    let r = run_wallet("monero", inbox, answers, false);
+    let expected = [
+        "49vDbkSo7eve3J41sBdjvjaBUyz8qHohsQcGtRf63qEUTMBvmA45fpp5pSacMdSg7A3b71RejLzB8EkGbfjp5PELVF2N4Zn",
+        "5A8FgbMkmG2e3J41sBdjvjaBUyz8qHohsQcGtRf63qEUTMBvmA45fpp5pSacMdSg7A3b71RejLzB8EkGbfjp5PELVHCRUaE",
+        "8AB7PQPtducdkghYFN2prK3rZ7zPeL9f2REEdqE4WXYbSZr3797Aqti5xAjRsVy4jTdcwMW11GWejQtqk2kNXxj2QZxJwPZ",
+        "8696JpJ6Yvw8VtJqpQ7V8gNLBdgwLK5xYLQPfE7DpzdQGo4gKPWMJSubTt8rvvTrWagePa2q1P3k3TvRkGiHZGGUL1cuAwo",
+        "85mwm6zoWkeAydxd69jdubASfvsVFhy3f9Jt8a4FiNmKfzNd9epYvpTAkFQz33F97YLqKpUCGKCdk7DHBBVriZtyFxJFEoS",
+    ];
+    for (i, address) in expected.iter().enumerate() {
+        // compared on maki's screen, whole, and handed over once the owner has
+        assert_eq!(r.reviews[i].question, "Same on computer?");
+        assert_eq!(r.reviews[i].pages[0].mono, *address);
+        assert_eq!(texts(&r.replies[i]), [*address], "{i}");
+    }
+    assert_eq!(r.replies[..3].iter().map(|a| a[0]).collect::<Vec<_>>(), [0, 0, 0]);
+    assert_eq!(r.replies[3][0], 1, "doesn't match: the computer's copy isn't to be trusted");
+    assert_eq!(r.replies[5], [2], "no answer");
+    let headings: Vec<&str> = r.reviews.iter().map(|v| v.pages[0].heading.as_str()).collect();
+    assert_eq!(headings, ["Primary address", "Primary address, stagenet", "Subaddress 1", "Subaddress 2", "Subaddress 2/7", "Subaddress 1, testnet"]);
+    // locked; a network there isn't; not a message it takes
+    let r = run_wallet("monero", vec![xmr_address(0, 0, 0)], vec![], true);
+    assert_eq!(r.replies, [vec![3u8]]);
+    let r = run_wallet("monero", vec![xmr_address(9, 0, 0), vec![b'X'], vec![b'D', 0]], vec![], false);
+    assert_eq!(r.replies, [vec![4u8], vec![4], vec![4]]);
+    assert!(r.reviews.is_empty());
+}
+
+#[test]
+fn monero_has_maki_show_its_backup_and_never_sees_it() {
+    let r = run_wallet_with("monero", vec![Event::Menu(0), Event::Menu(0), Event::Centre], vec![], vec![Answer::Yes, Answer::No], false);
+    // maki showed the 25 words Monero wallets restore from once, when the owner said to
+    assert_eq!(
+        r.backups,
+        [concat!(
+            "tavern judge beyond bifocals deepest mural onward dummy eagle diode gained vacation rally cause firm idled jerseys ",
+            "moat vigilant upload bobsled jobs cunning doing jobs"
+        )]
+    );
+    assert_eq!(r.menu, ["Backup words", "Network"]);
+    // and the app drew its address all along: a QR code, then as text
+    assert!(r.frames.len() >= 3 && r.frames.iter().all(|f| lit(f) > 500));
 }

@@ -698,6 +698,64 @@ impl Platform for Device {
         }
     }
 
+    /// A wallet's backup words (a Monero wallet's 25), on maki's own screens: maki asks first,
+    /// then shows them a word to a screen under its own bar, and forgets them. The app hears only
+    /// whether they were shown, and nothing says them in the log.
+    fn show_backup(&mut self, path: &[u32]) -> Result<maki_wasm::Answer, i32> {
+        use zeroize::Zeroize;
+        if !self.ctx.unlocked() {
+            return Err(maki_wasm::LOCKED);
+        }
+        let coin = maki_hd::coin(path).unwrap_or("wallet");
+        let asked = self.ctx.launcher.review(
+            coin,
+            "Show backup words?",
+            "anyone who sees them can spend",
+            Vec::new(),
+            "show",
+            "don't",
+            maki_launcher::ask_timeout(60),
+        );
+        match asked {
+            Ok(Answer::Allowed(_)) => {}
+            Ok(Answer::Denied) => return Ok(maki_wasm::Answer::No),
+            _ => return Ok(maki_wasm::Answer::NoAnswer),
+        }
+        let mut words = match self.ctx.keys.wallet(maki_keys::WALLET_MONERO_WORDS, path, &[]) {
+            Ok(w) => w,
+            Err(maki_keys::RESULT_NOT_NOW | maki_keys::RESULT_NO_PHRASE) => return Err(maki_wasm::LOCKED),
+            // no words of its own: not a Monero account
+            Err(maki_keys::RESULT_REFUSED) => return Err(maki_wasm::NOT_FOUND),
+            Err(_) => return Err(maki_wasm::FAILED),
+        };
+        let n = words.split(|b| *b == b' ').count();
+        let pages: Vec<maki_launcher::Page> = words
+            .split(|b| *b == b' ')
+            .enumerate()
+            .map(|(i, w)| maki_launcher::Page {
+                heading: format!("Word {} of {n}", i + 1),
+                value: String::from_utf8_lossy(w).into_owned(),
+                mono: String::new(),
+                prose: "Write it down, in order. Keep it off computers.".into(),
+            })
+            .collect();
+        words.zeroize();
+        log::info!("{}: showing its account's backup words", self.id);
+        let shown = self.ctx.launcher.review(
+            &format!("{coin} backup"),
+            "Wrote them down?",
+            &format!("{n} words, in order"),
+            pages,
+            "done",
+            "close",
+            maki_launcher::ask_timeout(900),
+        );
+        match shown {
+            Ok(Answer::Allowed(_) | Answer::Denied) => Ok(maki_wasm::Answer::Yes),
+            _ => Ok(maki_wasm::Answer::NoAnswer),
+        }
+    }
+
     /// maki's own scanner, for the app in front: the camera's view takes the screen until a QR
     /// code is read or the owner presses a button.
     fn scan_qr(&mut self) -> Option<String> {

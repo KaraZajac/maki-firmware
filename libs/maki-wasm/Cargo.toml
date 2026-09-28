@@ -49,3 +49,5 @@ sha2 = { version = "0.10.8", default-features = false }
 # wallet apps' keys (host API 3), from the BIP39 test phrase, as maki-keys makes them
 maki-hd = { path = "../maki-hd", features = ["seed"] }
 maki-seed = { path = "../maki-seed" }
+# Monero addresses, to check what the Monero app shows
+maki-xmr = { path = "../maki-xmr" }

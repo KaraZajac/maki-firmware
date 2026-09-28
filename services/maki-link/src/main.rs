@@ -568,22 +568,25 @@ fn main() -> ! {
     }
 
     // The wallets: built with MAKI_DEMO_WALLET, once maki has its PIN and phrase, maki-link
-    // installs the SDK's Bitcoin and Ethereum apps (each asks, with a page for each permission;
-    // the wallet's names the accounts it may sign for), then does what maki desktop does with
-    // them: shares the Bitcoin account, shows address #0 to compare, has the fixture PSBT
+    // installs the SDK's Bitcoin, Ethereum and Monero apps (each asks, with a page for each
+    // permission; the wallet's names the accounts it may sign for), then does what maki desktop
+    // does with them: shares the Bitcoin account, shows address #0 to compare, has the fixture PSBT
     // reviewed and signed and checks it against the one maki's wallet code makes on a computer,
     // then the same for the taproot account; then connects a site, demo.maki, to the Ethereum
     // app, and has it sign a message, a transaction (0.05 ETH on Ethereum) and typed data (a
-    // permit to spend 1 USDC), each checked the same way. The fixtures belong to the BIP39 test
-    // phrase: restore that at setup. It logs `demo wallet ...` lines.
+    // permit to spend 1 USDC), each checked the same way; then the Monero app shows three of its
+    // addresses to compare, checked against Ledger's and monero-python's. The fixtures belong to
+    // the BIP39 test phrase: restore that at setup. It logs `demo wallet ...` lines.
     if option_env!("MAKI_DEMO_WALLET").is_some() {
         std::thread::spawn(|| {
             const BTC: &str = "com.leviathan.maki.bitcoin";
             const ETH: &str = "com.leviathan.maki.ethereum";
             let host = demo_host();
-            let bundles: [(&str, &[u8]); 2] = [
+            const XMR: &str = "com.leviathan.maki.monero";
+            let bundles: [(&str, &[u8]); 3] = [
                 ("bitcoin", include_bytes!("../../../libs/maki-wasm/tests/fixtures/bitcoin.maki")),
                 ("ethereum", include_bytes!("../../../libs/maki-wasm/tests/fixtures/ethereum.maki")),
+                ("monero", include_bytes!("../../../libs/maki-wasm/tests/fixtures/monero.maki")),
             ];
             for (name, bytes) in bundles {
                 let r = demo_install(&host, bytes);
@@ -695,6 +698,21 @@ fn main() -> ! {
             }
             let a = pieces(ETH, &head(b'Y'), &site, typed);
             log::warn!("demo wallet eth typed: status {:?}, as expected: {}", a.first(), a.get(1..) == Some(typed_sig));
+
+            // Monero's addresses, as Ledger's Monero app and monero-python make them for the test
+            // phrase: the primary address, on Monero and stagenet, and subaddress 1
+            for (net, minor, expected) in [
+                (0u8, 0u32, "49vDbkSo7eve3J41sBdjvjaBUyz8qHohsQcGtRf63qEUTMBvmA45fpp5pSacMdSg7A3b71RejLzB8EkGbfjp5PELVF2N4Zn"),
+                (2, 0, "5A8FgbMkmG2e3J41sBdjvjaBUyz8qHohsQcGtRf63qEUTMBvmA45fpp5pSacMdSg7A3b71RejLzB8EkGbfjp5PELVHCRUaE"),
+                (0, 1, "8AB7PQPtducdkghYFN2prK3rZ7zPeL9f2REEdqE4WXYbSZr3797Aqti5xAjRsVy4jTdcwMW11GWejQtqk2kNXxj2QZxJwPZ"),
+            ] {
+                let a = ask(XMR, [&[b'D', net][..], &0u32.to_le_bytes(), &minor.to_le_bytes()].concat());
+                log::warn!(
+                    "demo wallet xmr address {net}/{minor}: status {:?}, as expected: {}",
+                    a.first(),
+                    texts(&a).first().map(String::as_str) == Some(expected)
+                );
+            }
         });
     }
 

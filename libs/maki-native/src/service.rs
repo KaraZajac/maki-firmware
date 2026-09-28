@@ -65,6 +65,11 @@ pub const WALLET_FINGERPRINT: usize = 32;
 pub const WALLET_PUBLIC: usize = 33;
 pub const WALLET_REVIEW: usize = 34;
 pub const WALLET_SIGN: usize = 35;
+/// Host API 4's, likewise: `WALLET_SUBADDRESS` takes the account and index (u32s) and the path,
+/// and gives a Monero subaddress's two public keys (64 bytes); `WALLET_SHOW_BACKUP` takes the
+/// path, and its status is the answer (maki shows the words itself).
+pub const WALLET_SUBADDRESS: usize = 36;
+pub const WALLET_SHOW_BACKUP: usize = 37;
 // a plain scalar
 pub const EXIT: usize = 30;
 /// maki's own, from the app host to itself: look at what's waiting (the owner left the app, or

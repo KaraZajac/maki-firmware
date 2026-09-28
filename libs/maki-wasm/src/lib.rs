@@ -21,7 +21,7 @@ pub use session::{Session, REFUSED};
 use wasmi::{Caller, Config, Engine, Error, Extern, Linker, Memory, Module, Store, StoreLimits, StoreLimitsBuilder};
 
 /// The functions this host offers apps.
-pub const API_VERSION: u16 = 3;
+pub const API_VERSION: u16 = 4;
 
 /// Functions that came after host API 1, and with which: an app calling one says that API or later.
 pub const SINCE: &[(&str, u16)] = &[
@@ -33,6 +33,8 @@ pub const SINCE: &[(&str, u16)] = &[
     ("wallet_public", 3),
     ("wallet_review", 3),
     ("wallet_sign", 3),
+    ("wallet_subaddress", 4),
+    ("wallet_show_backup", 4),
 ];
 
 /// What maki's functions return for failures they report (rather than stopping the app).
@@ -85,6 +87,9 @@ pub const WALLET_TAPROOT: u8 = maki_hd::op::TAPROOT;
 pub const WALLET_SIGN_ECDSA: u8 = maki_hd::op::SIGN_ECDSA;
 pub const WALLET_SIGN_SCHNORR: u8 = maki_hd::op::SIGN_SCHNORR;
 pub const WALLET_SIGN_TAPROOT: u8 = maki_hd::op::SIGN_TAPROOT;
+/// Host API 4: Monero's public spend and view keys (64 bytes), from `wallet_public`; on Monero's
+/// coin type alone.
+pub const WALLET_MONERO: u8 = maki_hd::op::MONERO_PUBLIC;
 /// A review's text, pages, and each page's parts, in bytes. A page's text runs on over as many
 /// screens as it takes ("Message (2)"): a message to sign can be 4 KiB, and a transaction 64
 /// payments, their change and the fee.
@@ -120,6 +125,8 @@ pub const GATED: &[(&str, Permission)] = &[
     ("wallet_public", Permission::Wallet),
     ("wallet_review", Permission::Wallet),
     ("wallet_sign", Permission::Wallet),
+    ("wallet_subaddress", Permission::Wallet),
+    ("wallet_show_backup", Permission::Wallet),
 ];
 
 /// What `wait` hands the app.
@@ -264,6 +271,11 @@ pub trait Platform {
     /// Puts a review on maki's own screen (the wallet permission), headed with the app's name,
     /// and waits for the answer. A platform that can't show one gets no answer.
     fn review(&mut self, _review: &Review) -> Answer { Answer::NoAnswer }
+    /// Shows the owner the backup words of the account at `path` (a Monero wallet's 25), on
+    /// maki's own screens, once they've said they want them (host API 4): the words never reach
+    /// the app, which hears only whether they were shown. The session has held the path to the
+    /// app's own. `LOCKED` while maki is; `NOT_FOUND` for an account without words of its own.
+    fn show_backup(&mut self, _path: &[u32]) -> Result<Answer, i32> { Err(FAILED) }
 }
 
 /// Permissions an app has: those its manifest asks for (each of which maki offers).
@@ -474,8 +486,6 @@ fn color(v: i32) -> Result<Color, Error> { Color::from_i32(v).ok_or_else(|| trap
 fn style(v: i32) -> Result<Style, Error> { Style::from_i32(v).ok_or_else(|| trap(format_args!("no text style {v}"))) }
 
 
-/// A gated function called without its permission. `compile` refuses apps that import one
-/// they didn't ask for, so this is a second line.
 /// A derivation path from the app's memory: `len` little-endian u32s, at most `maki_hd::MAX_DEPTH`
 /// of them (None if more, or fewer than none).
 fn read_path(caller: &Caller<'_, State>, ptr: i32, len: i32, what: &str) -> Result<Option<Vec<u32>>, Error> {
@@ -497,6 +507,8 @@ fn written(caller: &mut Caller<'_, State>, out: i32, cap: i32, bytes: &[u8], wha
     Ok(bytes.len() as i32)
 }
 
+/// A gated function called without its permission. `compile` refuses apps that import one
+/// they didn't ask for, so this is a second line.
 fn permitted(c: &Caller<'_, State>, p: Permission, what: &str) -> Result<(), Error> {
     if c.data().session.permitted(p) {
         Ok(())
@@ -812,6 +824,24 @@ fn link(linker: &mut Linker<State>) -> Result<(), Error> {
             }
         },
     )?;
+    linker.func_wrap(
+        M,
+        "wallet_subaddress",
+        |mut c: Caller<'_, State>, pptr: i32, plen: i32, major: i32, minor: i32, out: i32| -> Result<i32, Error> {
+            permitted(&c, Permission::Wallet, "wallet_subaddress")?;
+            let Some(path) = read_path(&c, pptr, plen, "wallet_subaddress")? else { return Ok(INVALID) };
+            // the indices are u32s, as Monero has them
+            match c.data_mut().session.wallet_subaddress(&path, major as u32, minor as u32) {
+                Ok(keys) => write(&mut c, out, &keys, "wallet_subaddress").map(|_| 0),
+                Err(code) => Ok(code),
+            }
+        },
+    )?;
+    linker.func_wrap(M, "wallet_show_backup", |mut c: Caller<'_, State>, pptr: i32, plen: i32| -> Result<i32, Error> {
+        permitted(&c, Permission::Wallet, "wallet_show_backup")?;
+        let Some(path) = read_path(&c, pptr, plen, "wallet_show_backup")? else { return Ok(INVALID) };
+        Ok(c.data_mut().session.wallet_show_backup(&path))
+    })?;
     linker.func_wrap(M, "type_text", |mut c: Caller<'_, State>, ptr: i32, len: i32| -> Result<i32, Error> {
         permitted(&c, Permission::Keyboard, "type_text")?;
         if len as u32 as usize > MAX_TYPE {

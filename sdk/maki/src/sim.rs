@@ -593,7 +593,57 @@ impl Platform for Sim {
         let seed = self.test_seed();
         let keys = maki_hd::seed::SeedKeys::from_seed(&seed).map_err(|_| maki_wasm::FAILED)?;
         // no randomness in the simulator's Schnorr signatures: the same every run, for tests
-        maki_hd::seed::answer(&keys, op, path, digest, &[0; 32]).map_err(|_| maki_wasm::FAILED)
+        maki_hd::seed::answer(&keys, op, path, digest, &[0; 32]).map_err(|e| match e {
+            maki_hd::Error::Path => maki_wasm::REFUSED,
+            _ => maki_wasm::FAILED,
+        })
+    }
+
+    /// A wallet's backup words, as maki shows them: asked about first (a review with no pages),
+    /// then a word to a page. In the terminal, the words show there; scripted, they're written
+    /// to stderr (they're the test phrase's: nobody's real wallet).
+    fn show_backup(&mut self, path: &[u32]) -> Result<Answer, i32> {
+        let seed = self.test_seed();
+        let keys = maki_hd::seed::SeedKeys::from_seed(&seed).map_err(|_| maki_wasm::FAILED)?;
+        let words = maki_hd::seed::answer(&keys, maki_hd::op::MONERO_WORDS, path, &[], &[0; 32]).map_err(|e| match e {
+            maki_hd::Error::Path => maki_wasm::NOT_FOUND,
+            _ => maki_wasm::FAILED,
+        })?;
+        let words = String::from_utf8(words).map_err(|_| maki_wasm::FAILED)?;
+        let ask = Review {
+            question: "Show backup words?".into(),
+            detail: "anyone who sees them can spend".into(),
+            yes: "show".into(),
+            no: "don't".into(),
+            pages: Vec::new(),
+            timeout_s: 60,
+        };
+        match self.review(&ask) {
+            Answer::Yes => {}
+            other => return Ok(other),
+        }
+        let n = words.split(' ').count();
+        let pages = words
+            .split(' ')
+            .enumerate()
+            .map(|(i, w)| maki_wasm::Page { heading: format!("Word {} of {n}", i + 1), value: w.into(), ..Default::default() })
+            .collect();
+        let shown = Review {
+            question: "Wrote them down?".into(),
+            detail: format!("{n} words, in order"),
+            yes: "done".into(),
+            no: "close".into(),
+            pages,
+            timeout_s: 900,
+        };
+        let mut s = self.0.borrow_mut();
+        if s.interactive {
+            Self::interactive_review(&mut s, &shown);
+        } else {
+            eprintln!("  maki shows its owner the backup words (never the app): {words}");
+        }
+        s.logs.push(format!("backup words shown: {n}"));
+        Ok(Answer::Yes)
     }
 
     /// A review: in the terminal, a page at a time (left and right), then y or n; scripted, the

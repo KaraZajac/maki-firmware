@@ -104,6 +104,15 @@ pub mod op {
     pub const SIGN_SCHNORR: u8 = 5;
     /// A BIP340 signature over the digest with the key tweaked for a taproot key spend (64 bytes).
     pub const SIGN_TAPROOT: u8 = 6;
+    /// Monero's keys from the key at `m/44'/128'/account'/0/0` (maki-xmr, as Ledger's Monero app
+    /// makes them; Monero's coin type alone): the public spend and view keys (64 bytes).
+    pub const MONERO_PUBLIC: u8 = 7;
+    /// A Monero subaddress's public spend and view keys (64 bytes). The digest is its account and
+    /// index, each a u32, little-endian.
+    pub const MONERO_SUBADDRESS: u8 = 8;
+    /// The Monero spend key's 25 words (UTF-8, a space between each), for maki to show its owner
+    /// itself: never an app's.
+    pub const MONERO_WORDS: u8 = 9;
 }
 
 /// A path as people write it, `m/84'/0'/0'` (or `84h/0h/0h`, with or without the `m/`), as

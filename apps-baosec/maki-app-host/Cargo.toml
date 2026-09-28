@@ -22,6 +22,7 @@ maki-launcher = { path = "../maki-launcher" }
 maki-keys = { package = "maki-keys-api", path = "../../libs/maki-keys-api" }
 # wallet apps' paths, as native apps send them
 maki-hd = { path = "../../libs/maki-hd" }
+zeroize = { version = "1.8.1", features = ["alloc"] }
 maki-bundle = { path = "../../libs/maki-bundle" }
 maki-store = { path = "../../libs/maki-store" }
 maki-wasm = { path = "../../libs/maki-wasm" }

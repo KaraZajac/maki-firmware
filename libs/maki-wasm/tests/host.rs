@@ -36,6 +36,8 @@ struct Record {
     reviews: Vec<Review>,
     /// the wallet ops maki did for the app: which, on what path
     wallet_calls: Vec<(u8, Vec<u32>)>,
+    /// backup words maki showed its owner (never the app)
+    backups: Vec<String>,
 }
 
 /// The BIP39 test phrase's seed: wallet apps' keys in these tests.
@@ -106,12 +108,33 @@ impl Platform for Script {
         }
         r.wallet_calls.push((op, path.to_vec()));
         let keys = maki_hd::seed::SeedKeys::from_seed(&test_seed()).unwrap();
-        maki_hd::seed::answer(&keys, op, path, digest, &[0; 32]).map_err(|_| FAILED)
+        // as maki's app host has maki-keys' answers
+        maki_hd::seed::answer(&keys, op, path, digest, &[0; 32]).map_err(|e| match e {
+            maki_hd::Error::Path => REFUSED,
+            _ => FAILED,
+        })
     }
     fn review(&mut self, review: &Review) -> Answer {
         let mut r = self.0.borrow_mut();
         r.reviews.push(review.clone());
         r.answers.pop_front().unwrap_or(Answer::NoAnswer)
+    }
+    fn show_backup(&mut self, path: &[u32]) -> Result<Answer, i32> {
+        let mut r = self.0.borrow_mut();
+        if r.locked {
+            return Err(LOCKED);
+        }
+        // the owner's say first, as maki asks it
+        let answer = r.answers.pop_front().unwrap_or(Answer::NoAnswer);
+        if answer == Answer::Yes {
+            let keys = maki_hd::seed::SeedKeys::from_seed(&test_seed()).unwrap();
+            let words = maki_hd::seed::answer(&keys, maki_hd::op::MONERO_WORDS, path, &[], &[0; 32]).map_err(|e| match e {
+                maki_hd::Error::Path => NOT_FOUND,
+                _ => FAILED,
+            })?;
+            r.backups.push(String::from_utf8(words).unwrap());
+        }
+        Ok(answer)
     }
     fn message(&mut self) -> Option<Vec<u8>> { self.0.borrow().current.clone() }
     fn reply(&mut self, reply: &[u8]) -> bool {
@@ -593,6 +616,8 @@ fn gated_functions_need_their_permission() {
         ("wallet_public", "(param i32 i32 i32 i32 i32) (result i32)"),
         ("wallet_review", "(param i32 i32 i32 i32) (result i32)"),
         ("wallet_sign", "(param i32 i32 i32 i32 i32 i32) (result i32)"),
+        ("wallet_subaddress", "(param i32 i32 i32 i32 i32) (result i32)"),
+        ("wallet_show_backup", "(param i32 i32) (result i32)"),
     ];
     assert_eq!(signatures.len(), GATED.len());
     for (name, signature) in signatures {
@@ -1000,4 +1025,81 @@ fn wallet_functions_came_with_host_api_3() {
     assert!(err.contains("wallet_fingerprint, which came with host API 3, and its manifest says 2"), "{err}");
     admit(&manifest(3), &code).unwrap();
     assert_eq!(load(&manifest(3), &code).unwrap().wallet, manifest(3).wallet);
+}
+
+#[test]
+fn monero_keys_and_backup_come_from_maki_on_its_coin_alone() {
+    use maki_bundle::Permission;
+    use maki_xmr::{address, Kind, Network};
+    let (mut s, record) = wallet_session(&["m/44'/128'"], &[Permission::Wallet]);
+    let p = path("m/44'/128'/0'/0/0");
+    // the public spend and view keys: the account's own address
+    let keys = s.wallet_public(&p, WALLET_MONERO).unwrap();
+    let (spend, view): ([u8; 32], [u8; 32]) = (keys[..32].try_into().unwrap(), keys[32..].try_into().unwrap());
+    assert_eq!(
+        address(Network::Mainnet, Kind::Standard, &spend, &view),
+        "49vDbkSo7eve3J41sBdjvjaBUyz8qHohsQcGtRf63qEUTMBvmA45fpp5pSacMdSg7A3b71RejLzB8EkGbfjp5PELVF2N4Zn"
+    );
+    // subaddresses, the account's own (0, 0) among them
+    let sub = s.wallet_subaddress(&p, 0, 1).unwrap();
+    assert_eq!(
+        address(Network::Mainnet, Kind::Subaddress, &sub[..32].try_into().unwrap(), &sub[32..].try_into().unwrap()),
+        "8AB7PQPtducdkghYFN2prK3rZ7zPeL9f2REEdqE4WXYbSZr3797Aqti5xAjRsVy4jTdcwMW11GWejQtqk2kNXxj2QZxJwPZ"
+    );
+    assert_eq!(s.wallet_subaddress(&p, 0, 0).unwrap()[..], keys[..]);
+    // off its paths: refused
+    assert_eq!(s.wallet_subaddress(&path("m/44'/60'/0'/0/0"), 0, 1), Err(REFUSED));
+    // the backup: maki asks, then shows the words itself; the app hears only the answer
+    record.borrow_mut().answers.push_back(Answer::Yes);
+    assert_eq!(s.wallet_show_backup(&p), 0);
+    assert_eq!(
+        record.borrow().backups,
+        [concat!(
+            "tavern judge beyond bifocals deepest mural onward dummy eagle diode gained vacation rally cause firm idled jerseys ",
+            "moat vigilant upload bobsled jobs cunning doing jobs"
+        )]
+    );
+    record.borrow_mut().answers.push_back(Answer::No);
+    assert_eq!(s.wallet_show_backup(&p), 1);
+    assert_eq!(s.wallet_show_backup(&p), 2, "no answer");
+    assert_eq!(record.borrow().backups.len(), 1);
+    assert_eq!(s.wallet_show_backup(&path("m/44'/60'/0'/0/0")), REFUSED);
+    // Monero's keys are Monero's coin type's alone: a Bitcoin app gets none from its own paths
+    let (mut b, record) = wallet_session(&["m/84'/0'"], &[Permission::Wallet]);
+    assert_eq!(b.wallet_public(&path("m/84'/0'/0'/0/0"), WALLET_MONERO), Err(REFUSED));
+    assert_eq!(b.wallet_subaddress(&path("m/84'/0'/0'/0/0"), 0, 1), Err(REFUSED));
+    record.borrow_mut().answers.push_back(Answer::Yes);
+    assert_eq!(b.wallet_show_backup(&path("m/84'/0'/0'/0/0")), NOT_FOUND);
+    assert!(record.borrow().backups.is_empty());
+    // and locked, nothing
+    record.borrow_mut().locked = true;
+    let (mut s, record) = wallet_session(&["m/44'/128'"], &[Permission::Wallet]);
+    record.borrow_mut().locked = true;
+    assert_eq!(s.wallet_public(&p, WALLET_MONERO), Err(LOCKED));
+    assert_eq!(s.wallet_show_backup(&p), LOCKED);
+}
+
+#[test]
+fn moneros_functions_came_with_host_api_4() {
+    let code = module(
+        r#"(module (import "maki" "wallet_subaddress" (func (param i32 i32 i32 i32 i32) (result i32))) (memory (export "memory") 1) (func (export "maki_main")))"#,
+    );
+    let manifest = |api: u16| maki_bundle::Manifest {
+        id: "org.example.monero".into(),
+        name: "Monero".into(),
+        version: 1,
+        label: "1.0".into(),
+        kind: maki_bundle::Kind::Wasm,
+        api,
+        firmware: String::new(),
+        permissions: vec![(maki_bundle::Permission::Wallet, "to show addresses".into())],
+        storage_kib: 1,
+        memory_kib: 64,
+        backup: true,
+        description: String::new(),
+        wallet: Some(maki_bundle::Wallet { curve: maki_bundle::Curve::Secp256k1, paths: vec![path("m/44'/128'")] }),
+    };
+    let err = admit(&manifest(3), &code).unwrap_err();
+    assert!(err.contains("wallet_subaddress, which came with host API 4, and its manifest says 3"), "{err}");
+    admit(&manifest(4), &code).unwrap();
 }

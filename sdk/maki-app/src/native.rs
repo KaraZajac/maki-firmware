@@ -352,6 +352,25 @@ mod wallet_calls {
         let (status, got) = request(service::WALLET_SIGN, &payload, 65);
         fits(status, &got, out, cap)
     }
+
+    pub unsafe fn wallet_subaddress(pptr: *const u32, plen: usize, major: i32, minor: i32, out: *mut u8) -> i32 {
+        let Some(path) = path_bytes(pptr, plen) else { return INVALID };
+        let mut payload = Vec::with_capacity(8 + path.len());
+        payload.extend_from_slice(&(major as u32).to_le_bytes());
+        payload.extend_from_slice(&(minor as u32).to_le_bytes());
+        payload.extend_from_slice(&path);
+        let (status, got) = request(service::WALLET_SUBADDRESS, &payload, 64);
+        match fits(status, &got, out, 64) {
+            64 => 0,
+            n if n < 0 => n,
+            _ => -5,
+        }
+    }
+
+    pub unsafe fn wallet_show_backup(pptr: *const u32, plen: usize) -> i32 {
+        let Some(path) = path_bytes(pptr, plen) else { return INVALID };
+        request(service::WALLET_SHOW_BACKUP, &path, 0).0
+    }
 }
 #[cfg(feature = "wallet")]
 pub use wallet_calls::*;

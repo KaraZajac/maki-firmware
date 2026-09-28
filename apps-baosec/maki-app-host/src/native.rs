@@ -319,6 +319,24 @@ fn lent(session: &mut Session, id: usize, request: &[u8], last_log: &mut String)
                 _ => (maki_wasm::INVALID, vec![]),
             }
         }
+        service::WALLET_SUBADDRESS => {
+            let parsed = (request.len() >= 8).then(|| {
+                let major = u32::from_le_bytes(request[..4].try_into().unwrap());
+                let minor = u32::from_le_bytes(request[4..8].try_into().unwrap());
+                (major, minor, path_of(&request[8..]))
+            });
+            match parsed {
+                Some((major, minor, Some(path))) => match session.wallet_subaddress(&path, major, minor) {
+                    Ok(keys) => (0, keys.to_vec()),
+                    Err(code) => (code, vec![]),
+                },
+                _ => (maki_wasm::INVALID, vec![]),
+            }
+        }
+        service::WALLET_SHOW_BACKUP => match path_of(request) {
+            Some(path) => (session.wallet_show_backup(&path), vec![]),
+            None => (maki_wasm::INVALID, vec![]),
+        },
         service::STORAGE_GET => match text().map(|k| session.storage_get(k)) {
             Some(Ok(v)) => (0, v),
             Some(Err(code)) => (code, vec![]),

@@ -95,6 +95,10 @@ mod sys {
         pub fn wallet_review(tptr: *const u8, tlen: usize, signatures: i32, timeout_s: i32) -> i32;
         #[cfg(feature = "wallet")]
         pub fn wallet_sign(pptr: *const u32, plen: usize, dptr: *const u8, scheme: i32, out: *mut u8, cap: usize) -> i32;
+        #[cfg(feature = "wallet")]
+        pub fn wallet_subaddress(pptr: *const u32, plen: usize, major: i32, minor: i32, out: *mut u8) -> i32;
+        #[cfg(feature = "wallet")]
+        pub fn wallet_show_backup(pptr: *const u32, plen: usize) -> i32;
     }
 }
 
@@ -626,6 +630,7 @@ pub mod wallet {
     const SIGN_ECDSA: i32 = maki_hd::op::SIGN_ECDSA as i32;
     const SIGN_SCHNORR: i32 = maki_hd::op::SIGN_SCHNORR as i32;
     const SIGN_TAPROOT: i32 = maki_hd::op::SIGN_TAPROOT as i32;
+    const MONERO: i32 = maki_hd::op::MONERO_PUBLIC as i32;
 
     /// The master key's fingerprint, as descriptors and PSBTs name the seed.
     pub fn fingerprint() -> Result<[u8; 4], Error> {
@@ -659,6 +664,35 @@ pub mod wallet {
 
     /// The taproot output key the key at `path` makes with no scripts (BIP86), x only.
     pub fn taproot_output(path: &[u32]) -> Result<[u8; 32], Error> { public_form(path, TAPROOT) }
+
+    /// A Monero account's public spend and view keys (host API 4), for the account at `path`,
+    /// `m/44'/128'/account'/0/0` (as Ledger's Monero app has it; Monero's coin type alone): its
+    /// own address's (`maki_xmr::address`).
+    pub fn monero(path: &[u32]) -> Result<([u8; 32], [u8; 32]), Error> {
+        let b: [u8; 64] = public_form(path, MONERO)?;
+        Ok((b[..32].try_into().unwrap(), b[32..].try_into().unwrap()))
+    }
+
+    /// A Monero subaddress's public spend and view keys (host API 4): account `major`'s address
+    /// `minor`, of the account at `path` (0 and 0 are the account's own address). maki makes them
+    /// with the view key, which it keeps.
+    pub fn subaddress(path: &[u32], major: u32, minor: u32) -> Result<([u8; 32], [u8; 32]), Error> {
+        let mut out = [0u8; 64];
+        result(unsafe { sys::wallet_subaddress(path.as_ptr(), path.len(), major as i32, minor as i32, out.as_mut_ptr()) })?;
+        Ok((out[..32].try_into().unwrap(), out[32..].try_into().unwrap()))
+    }
+
+    /// Has maki show its owner the backup words of the account at `path` (a Monero wallet's 25,
+    /// which restore it in any Monero wallet), on maki's own screens, once they've said they want
+    /// them (host API 4). The words never reach the app: `Answer::Yes` once they were shown.
+    /// `Error::NotFound` for an account without words of its own.
+    pub fn show_backup(path: &[u32]) -> Result<Answer, Error> {
+        result(unsafe { sys::wallet_show_backup(path.as_ptr(), path.len()) }).map(|a| match a {
+            0 => Answer::Yes,
+            1 => Answer::No,
+            _ => Answer::NoAnswer,
+        })
+    }
 
     fn sign<const N: usize>(path: &[u32], digest: &[u8; 32], scheme: i32) -> Result<[u8; N], Error> {
         let mut out = [0u8; N];

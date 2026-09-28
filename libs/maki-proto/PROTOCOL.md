@@ -220,8 +220,9 @@ the owner before installing or removing anything: whoever sends these can't do e
 ## The wallets
 
 maki's wallets are apps from the maki store (ARCHITECTURE.md, "Wallets are apps"), which a maki
-has only if its owner adds them: **Bitcoin** (`com.leviathan.maki.bitcoin`) and **Ethereum**
-(`com.leviathan.maki.ethereum`), the SDK's examples `bitcoin` and `ethereum`. maki keeps the
+has only if its owner adds them: **Bitcoin** (`com.leviathan.maki.bitcoin`), **Ethereum**
+(`com.leviathan.maki.ethereum`) and **Monero** (`com.leviathan.maki.monero`), the SDK's examples
+`bitcoin`, `ethereum` and `monero`. maki keeps the
 keys, from its recovery phrase, and gives an app only the accounts its manifest names (the wallet
 permission, which the owner sees when installing it); the app reads what it's asked to sign with
 maki's wallet code (`maki-btc`, `maki-eth`), shows it on maki's review screen, and maki signs
@@ -346,3 +347,18 @@ What the app checks and shows:
 - Typed data is shown as `Y` says, from the app's own reading of it: the hash signed is of
   exactly the values shown. `eth_sign` never will be signed: it signs anything, a transaction
   included.
+
+**Monero** keeps the account Ledger's Monero app makes from the same phrase (the key at
+`m/44'/128'/0'/0/0`, hashed to the spend key, and that to the view key), so the phrase gives the
+same wallet there, and the spend key's 25 words restore it in any Monero wallet. maki shows its
+owner those words itself, from the app's menu, once they've said they want them: they never
+leave maki, not even for the app. `network` is 0 (Monero), 1 (testnet) or 2 (stagenet).
+
+| Message | Answer |
+|---|---|
+| `D` `network:u8` `account:u32` `index:u32` | `status` `address:str16` |
+
+- **`D`** puts an address on maki's screen, the whole of it, for the owner to compare with what
+  the computer shows: account 0's index 0 is the primary address, any other a subaddress (made
+  with the view key, which maki keeps). 0 if they said it matches, 1 if it doesn't (then the
+  computer's copy isn't to be trusted); `address` is maki's, either way.

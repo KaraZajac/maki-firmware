@@ -1,0 +1,14 @@
+[package]
+name = "monero"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+# std, for an allocator: addresses are Strings
+maki-app = { path = "../../maki-app", default-features = false, features = ["std", "wallet"] }
+# Monero's addresses, from the public keys maki gives (maki makes them, and keeps the secrets)
+maki-xmr = { path = "../../../libs/maki-xmr" }

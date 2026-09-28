@@ -222,6 +222,18 @@ impl SeedKeys {
         Ok(key)
     }
 
+    /// The Monero keys of the account at `path` (`m/44'/128'/account'/0/0`): Monero's coin type
+    /// alone, so no other coin's key is hashed into one.
+    fn monero(&self, path: &[u32]) -> Result<maki_xmr::Keys, Error> {
+        if path.get(1) != Some(&(HARDENED | 128)) {
+            return Err(Error::Path);
+        }
+        let mut secret: [u8; 32] = self.derive(path)?.key.to_bytes().into();
+        let keys = maki_xmr::Keys::from_bip32(&secret);
+        secret.zeroize();
+        Ok(keys)
+    }
+
     /// A BIP340 signature with `aux` as its auxiliary randomness: fresh random bytes, on maki,
     /// so a signature doesn't depend on the key and message alone. (Through `Keys` it's zero,
     /// which BIP340 allows, for signatures tests can compare.)
@@ -294,6 +306,10 @@ impl Keys for OneKey {
 /// maki and the simulator answer apps): the answer's bytes. `aux` is BIP340's auxiliary
 /// randomness for a Schnorr signature. Which paths an app may use is the caller's to check.
 pub fn answer(keys: &SeedKeys, which: u8, path: &[u32], digest: &[u8], aux: &[u8; 32]) -> Result<Vec<u8>, Error> {
+    let indices = || -> Result<(u32, u32), Error> {
+        let d: &[u8; 8] = digest.try_into().map_err(|_| Error::Failed)?;
+        Ok((u32::from_le_bytes(d[..4].try_into().unwrap()), u32::from_le_bytes(d[4..].try_into().unwrap())))
+    };
     let digest = || -> Result<[u8; 32], Error> { digest.try_into().map_err(|_| Error::Failed) };
     Ok(match which {
         op::FINGERPRINT => keys.fingerprint()?.to_vec(),
@@ -315,6 +331,16 @@ pub fn answer(keys: &SeedKeys, which: u8, path: &[u32], digest: &[u8], aux: &[u8
         }
         op::SIGN_SCHNORR => keys.sign_schnorr_with(path, &digest()?, Tweak::None, aux)?.to_vec(),
         op::SIGN_TAPROOT => keys.sign_schnorr_with(path, &digest()?, Tweak::Taproot, aux)?.to_vec(),
+        op::MONERO_PUBLIC => {
+            let (spend, view) = keys.monero(path)?.public();
+            [spend, view].concat()
+        }
+        op::MONERO_SUBADDRESS => {
+            let (major, minor) = indices()?;
+            let (spend, view) = keys.monero(path)?.subaddress(major, minor);
+            [spend, view].concat()
+        }
+        op::MONERO_WORDS => keys.monero(path)?.words().join(" ").into_bytes(),
         _ => return Err(Error::Failed),
     })
 }

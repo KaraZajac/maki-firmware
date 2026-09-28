@@ -7,7 +7,7 @@
 //! ADDR defaults to 127.0.0.1:7878. Logins and TOTP secrets live in memory; SAVE_LOGIN adds to them.
 //! Its recovery phrase is `--phrase`, or else the BIP39 test phrase ("abandon" eleven times, then
 //! "about"), which everyone knows: never send real coins to either's wallets. Wallet apps (the
-//! store's Bitcoin and Ethereum) get their keys from it, as on maki.
+//! store's Bitcoin, Ethereum and Monero) get their keys from it, as on maki.
 //! Approvals are automatic unless `--deny` (refuse everything) or `--ask` (ask on this terminal).
 //! It calls itself a maki roll, picked at random as a badge picks its name, unless `--name` says.
 //! Codes need a verified clock, as on the badge: sync through Roughtime first, or start with
@@ -219,7 +219,30 @@ impl maki_wasm::Platform for FakeApp {
         if self.keys.is_none() {
             self.keys = Some(maki_hd::seed::SeedKeys::from_seed(&self.seed).map_err(|_| maki_wasm::FAILED)?);
         }
-        maki_hd::seed::answer(self.keys.as_ref().unwrap(), op, path, digest, &[0; 32]).map_err(|_| maki_wasm::FAILED)
+        maki_hd::seed::answer(self.keys.as_ref().unwrap(), op, path, digest, &[0; 32]).map_err(|e| match e {
+            maki_hd::Error::Path => maki_wasm::REFUSED,
+            _ => maki_wasm::FAILED,
+        })
+    }
+    /// A wallet's backup words: asked about by the policy, then "shown" (the fake has no screen,
+    /// and doesn't print them: its phrase can be someone's). The app hears only the answer.
+    fn show_backup(&mut self, path: &[u32]) -> Result<maki_wasm::Answer, i32> {
+        if self.keys.is_none() {
+            self.keys = Some(maki_hd::seed::SeedKeys::from_seed(&self.seed).map_err(|_| maki_wasm::FAILED)?);
+        }
+        let words = maki_hd::seed::answer(self.keys.as_ref().unwrap(), maki_hd::op::MONERO_WORDS, path, &[], &[0; 32])
+            .map_err(|e| match e {
+                maki_hd::Error::Path => maki_wasm::NOT_FOUND,
+                _ => maki_wasm::FAILED,
+            })?;
+        match approve(self.policy, &format!("{}: show its backup words?", self.name)) {
+            Approval::Approved => {
+                println!("  maki shows its owner {} backup words", words.split(|b| *b == b' ').count());
+                Ok(maki_wasm::Answer::Yes)
+            }
+            Approval::TimedOut => Ok(maki_wasm::Answer::NoAnswer),
+            _ => Ok(maki_wasm::Answer::No),
+        }
     }
     fn app_secret(&mut self, label: &str) -> Option<[u8; 32]> { maki_seed::app_secret(&self.seed, &self.id, &self.developer, label) }
     fn type_text(&mut self, text: &str) -> bool {

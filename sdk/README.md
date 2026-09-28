@@ -6,7 +6,7 @@ you can install"). Anyone can build one and sideload it through maki desktop; ma
 owner what it is, where it's from and what it may do before installing it, and a sideloaded
 app carries a mark in maki's top bar for as long as it's installed.
 
-This directory has the Rust crate apps are written with (`maki-app`), sixteen examples, and the
+This directory has the Rust crate apps are written with (`maki-app`), seventeen examples, and the
 `maki` tool that packs, signs, checks and simulates them. The examples:
 
 - **Hello**, **Dice** and **Tally**: a screen, the buttons, storage and randomness.
@@ -31,6 +31,9 @@ This directory has the Rust crate apps are written with (`maki-app`), sixteen ex
   code (`maki-btc`, `maki-eth`), shows it on maki's review screen and signs once the owner says
   yes. maki desktop, wallet software and sites talk to them over the link (PROTOCOL.md, "The
   wallets"). Opened, each shows an address as a QR code.
+- **Monero**: the Monero wallet Ledger's Monero app makes from the same phrase (host API 4):
+  its address and subaddresses as QR codes, and, from its menu, the 25 words that restore it in
+  any Monero wallet, which maki shows its owner itself.
 - **Hello Native**, Hello built as a native app, and **Pomodoro**, a native focus timer whose
   pie empties like a clock while you work and fills back up while you rest.
 
@@ -186,7 +189,12 @@ function whose permission it didn't ask for):
   never leave maki, which does the curve work itself: the app never holds a secret key, and
   WebAssembly would be far too slow for it. `wallet::HostKeys` is maki's keys as a
   `maki_hd::Keys`, for `maki-btc` and `maki-eth`, which do the rest. `Error::Locked` while maki
-  is locked or has no phrase; `Error::Refused` off the paths, or without a yes. The wallet examples show how: they need `std` (for their allocator), so
+  is locked or has no phrase; `Error::Refused` off the paths, or without a yes. Host API 4 adds
+  Monero, on its coin type alone (`m/44'/128'`): `wallet::monero(path)`, the account's public
+  spend and view keys, `wallet::subaddress(path, account, index)`, a subaddress's (with
+  `maki-xmr` to make the addresses), and `wallet::show_backup(path)`, which has maki show its
+  owner the account's 25 words on its own screens once they've said they want them: the app
+  hears whether they were shown, never the words. The wallet examples show how: they need `std` (for their allocator), so
   their `Cargo.toml` asks for `maki-app` with `default-features = false, features = ["std",
   "wallet"]`.
 

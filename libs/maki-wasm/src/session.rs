@@ -278,11 +278,36 @@ impl Session {
     /// form asked for.
     pub fn wallet_public(&mut self, path: &[u32], form: u8) -> Result<Vec<u8>, i32> {
         self.needs(Permission::Wallet)?;
-        if !matches!(form, WALLET_PUBLIC | WALLET_UNCOMPRESSED | WALLET_TAPROOT) {
+        if !matches!(form, WALLET_PUBLIC | WALLET_UNCOMPRESSED | WALLET_TAPROOT | WALLET_MONERO) {
             return Err(INVALID);
         }
         self.wallet_path(path)?;
         self.platform.wallet(form, path, &[])
+    }
+
+    /// The wallet permission (host API 4): a Monero subaddress's public spend and view keys, for
+    /// account `major`'s address `minor` (0 and 0: the account's own address), of the account at
+    /// `path` (one of its own).
+    pub fn wallet_subaddress(&mut self, path: &[u32], major: u32, minor: u32) -> Result<[u8; 64], i32> {
+        self.needs(Permission::Wallet)?;
+        self.wallet_path(path)?;
+        let mut indices = [0u8; 8];
+        indices[..4].copy_from_slice(&major.to_le_bytes());
+        indices[4..].copy_from_slice(&minor.to_le_bytes());
+        self.platform.wallet(maki_hd::op::MONERO_SUBADDRESS, path, &indices)?.try_into().map_err(|_| FAILED)
+    }
+
+    /// The wallet permission (host API 4): has maki show its owner the backup words of the account
+    /// at `path` (one of its own), itself, once they've said they want them. 0 shown, 1 not
+    /// wanted, 2 no answer; the words never come to the app.
+    pub fn wallet_show_backup(&mut self, path: &[u32]) -> i32 {
+        if let Err(e) = self.needs(Permission::Wallet).and_then(|_| self.wallet_path(path)) {
+            return e;
+        }
+        match self.platform.show_backup(path) {
+            Ok(answer) => answer.code(),
+            Err(e) => e,
+        }
     }
 
     /// The wallet permission: shows the owner a review on maki's own screen (see `parse_review`

@@ -113,6 +113,12 @@ pub const WALLET_TAPROOT: u8 = 3;
 pub const WALLET_SIGN_ECDSA: u8 = 4;
 pub const WALLET_SIGN_SCHNORR: u8 = 5;
 pub const WALLET_SIGN_TAPROOT: u8 = 6;
+/// Monero's public spend and view keys, on its coin type alone.
+pub const WALLET_MONERO_PUBLIC: u8 = 7;
+/// A Monero subaddress's public keys; `digest` is its account and index (u32s, little-endian).
+pub const WALLET_MONERO_SUBADDRESS: u8 = 8;
+/// The Monero spend key's 25 words, for the app host to have maki show its owner: never an app.
+pub const WALLET_MONERO_WORDS: u8 = 9;
 
 /// A wallet app's request, through the app host, and its answer (`answer`, when `result` is
 /// `RESULT_OK`).

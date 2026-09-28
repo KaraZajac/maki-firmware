@@ -112,3 +112,44 @@ fn paths_round_trip() {
 }
 
 fn hex(bytes: &[u8]) -> String { bytes.iter().map(|b| format!("{b:02x}")).collect() }
+
+#[test]
+fn monero_as_ledger_and_every_wallet_has_it() {
+    use maki_hd::{op, seed::answer, Error};
+    use maki_xmr::{address, Kind, Network};
+    let ours = SeedKeys::from_seed(&seed()).unwrap();
+    let path = parse_path("m/44'/128'/0'/0/0").unwrap();
+    let ask = |which: u8, digest: &[u8]| answer(&ours, which, &path, digest, &[0; 32]);
+    // Ledger's Monero app's public keys for this phrase, and the address every wallet makes
+    let public = ask(op::MONERO_PUBLIC, &[]).unwrap();
+    let hex: String = public.iter().map(|b| format!("{b:02x}")).collect();
+    assert_eq!(
+        hex,
+        "dae41d6b13568fdd71ec3d20c2f614c65fe819f36ca5da8d24df3bd89b2bad9d865cbfab852a1d1ccdfc7328e4dac90f78fc2154257d07522e9b79e637326dfa"
+    );
+    let (spend, view): ([u8; 32], [u8; 32]) = (public[..32].try_into().unwrap(), public[32..].try_into().unwrap());
+    assert_eq!(
+        address(Network::Mainnet, Kind::Standard, &spend, &view),
+        "49vDbkSo7eve3J41sBdjvjaBUyz8qHohsQcGtRf63qEUTMBvmA45fpp5pSacMdSg7A3b71RejLzB8EkGbfjp5PELVF2N4Zn"
+    );
+    // subaddress 1 of account 0: its account and index in the digest
+    let sub = ask(op::MONERO_SUBADDRESS, &[0, 0, 0, 0, 1, 0, 0, 0]).unwrap();
+    assert_eq!(
+        address(Network::Mainnet, Kind::Subaddress, &sub[..32].try_into().unwrap(), &sub[32..].try_into().unwrap()),
+        "8AB7PQPtducdkghYFN2prK3rZ7zPeL9f2REEdqE4WXYbSZr3797Aqti5xAjRsVy4jTdcwMW11GWejQtqk2kNXxj2QZxJwPZ"
+    );
+    assert_eq!(ask(op::MONERO_SUBADDRESS, &[0; 4]).err(), Some(Error::Failed));
+    // the words Monero wallets restore it from
+    assert_eq!(
+        String::from_utf8(ask(op::MONERO_WORDS, &[]).unwrap()).unwrap(),
+        "tavern judge beyond bifocals deepest mural onward dummy eagle diode gained vacation rally cause firm idled \
+         jerseys moat vigilant upload bobsled jobs cunning doing jobs"
+    );
+    // on Monero's coin type alone: no other coin's key becomes a Monero wallet
+    for other in ["m/44'/60'/0'/0/0", "m/84'/0'/0'/0/0", "m/44'", "m"] {
+        let p = parse_path(other).unwrap();
+        for which in [op::MONERO_PUBLIC, op::MONERO_WORDS] {
+            assert_eq!(answer(&ours, which, &p, &[], &[0; 32]).err(), Some(Error::Path), "{other}");
+        }
+    }
+}
