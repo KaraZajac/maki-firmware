@@ -293,13 +293,23 @@ fn install(w: &Worker, bytes: Vec<u8>) -> (u32, String) {
         }
         pages.push(Page { heading: "It asks to".into(), value: p.title().into(), mono: String::new(), prose });
         // the accounts the wallet permission's warning names next: the coins from the paths
-        // themselves, never the app's say-so
+        // themselves, never the app's say-so. One coin fits the bold line; more are named in
+        // full below the paths, where the words wrap.
         if let (maki_bundle::Permission::Wallet, Some(w)) = (p, &m.wallet) {
+            let coins = w.coins();
+            let (value, prose) = match coins.as_slice() {
+                [one] => (one.clone(), "From your recovery phrase, where other wallets find them too.".to_string()),
+                [first @ .., last] => (
+                    String::new(),
+                    format!("For {} and {last}, from your recovery phrase, where other wallets find them too.", first.join(", ")),
+                ),
+                [] => (String::new(), String::new()),
+            };
             pages.push(Page {
                 heading: "Its accounts".into(),
-                value: w.coins().join(", "),
+                value,
                 mono: w.paths.iter().map(|p| maki_hd::format_path(p)).collect::<Vec<_>>().join("\n"),
-                prose: "From your recovery phrase, where other wallets find them too.".into(),
+                prose,
             });
         }
     }
