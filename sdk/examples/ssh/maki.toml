@@ -1,7 +1,7 @@
 id = "com.leviathan.maki.ssh"
 name = "SSH"
-version = 1
-label = "1.0"
+version = 2
+label = "1.1"
 api = 1
 storage = 1
 memory = 64

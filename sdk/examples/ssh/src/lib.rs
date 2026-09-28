@@ -123,8 +123,10 @@ fn shown<const N: usize>(out: &mut Buf<N>, bytes: &[u8], most: usize) {
 
 /// What a sign request would sign.
 enum Signing<'a> {
-    /// An SSH sign-in, by this user, in this session.
-    SignIn { user: &'a [u8], session: &'a [u8] },
+    /// An SSH sign-in, by this user, in this session; to this server, when the sign-in names
+    /// its host key (OpenSSH's publickey-hostbound-v00@openssh.com, which it uses with an agent
+    /// that takes session binding, as maki desktop's does).
+    SignIn { user: &'a [u8], session: &'a [u8], host: Option<&'a [u8]> },
     /// An SSHSIG signature: git's commits and tags, or a file.
     Sig { namespace: &'a [u8] },
 }
@@ -146,10 +148,17 @@ fn signing<'a>(data: &'a [u8], blob: &[u8]) -> Option<Signing<'a>> {
     }
     let user = r.string()?;
     r.string()?; // the service
-    if r.string()? != b"publickey" || r.u8()? != 1 || r.string()? != b"ssh-ed25519" || r.string()? != blob {
+    let hostbound = match r.string()? {
+        b"publickey" => false,
+        b"publickey-hostbound-v00@openssh.com" => true,
+        _ => return None,
+    };
+    if r.u8()? != 1 || r.string()? != b"ssh-ed25519" || r.string()? != blob {
         return None;
     }
-    r.done().then_some(Signing::SignIn { user, session })
+    // the server's host key, signed with the rest
+    let host = if hostbound { Some(r.string()?) } else { None };
+    r.done().then_some(Signing::SignIn { user, session, host })
 }
 
 /// A session an SSH client bound to a server's host key (session-bind@openssh.com). The host
@@ -222,12 +231,15 @@ impl App {
         let mut question = Buf::<64>::new();
         let mut detail = Buf::<128>::new();
         match what {
-            Signing::SignIn { user, session } => {
+            Signing::SignIn { user, session, host } => {
                 let _ = question.write_str("SSH sign-in?");
                 let _ = detail.write_str("as ");
                 shown(&mut detail, user, 32);
+                // the host key the sign-in names, or else the one the session was bound to
                 let session = sha256(session);
-                let host = self.bound.iter().flatten().find(|b| b.conn == conn && b.session == session).map(|b| b.host);
+                let host = host.map(sha256).or_else(|| {
+                    self.bound.iter().flatten().find(|b| b.conn == conn && b.session == session).map(|b| b.host)
+                });
                 if let Some(host) = host {
                     let _ = detail.write_str(", host ");
                     // enough of the fingerprint to compare with ssh's
