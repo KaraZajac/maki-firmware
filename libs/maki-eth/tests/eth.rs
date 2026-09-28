@@ -187,7 +187,23 @@ fn the_review_says_what_the_transaction_does() {
 
     let transfer = tx(eip1559(Some(usdc()), 0, erc20([0xa9, 0x05, 0x9c, 0xbb], bob(), U256::from(1_500_000u64)), AccessList::default()));
     assert_eq!(display::call(&transfer), Call::Transfer { to: bob().0 .0, amount: U256::from(1_500_000u64).to_be_bytes() });
+    // USDC on Ethereum: maki knows it by its contract, and says how much in USDC
     let (pages, _) = display::review(&transfer).unwrap();
+    let headings: Vec<&str> = pages.iter().map(|p| p.heading.as_str()).collect();
+    assert_eq!(headings, ["Network", "Send tokens", "Token", "Max fee"]);
+    assert_eq!((pages[1].value.as_str(), pages[1].mono.as_str()), ("1.5 USDC", "0x70997970C51812dc3A010C7d01b50e0d17dc79C8"));
+    assert_eq!((pages[2].value.as_str(), pages[2].mono.as_str()), ("USDC", "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48"));
+
+    // the same contract on another network is just a contract: its smallest units
+    let elsewhere = Tx::parse(
+        &TxEip1559 {
+            chain_id: 8453,
+            ..eip1559(Some(usdc()), 0, erc20([0xa9, 0x05, 0x9c, 0xbb], bob(), U256::from(1_500_000u64)), AccessList::default())
+        }
+        .encoded_for_signing(),
+    )
+    .unwrap();
+    let (pages, _) = display::review(&elsewhere).unwrap();
     let headings: Vec<&str> = pages.iter().map(|p| p.heading.as_str()).collect();
     assert_eq!(headings, ["Network", "Send tokens", "Token amount", "Token", "Max fee"]);
     assert_eq!(pages[2].mono, "1500000");
@@ -195,6 +211,10 @@ fn the_review_says_what_the_transaction_does() {
     let approve = tx(eip1559(Some(usdc()), 0, erc20([0x09, 0x5e, 0xa7, 0xb3], bob(), U256::MAX), AccessList::default()));
     let (pages, _) = display::review(&approve).unwrap();
     assert_eq!((pages[1].heading.as_str(), pages[2].mono.as_str()), ("Approve!", "any amount"));
+    assert_eq!(pages[3].value, "USDC");
+    let some = tx(eip1559(Some(usdc()), 0, erc20([0x09, 0x5e, 0xa7, 0xb3], bob(), U256::from(25_000_000u64)), AccessList::default()));
+    let (pages, _) = display::review(&some).unwrap();
+    assert_eq!(pages[2].mono, "25 USDC");
 
     let unknown = tx(eip1559(Some(usdc()), 0, vec![0xde, 0xad, 0xbe, 0xef, 9], AccessList::default()));
     let (pages, _) = display::review(&unknown).unwrap();
@@ -208,6 +228,25 @@ fn the_review_says_what_the_transaction_does() {
     let (pages, _) = display::review(&polygon).unwrap();
     assert_eq!((pages[0].value.as_str(), pages[1].value.as_str()), ("polygon", "1 POL"));
     assert_eq!(display::network(424242), ("chain 424242".to_string(), "coins"));
+}
+
+#[test]
+fn known_tokens_say_their_amounts_exactly() {
+    use maki_eth::tokens::{amount, known, TOKENS};
+    let usdc = known(1, &TOKENS[0].contract).unwrap();
+    let wei = |n: u128| U256::from(n).to_be_bytes::<32>();
+    assert_eq!(amount(usdc, &wei(0)), "0 USDC");
+    assert_eq!(amount(usdc, &wei(1)), "0.000001 USDC");
+    assert_eq!(amount(usdc, &wei(1_000_000)), "1 USDC");
+    assert_eq!(amount(usdc, &wei(123_456_789)), "123.456789 USDC");
+    let weth = known(1, &TOKENS[3].contract).unwrap();
+    assert_eq!(amount(weth, &wei(50_000_000_000_000_000)), "0.05 WETH");
+    assert_eq!(amount(weth, &U256::MAX.to_be_bytes::<32>()).split('.').next().unwrap().len(), 60);
+    // one entry per contract and network
+    for (i, a) in TOKENS.iter().enumerate() {
+        assert!(TOKENS[i + 1..].iter().all(|b| (a.chain_id, a.contract) != (b.chain_id, b.contract)));
+    }
+    assert!(known(1, &[0; 20]).is_none());
 }
 
 #[test]

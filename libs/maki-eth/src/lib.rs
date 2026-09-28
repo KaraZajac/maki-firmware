@@ -22,6 +22,7 @@ pub mod account;
 pub mod display;
 pub mod json;
 pub mod rlp;
+pub mod tokens;
 pub mod tx;
 pub mod typed;
 

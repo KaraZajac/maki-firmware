@@ -514,6 +514,12 @@ pub fn integer_text(v: &Value) -> Option<String> {
     Some(if negative { format!("-{}", digits) } else { digits })
 }
 
+/// An integer field's value as 32 bytes, big-endian, if it isn't negative.
+pub fn integer_word(v: &Value) -> Option<[u8; 32]> {
+    let (negative, n) = integer_value(v)?;
+    (!negative).then_some(n)
+}
+
 /// An integer field's value, if it fits in 64 bits and isn't negative.
 pub fn integer_u64(v: &Value) -> Option<u64> {
     let (negative, n) = integer_value(v)?;

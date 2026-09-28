@@ -7,6 +7,7 @@ use alloc::vec;
 use alloc::vec::Vec;
 
 use crate::account::checksum;
+use crate::tokens;
 use crate::json::Value;
 use crate::tx::{Error, Tx};
 use crate::typed::{self, TypedData};
@@ -124,6 +125,9 @@ pub fn call(tx: &Tx) -> Call {
     Call::Unknown { selector, len: d.len() }
 }
 
+/// The token the transaction's contract is, if maki knows it on this network.
+fn known(tx: &Tx) -> Option<&'static tokens::Token> { tx.to.as_ref().and_then(|to| tokens::known(tx.chain_id, to)) }
+
 /// The pages the owner goes through before signing, and the line that goes with sign and
 /// reject (the most that can leave the account in coins).
 pub fn review(tx: &Tx) -> Result<(Vec<Page>, String), Error> {
@@ -139,16 +143,28 @@ pub fn review(tx: &Tx) -> Result<(Vec<Page>, String), Error> {
     match c {
         Call::None => {}
         Call::Deploy(len) => pages.push(page("New contract", format!("{} bytes of code", len), String::new())),
-        Call::Transfer { to, amount } => {
-            pages.push(page("Send tokens", String::from("to"), checksum(&to)));
-            pages.push(page("Token amount", String::from("in its smallest units"), decimal(&amount)));
-            pages.push(page("Token", String::from("its contract"), contract.clone()));
-        }
+        Call::Transfer { to, amount } => match known(tx) {
+            // a token maki knows by its contract: how much of it, in its own units
+            Some(t) => {
+                pages.push(page("Send tokens", tokens::amount(t, &amount), checksum(&to)));
+                pages.push(page("Token", String::from(t.symbol), contract.clone()));
+            }
+            None => {
+                pages.push(page("Send tokens", String::from("to"), checksum(&to)));
+                pages.push(page("Token amount", String::from("in its smallest units"), decimal(&amount)));
+                pages.push(page("Token", String::from("its contract"), contract.clone()));
+            }
+        },
         Call::Approve { spender, amount } => {
-            let how_much = if amount == [0xff; 32] { String::from("any amount") } else { decimal(&amount) };
+            let t = known(tx);
+            let how_much = match t {
+                _ if amount == [0xff; 32] => String::from("any amount"),
+                Some(t) => tokens::amount(t, &amount),
+                None => decimal(&amount),
+            };
             pages.push(page("Approve!", String::from("lets it spend tokens"), checksum(&spender)));
-            pages.push(page("Up to", String::from("in its smallest units"), how_much));
-            pages.push(page("Token", String::from("its contract"), contract.clone()));
+            pages.push(page("Up to", String::from(if t.is_some() { "of the token" } else { "in its smallest units" }), how_much));
+            pages.push(page("Token", String::from(t.map(|t| t.symbol).unwrap_or("its contract")), contract.clone()));
         }
         Call::ApproveAll { operator, approved: true } => {
             pages.push(page("Approve all!", String::from("takes every item"), checksum(&operator)));
@@ -261,6 +277,30 @@ fn allowance(v: Option<&Value>, bits: u32) -> String {
     }
 }
 
+/// A permit's token, if maki knows its contract on the network the typed data names.
+fn permit_token(td: &TypedData, contract: Option<&Value>) -> Option<&'static tokens::Token> {
+    let bytes = contract.and_then(Value::as_str).and_then(typed::hex_bytes)?;
+    tokens::known(td.chain_id()?, &bytes.try_into().ok()?)
+}
+
+/// How much a permit gives: "any amount", or so much of a token maki knows, or its smallest
+/// units; and what that's in.
+fn allowance_of(v: Option<&Value>, bits: u32, token: Option<&tokens::Token>) -> (String, String) {
+    match (v, token) {
+        (Some(v), _) if typed::is_max(v, bits) => (String::from("of the token"), String::from("any amount")),
+        (Some(v), Some(t)) => match typed::integer_word(v) {
+            Some(n) => (String::from("of the token"), tokens::amount(t, &n)),
+            None => (String::from("in its smallest units"), allowance(Some(v), bits)),
+        },
+        _ => (String::from("in its smallest units"), allowance(v, bits)),
+    }
+}
+
+/// A token's page: its symbol when maki knows it, and its contract either way.
+fn token_page(heading: &str, contract: Option<&Value>, token: Option<&tokens::Token>) -> Page {
+    page(heading, String::from(token.map(|t| t.symbol).unwrap_or("its contract")), address_text(contract))
+}
+
 /// Whether `name` is declared exactly so: these fields, of these types, in this order.
 fn declared(td: &TypedData, name: &str, fields: &[(&str, &str)]) -> bool {
     td.fields(name)
@@ -288,11 +328,13 @@ fn permit_pages(td: &TypedData) -> Option<Vec<Page>> {
     match td.primary_type.as_str() {
         // EIP-2612: the token is the contract the domain names
         "Permit" if declared(td, "Permit", &PERMIT) => {
+            let token = permit_token(td, td.domain.get("verifyingContract"));
             pages.push(page("Permit!", String::from("lets it spend tokens"), spender()));
-            pages.push(page("Up to", String::from("in its smallest units"), allowance(m.get("value"), 256)));
+            let (what, how_much) = allowance_of(m.get("value"), 256, token);
+            pages.push(page("Up to", what, how_much));
             let (date, time) = until(m.get("deadline"), 256);
             pages.push(page("Until", date, time));
-            pages.push(page("Token", String::from("its contract"), address_text(td.domain.get("verifyingContract"))));
+            pages.push(token_page("Token", td.domain.get("verifyingContract"), token));
         }
         // Uniswap's Permit2, allowances: for each token, how much and until when
         "PermitSingle" | "PermitBatch"
@@ -306,8 +348,10 @@ fn permit_pages(td: &TypedData) -> Option<Vec<Page>> {
             };
             for (i, d) in details.iter().enumerate() {
                 let n = if details.len() > 1 { format!(" {}", i + 1) } else { String::new() };
-                pages.push(page(&format!("Token{}", n), String::from("its contract"), address_text(d.get("token"))));
-                pages.push(page(&format!("Up to{}", n), String::from("in its smallest units"), allowance(d.get("amount"), 160)));
+                let token = permit_token(td, d.get("token"));
+                pages.push(token_page(&format!("Token{}", n), d.get("token"), token));
+                let (what, how_much) = allowance_of(d.get("amount"), 160, token);
+                pages.push(page(&format!("Up to{}", n), what, how_much));
                 let (date, time) = match d.get("expiration").and_then(typed::integer_u64) {
                     // Permit2 takes 0 as the block it's used in
                     Some(0) => (String::from("its first use"), String::new()),
@@ -329,8 +373,10 @@ fn permit_pages(td: &TypedData) -> Option<Vec<Page>> {
             };
             for (i, t) in permitted.iter().enumerate() {
                 let n = if permitted.len() > 1 { format!(" {}", i + 1) } else { String::new() };
-                pages.push(page(&format!("Token{}", n), String::from("its contract"), address_text(t.get("token"))));
-                pages.push(page(&format!("Up to{}", n), String::from("in its smallest units"), allowance(t.get("amount"), 256)));
+                let token = permit_token(td, t.get("token"));
+                pages.push(token_page(&format!("Token{}", n), t.get("token"), token));
+                let (what, how_much) = allowance_of(t.get("amount"), 256, token);
+                pages.push(page(&format!("Up to{}", n), what, how_much));
             }
             let (date, time) = until(m.get("deadline"), 256);
             pages.push(page("Until", date, time));

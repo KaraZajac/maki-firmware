@@ -243,11 +243,18 @@ fn a_permit_is_spelled_out() {
             "Network | base | chain ID 8453",
             "App | USD Coin | version 2\n0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
             "Permit! | lets it spend tokens | 0x3fC91A3afd70395Cd496C647d5a6CC9D4B2b7FAD",
-            "Up to | in its smallest units | any amount",
+            "Up to | of the token | any amount",
             "Until | 2026-09-21 | 14:13 UTC",
-            "Token | its contract | 0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+            "Token | USDC | 0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
         ]
     );
+    // the same contract on a network maki doesn't know it on is just a contract
+    let max = "115792089237316195423570985008687907853269984665640564039457584007913129639935";
+    let elsewhere = permit.replace("\"chainId\": 8453", "\"chainId\": 424242").replace(max, "1000000");
+    let (pages, _, _) = display::typed_review(&TypedData::parse(&elsewhere).unwrap()).unwrap();
+    let shown = show(&pages);
+    assert!(shown.contains(&"Up to | in its smallest units | 1000000".to_string()));
+    assert!(shown.contains(&"Token | its contract | 0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913".to_string()));
     // the same types renamed aren't taken for a permit: they go field by field
     let lookalike = permit.replace("\"Permit\"", "\"Permlt\"");
     let (pages, title, _) = display::typed_review(&TypedData::parse(&lookalike).unwrap()).unwrap();
@@ -266,11 +273,11 @@ fn a_permit2_batch_is_spelled_out_token_by_token() {
             "Network | ethereum | chain ID 1",
             "App | Permit2 | 0x000000000022D473030F116dDEE9F6B43aC78BA3",
             "Permit! | lets it spend tokens | 0x3fC91A3afd70395Cd496C647d5a6CC9D4B2b7FAD",
-            "Token 1 | its contract | 0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",
-            "Up to 1 | in its smallest units | any amount",
+            "Token 1 | USDC | 0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",
+            "Up to 1 | of the token | any amount",
             "Until 1 | 2026-09-21 | 14:13 UTC",
-            "Token 2 | its contract | 0xdAC17F958D2ee523a2206206994597C13D831ec7",
-            "Up to 2 | in its smallest units | 25000000",
+            "Token 2 | USDT | 0xdAC17F958D2ee523a2206206994597C13D831ec7",
+            "Up to 2 | of the token | 25 USDT",
             "Until 2 | its first use | ",
         ]
     );
