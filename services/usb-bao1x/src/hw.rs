@@ -49,9 +49,6 @@ pub struct Bao1xUsb<'a> {
     // storage for hid_packets to expatriate from the interrupt handler
     pub hid_packet: VecDeque<[u8; 64]>,
     pub serial_port: SerialPort<'a, CorigineWrapper, [u8; 1024], [u8; 1024]>,
-    // holds one HS packet - must be statically allocated in IRQ handler. Valid length is
-    // passed as part of the interrupt recovery message.
-    pub serial_rx: [u8; SERIAL_MAX_PACKET_SIZE],
     // an error reporter for the double lock condition, which we need to figure out how to handle still.
     // used for debugging, the idea is to query this in userspace to try and pick up the double-lock problem
     // from the interrupt handler.
@@ -122,7 +119,6 @@ impl<'a> Bao1xUsb<'a> {
             irq_req: None,
             hid_packet: VecDeque::with_capacity(4),
             serial_port,
-            serial_rx: [0u8; SERIAL_MAX_PACKET_SIZE],
             double_lock: AtomicBool::new(false),
             led_state: KeyboardLedsReport::default(),
             irq_serviced: AtomicBool::new(false),
