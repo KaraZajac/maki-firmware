@@ -338,9 +338,37 @@ fn remaps(wrapper: &Path) -> Result<Vec<String>, String> {
             flags.push(format!("--remap-path-prefix={}=registry", src.display()));
         }
     }
+    flags.push(std_remap(wrapper)?);
     flags.sort();
     flags.dedup();
     Ok(flags)
+}
+
+/// Rust names its own library's source `/rustc/<commit>/library/…` in what it builds, unless
+/// its source is installed (rustup's rust-src), when it names that instead: a path under the
+/// builder's home, which a build elsewhere won't have. This puts it back, so a build is the same
+/// with the component or without it. The Rust asked is the one cargo will use in `dir` (a
+/// rust-toolchain.toml there picks it).
+fn std_remap(dir: &Path) -> Result<String, String> {
+    let rustc = std::env::var("RUSTC").unwrap_or("rustc".into());
+    let ask = |args: &[&str]| -> Result<String, String> {
+        let out = std::process::Command::new(&rustc)
+            .args(args)
+            .current_dir(dir)
+            .output()
+            .map_err(|e| format!("rustc: {e}"))?;
+        if !out.status.success() {
+            return Err(format!("rustc {}: {}", args.join(" "), String::from_utf8_lossy(&out.stderr).trim()));
+        }
+        Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+    };
+    let sysroot = ask(&["--print", "sysroot"])?.trim().to_string();
+    let version = ask(&["-vV"])?;
+    let commit = version
+        .lines()
+        .find_map(|l| l.strip_prefix("commit-hash: "))
+        .ok_or("rustc -vV says no commit-hash")?;
+    Ok(format!("--remap-path-prefix={sysroot}/lib/rustlib/src/rust=/rustc/{commit}"))
 }
 
 /// Builds the app in `dir` as its maki.toml says, returning its code and cargo's target
@@ -357,10 +385,15 @@ fn build_code(dir: &Path, kind: Kind) -> Result<(PathBuf, PathBuf), String> {
 /// the developer set flags of their own.
 fn cargo_build(dir: &Path) -> Result<(PathBuf, PathBuf), String> {
     let mut cargo = std::process::Command::new(std::env::var("CARGO").unwrap_or("cargo".into()));
-    const FLAGS: &str = "CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS";
-    if std::env::var_os(FLAGS).is_none() && std::env::var_os("RUSTFLAGS").is_none() {
-        cargo.env(FLAGS, "-C link-arg=-zstack-size=16384");
-    }
+    // the developer's flags if they set any, else the stack; and Rust's own source named as it
+    // is everywhere (std_remap), as cargo takes a list with spaces in it
+    let theirs = std::env::var("RUSTFLAGS").or_else(|_| std::env::var("CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS"));
+    let mut flags: Vec<String> = match theirs {
+        Ok(f) => f.split_whitespace().map(String::from).collect(),
+        Err(_) => vec!["-C".into(), "link-arg=-zstack-size=16384".into()],
+    };
+    flags.push(std_remap(dir)?);
+    cargo.env("CARGO_ENCODED_RUSTFLAGS", flags.join("\x1f")).env_remove("RUSTFLAGS");
     let output = cargo
         .args(["build", "--release", "--target", "wasm32-unknown-unknown", "--message-format=json-render-diagnostics"])
         .current_dir(dir)
