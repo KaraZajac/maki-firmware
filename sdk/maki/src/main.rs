@@ -225,17 +225,18 @@ fn native_build(dir: &Path) -> Result<(PathBuf, PathBuf), String> {
     }
     let app_dir = std::fs::canonicalize(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
     // the app's workspace's target directory, as for a WebAssembly build
-    let target = metadata(&app_dir)?["target_directory"].as_str().map(PathBuf::from).unwrap_or_else(|| app_dir.join("target"));
+    let app_meta = metadata(&app_dir)?;
+    let target = app_meta["target_directory"].as_str().map(PathBuf::from).unwrap_or_else(|| app_dir.join("target"));
     let wrapper = target.join("maki-native").join(&package);
     std::fs::create_dir_all(wrapper.join("src")).map_err(|e| format!("{}: {e}", wrapper.display()))?;
     let name = format!("{package}-native");
+    let app_path = linked_source(&wrapper, &app_dir, &app_meta)?;
     let manifest = format!(
         "# written by `maki build` for a native build of {package}: don't edit\n\
-         [package]\nname = \"{name}\"\nversion = \"0.1.0\"\nedition = \"2021\"\npublish = false\n\n\
-         [dependencies]\napp = {{ package = \"{package}\", path = {:?} }}\n\n\
+         [package]\nname = \"{name}\"\nversion = \"0.1.0\"\nedition = \"2021\"\npublish = false\nexclude = [\"source\"]\n\n\
+         [dependencies]\napp = {{ package = \"{package}\", path = {app_path:?} }}\n\n\
          [profile.release]\nopt-level = \"s\"\nlto = true\ncodegen-units = 1\npanic = \"abort\"\nstrip = true\n\n\
-         [workspace]\n",
-        app_dir.display().to_string()
+         [workspace]\n"
     );
     let main = "// written by `maki build`: the app, as a program of its own for maki\n\
          extern crate app;\n\n\
@@ -267,6 +268,42 @@ fn native_build(dir: &Path) -> Result<(PathBuf, PathBuf), String> {
         return Err(format!("cargo built no {}", elf.display()));
     }
     Ok((elf, target))
+}
+
+/// The app, as the wrapper names it: through a link, `source`, in the wrapper's directory, to
+/// the directory that holds the app and every package it builds from a path. Cargo tells crates
+/// apart by a hash of where they're from, and a path outside the workspace goes into it whole:
+/// the wrapper is its own workspace, so the app, maki-app and the rest would all hash their
+/// absolute paths, and a build in another directory could lay the program out differently. Seen
+/// through the link they're inside the workspace, and hash the same wherever the source is.
+fn linked_source(wrapper: &Path, app_dir: &Path, app_meta: &serde_json::Value) -> Result<String, String> {
+    // the directory holding the app and every package it builds from a path
+    let mut root = app_dir.to_path_buf();
+    for p in app_meta["packages"].as_array().into_iter().flatten() {
+        if !p["source"].is_null() {
+            continue;
+        }
+        let Some(manifest) = p["manifest_path"].as_str() else { continue };
+        let dir = Path::new(manifest).parent().unwrap_or(Path::new("/"));
+        while !dir.starts_with(&root) {
+            root = root.parent().ok_or("no directory holds the app and its packages")?.to_path_buf();
+        }
+    }
+    let link = wrapper.join("source");
+    #[cfg(unix)]
+    {
+        if std::fs::read_link(&link).ok().as_deref() != Some(root.as_path()) {
+            std::fs::remove_file(&link).ok();
+            std::os::unix::fs::symlink(&root, &link).map_err(|e| format!("{}: {e}", link.display()))?;
+        }
+        let inside = app_dir.strip_prefix(&root).unwrap_or(Path::new(""));
+        Ok(Path::new("source").join(inside).to_string_lossy().replace('\\', "/"))
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (link, root);
+        Ok(app_dir.display().to_string())
+    }
 }
 
 fn metadata(dir: &Path) -> Result<serde_json::Value, String> {
