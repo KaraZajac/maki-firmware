@@ -320,7 +320,7 @@ fn metadata(dir: &Path) -> Result<serde_json::Value, String> {
     serde_json::from_slice(&out.stdout).map_err(|e| format!("cargo metadata: {e}"))
 }
 
-/// Where the source a native build compiles came from, as rustc should name it in the program
+/// Where the source a build compiles came from, as rustc should name it in the program
 /// (panic locations): each local package's directory as its name, and the registry's as
 /// `registry`. Absolute paths would make the build depend on where it's made; with these,
 /// `maki reproduce` gets the same bytes anywhere, given the same Rust.
@@ -385,14 +385,15 @@ fn build_code(dir: &Path, kind: Kind) -> Result<(PathBuf, PathBuf), String> {
 /// the developer set flags of their own.
 fn cargo_build(dir: &Path) -> Result<(PathBuf, PathBuf), String> {
     let mut cargo = std::process::Command::new(std::env::var("CARGO").unwrap_or("cargo".into()));
-    // the developer's flags if they set any, else the stack; and Rust's own source named as it
-    // is everywhere (std_remap), as cargo takes a list with spaces in it
+    // the developer's flags if they set any, else the stack; and every source named as it is
+    // everywhere (remaps: the registry's crates, local packages, Rust's own library), as cargo
+    // takes a list with spaces in it
     let theirs = std::env::var("RUSTFLAGS").or_else(|_| std::env::var("CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS"));
     let mut flags: Vec<String> = match theirs {
         Ok(f) => f.split_whitespace().map(String::from).collect(),
         Err(_) => vec!["-C".into(), "link-arg=-zstack-size=16384".into()],
     };
-    flags.push(std_remap(dir)?);
+    flags.extend(remaps(dir)?);
     cargo.env("CARGO_ENCODED_RUSTFLAGS", flags.join("\x1f")).env_remove("RUSTFLAGS");
     let output = cargo
         .args(["build", "--release", "--target", "wasm32-unknown-unknown", "--message-format=json-render-diagnostics"])
