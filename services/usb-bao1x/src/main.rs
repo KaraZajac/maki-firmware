@@ -590,9 +590,16 @@ pub(crate) fn main_hw() -> ! {
                 }
             }),
             Opcode::IrqSerialRx => {
-                if let Some(scalar) = msg.body.scalar_message() {
-                    let valid_bytes = scalar.arg1;
-                    serial_buf.extend_from_slice(&cu.serial_rx[..valid_bytes]);
+                if msg.body.scalar_message().is_some() {
+                    // maki: the interrupt handler only rings; read everything the port has here
+                    // (see `serial_read_irq_safe`), a packet at a time
+                    let mut packet = [0u8; crate::hw::SERIAL_MAX_PACKET_SIZE];
+                    while let Ok(n) = cu.serial_read_irq_safe(&mut packet) {
+                        if n == 0 {
+                            break;
+                        }
+                        serial_buf.extend_from_slice(&packet[..n]);
+                    }
                     match serial_listen_mode {
                         SerialListenMode::NoListener => {
                             match std::str::from_utf8(&serial_buf) {

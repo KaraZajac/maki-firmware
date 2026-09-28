@@ -230,6 +230,25 @@ impl<'a> Bao1xUsb<'a> {
         result
     }
 
+    /// Reads what the USB CDC serial port has received, without allowing the USB interrupt handler
+    /// into `usbd-serial` or the driver meanwhile (maki: see `serial_write_irq_safe`). Reading a
+    /// packet re-arms the endpoint for the next.
+    pub fn serial_read_irq_safe(&mut self, data: &mut [u8]) -> usb_device::Result<usize> {
+        let previous_enable = self.irq_csr.r(utra::irqarray1::EV_ENABLE);
+
+        self.irq_csr.wo(utra::irqarray1::EV_ENABLE, previous_enable & !CORIGINE_IRQ_MASK);
+
+        compiler_fence(Ordering::SeqCst);
+
+        let result = self.serial_port.read(data);
+
+        compiler_fence(Ordering::SeqCst);
+
+        self.irq_csr.wo(utra::irqarray1::EV_ENABLE, previous_enable);
+
+        result
+    }
+
     /// Flushes the USB CDC serial transmit buffer without allowing the USB
     /// interrupt handler to access the same `usbd-serial` state concurrently.
     pub fn serial_flush_irq_safe(&mut self) -> usb_device::Result<()> {
@@ -332,13 +351,17 @@ pub(crate) fn composite_handler(_irq_no: usize, arg: *mut usize) {
                 let class = usb.class.borrow_mut();
                 let serial = usb.serial_port.borrow_mut();
                 if device.poll(&mut [class, serial as &mut dyn UsbClass<_>]) {
-                    if let Ok(count) = serial.read(&mut usb.serial_rx) {
-                        xous::try_send_message(
-                            usb.conn,
-                            Message::new_scalar(Opcode::IrqSerialRx.to_usize().unwrap(), count, 0, 0, 0),
-                        )
-                        .ok();
-                    }
+                    // maki: only say there may be something to read; the main loop reads the port
+                    // itself (`serial_read_irq_safe`). Reading it here, into one shared buffer the
+                    // main loop copied from later, let a second packet overwrite the first before
+                    // it was copied: a frame longer than a packet arrived with bytes lost and
+                    // repeated, and failed its CRC. Left unread, the next packet waits in the
+                    // controller until there's room.
+                    xous::try_send_message(
+                        usb.conn,
+                        Message::new_scalar(Opcode::IrqSerialRx.to_usize().unwrap(), 0, 0, 0, 0),
+                    )
+                    .ok();
                     match class.device::<NKROBootKeyboard<_>, _>().read_report() {
                         Ok(l) => {
                             usb.led_state = l;
