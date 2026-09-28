@@ -13,6 +13,7 @@ use std::sync::{Arc, Mutex};
 use maki_app_host_api as app_host;
 use maki_proto::device::{
     reply, AppEntry, Apps, Approval, Ask, Backup, Bitcoin, Device, Ethereum, Handled, Platform, StoreState, TimeState,
+    ACCOUNT_TAPROOT,
 };
 use maki_proto::frame::{self, Deframer};
 use num_traits::ToPrimitive;
@@ -217,12 +218,12 @@ fn vault_worker(work: mpsc::Receiver<Work>, waiting: Arc<AtomicU32>, send_lock: 
 /// A Bitcoin request, through maki-keys, which asks the owner where it must.
 fn bitcoin(keys: &maki_keys::Keys, request: Bitcoin) -> (u8, Vec<u8>) {
     match request {
-        Bitcoin::Account { network } => {
-            let w = keys.btc_account(network, true);
+        Bitcoin::Account { network, account } => {
+            let w = keys.btc_account(network, account == ACCOUNT_TAPROOT, true);
             reply::btc_account(approval(w.result), &w.text, &w.descriptor)
         }
-        Bitcoin::Address { network, change, index } => {
-            let w = keys.btc_address(network, change, index, true);
+        Bitcoin::Address { network, change, index, account } => {
+            let w = keys.btc_address(network, account == ACCOUNT_TAPROOT, change, index, true);
             reply::btc_address(approval(w.result), &w.text)
         }
         Bitcoin::Sign { network, total, offset, data } => {
@@ -669,12 +670,15 @@ fn main() -> ! {
     // The emulator again: built with MAKI_DEMO_BTC, once maki is unlocked with a phrase, go
     // through what the desktop's wallet section does, as maki-link would for it: share the
     // account, show an address, and sign a PSBT, then check the signature against the one maki's
-    // wallet code makes on a computer. The PSBT is the test phrase's ("abandon" eleven times,
-    // then "about"): restore that phrase at setup, or signing is refused as not this wallet's.
+    // wallet code makes on a computer; then the same for the taproot account. The PSBTs are the
+    // test phrase's ("abandon" eleven times, then "about"): restore that phrase at setup, or
+    // signing is refused as not this wallet's.
     if option_env!("MAKI_DEMO_BTC").is_some() {
         std::thread::spawn(|| {
             let unsigned: &[u8] = include_bytes!("../../../libs/maki-btc/tests/fixtures/abandon-unsigned.psbt");
             let expected: &[u8] = include_bytes!("../../../libs/maki-btc/tests/fixtures/abandon-signed.psbt");
+            let tap_unsigned: &[u8] = include_bytes!("../../../libs/maki-btc/tests/fixtures/abandon-taproot-unsigned.psbt");
+            let tap_expected: &[u8] = include_bytes!("../../../libs/maki-btc/tests/fixtures/abandon-taproot-signed.psbt");
             let xns = xous_names::XousNames::new().unwrap();
             let keys = maki_keys::Keys::new(&xns).expect("maki-keys");
             let tt = ticktimer_server::Ticktimer::new().unwrap();
@@ -682,27 +686,27 @@ fn main() -> ! {
                 tt.sleep_ms(500).ok();
             }
             tt.sleep_ms(3_000).ok();
-            let w = keys.btc_account(maki_keys::NETWORK_BITCOIN, true);
-            log::warn!("demo btc account: result {} {} {}", w.result, w.text, w.descriptor);
-            let w = keys.btc_address(maki_keys::NETWORK_BITCOIN, false, 0, true);
-            log::warn!("demo btc address: result {} {}", w.result, w.text);
-            let mut c = maki_keys::Chunk::default();
-            let mut offset = 0;
-            while offset < unsigned.len() {
-                let end = (offset + maki_keys::CHUNK).min(unsigned.len());
-                c = keys.btc_sign_chunk(
-                    maki_keys::NETWORK_BITCOIN,
-                    unsigned.len() as u32,
-                    offset as u32,
-                    unsigned[offset..end].to_vec(),
-                );
-                offset = end;
-                if c.done {
-                    break;
+            // a PSBT through maki-keys in pieces, and the signed one back: None if not signed
+            let sign = |unsigned: &[u8], what: &str| -> Option<Vec<u8>> {
+                let mut c = maki_keys::Chunk::default();
+                let mut offset = 0;
+                while offset < unsigned.len() {
+                    let end = (offset + maki_keys::CHUNK).min(unsigned.len());
+                    c = keys.btc_sign_chunk(
+                        maki_keys::NETWORK_BITCOIN,
+                        unsigned.len() as u32,
+                        offset as u32,
+                        unsigned[offset..end].to_vec(),
+                    );
+                    offset = end;
+                    if c.done {
+                        break;
+                    }
                 }
-            }
-            log::warn!("demo btc sign: result {} total {} reason '{}'", c.result, c.total, c.reason);
-            if c.result == maki_keys::RESULT_OK {
+                log::warn!("demo btc {what}: result {} total {} reason '{}'", c.result, c.total, c.reason);
+                if c.result != maki_keys::RESULT_OK {
+                    return None;
+                }
                 let mut signed = Vec::new();
                 while signed.len() < c.total as usize {
                     let p = keys.btc_signed_chunk(signed.len() as u32);
@@ -711,7 +715,42 @@ fn main() -> ! {
                     }
                     signed.extend_from_slice(&p.data);
                 }
+                Some(signed)
+            };
+            let w = keys.btc_account(maki_keys::NETWORK_BITCOIN, false, true);
+            log::warn!("demo btc account: result {} {} {}", w.result, w.text, w.descriptor);
+            let w = keys.btc_address(maki_keys::NETWORK_BITCOIN, false, false, 0, true);
+            log::warn!("demo btc address: result {} {}", w.result, w.text);
+            if let Some(signed) = sign(unsigned, "sign") {
                 log::warn!("demo btc signed: {} bytes, as expected: {}", signed.len(), signed == expected);
+            }
+            let w = keys.btc_account(maki_keys::NETWORK_BITCOIN, true, true);
+            log::warn!("demo btc taproot account: result {} {}", w.result, w.descriptor);
+            let w = keys.btc_address(maki_keys::NETWORK_BITCOIN, true, false, 0, true);
+            log::warn!("demo btc taproot address: result {} {}", w.result, w.text);
+            if let Some(signed) = sign(tap_unsigned, "taproot sign") {
+                // taproot's signatures take fresh randomness: the same as the fixture's but for
+                // them (a key signature's pair: key 0x13, 64 bytes)
+                let blank = |b: &[u8]| {
+                    let mut v = b.to_vec();
+                    let mut i = 0;
+                    while i + 3 + 64 <= v.len() {
+                        if v[i..i + 3] == [0x01, 0x13, 0x40] {
+                            v[i + 3..i + 3 + 64].fill(0);
+                            i += 3 + 64;
+                        } else {
+                            i += 1;
+                        }
+                    }
+                    v
+                };
+                let fresh = signed != tap_expected;
+                log::warn!(
+                    "demo btc taproot signed: {} bytes, as expected but for its signatures: {}, fresh signatures: {}",
+                    signed.len(),
+                    blank(&signed) == blank(tap_expected),
+                    fresh
+                );
             }
         });
     }

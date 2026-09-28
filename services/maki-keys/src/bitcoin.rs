@@ -6,7 +6,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use maki_btc::psbt::Psbt;
-use maki_btc::{display, wallet, Account, Network};
+use maki_btc::{display, wallet, Account, Kind, Network};
 use maki_keys_api::*;
 use maki_launcher::{Answer, Launcher, Page};
 use xous_ipc::Buffer;
@@ -45,8 +45,9 @@ fn answer_wallet(mut msg: xous::MessageEnvelope, fill: impl FnOnce(&mut Wallet))
 }
 
 pub(crate) struct Btc {
-    /// bitcoin's and the test networks', derived at first use while unlocked
-    accounts: [Option<Account>; 2],
+    /// bitcoin's and the test networks', native SegWit and taproot, derived at first use while
+    /// unlocked
+    accounts: [[Option<Account>; 2]; 2],
     incoming: Vec<u8>,
     incoming_total: u32,
     /// the PSBT last signed, for the computer to fetch
@@ -58,7 +59,7 @@ pub(crate) struct Btc {
 impl Btc {
     pub(crate) fn new() -> Self {
         Btc {
-            accounts: [None, None],
+            accounts: Default::default(),
             incoming: Vec::new(),
             incoming_total: 0,
             signed: Arc::new(Mutex::new(Vec::new())),
@@ -68,21 +69,21 @@ impl Btc {
 
     /// maki locked: the keys go until the PIN comes back.
     pub(crate) fn forget(&mut self) {
-        self.accounts = [None, None];
+        self.accounts = Default::default();
         self.incoming.clear();
     }
 
-    /// The account on `n`, from the seed (None: locked, or no phrase yet).
-    fn account(&mut self, seed: Option<[u8; 64]>, n: u8) -> Result<Account, u32> {
-        let slot = n.min(1) as usize;
-        if let Some(a) = &self.accounts[slot] {
+    /// The account on `n`, native SegWit or taproot, from the seed (None: locked, or no phrase
+    /// yet).
+    fn account(&mut self, seed: Option<&[u8; 64]>, n: u8, taproot: bool) -> Result<Account, u32> {
+        let slot = &mut self.accounts[n.min(1) as usize][taproot as usize];
+        if let Some(a) = slot {
             return Ok(a.clone());
         }
-        let Some(mut seed) = seed else { return Err(RESULT_NO_PHRASE) };
-        let account = Account::from_seed(&seed, network(n));
-        seed.zeroize();
-        let account = account.map_err(|_| RESULT_FAILED)?;
-        self.accounts[slot] = Some(account.clone());
+        let Some(seed) = seed else { return Err(RESULT_NO_PHRASE) };
+        let kind = if taproot { Kind::Taproot } else { Kind::Segwit };
+        let account = Account::new(seed, network(n), kind).map_err(|_| RESULT_FAILED)?;
+        *slot = Some(account.clone());
         Ok(account)
     }
 
@@ -91,7 +92,10 @@ impl Btc {
         let Some(mem) = msg.body.memory_message_mut() else { return };
         let mut buffer = unsafe { Buffer::from_memory_message_mut(mem) };
         let Ok(mut req) = buffer.to_original::<Wallet, _>() else { return };
-        let account = match self.account(seed, req.network) {
+        let mut seed = seed;
+        let account = self.account(seed.as_ref(), req.network, req.taproot);
+        seed.zeroize();
+        let account = match account {
             Ok(a) => a,
             Err(result) => {
                 req.result = result;
@@ -108,8 +112,11 @@ impl Btc {
         }
         drop(buffer);
         std::thread::spawn(move || {
-            let name = display::network_name(account.network);
-            let result = owner_says(|l| l.ask(name, "Share account?", "view only", &[], ACCOUNT_TIMEOUT_S));
+            let name = match account.kind {
+                Kind::Segwit => display::network_name(account.network).to_string(),
+                Kind::Taproot => format!("{} taproot", display::network_name(account.network)),
+            };
+            let result = owner_says(|l| l.ask(&name, "Share account?", "view only", &[], ACCOUNT_TIMEOUT_S));
             log::info!("bitcoin account shared: {}", result == RESULT_OK);
             answer_wallet(msg, |req| {
                 req.result = result;
@@ -126,10 +133,12 @@ impl Btc {
         let Some(mem) = msg.body.memory_message_mut() else { return };
         let mut buffer = unsafe { Buffer::from_memory_message_mut(mem) };
         let Ok(mut req) = buffer.to_original::<Wallet, _>() else { return };
-        let address = match self.account(seed, req.network) {
+        let mut seed = seed;
+        let address = match self.account(seed.as_ref(), req.network, req.taproot) {
             Ok(a) => a.address(req.change, req.index).map_err(|_| RESULT_FAILED),
             Err(result) => Err(result),
         };
+        seed.zeroize();
         let address = match address {
             Ok(a) if req.ask => a,
             Ok(a) => {
@@ -144,7 +153,10 @@ impl Btc {
                 return;
             }
         };
-        let which = format!("{} #{}", if req.change { "Change" } else { "Receive" }, req.index);
+        let which = match (req.taproot, req.change) {
+            (false, change) => format!("{} #{}", if change { "Change" } else { "Receive" }, req.index),
+            (true, change) => format!("Taproot {} #{}", if change { "change" } else { "receive" }, req.index),
+        };
         drop(buffer);
         std::thread::spawn(move || {
             // the address where a site's name goes: 42 characters, three lines of the screen
@@ -196,15 +208,28 @@ impl Btc {
             return;
         }
         let bytes = std::mem::take(&mut self.incoming);
-        let account = match self.account(seed(), req.network) {
-            Ok(a) => a,
-            Err(result) => return reply(req, result, String::new()),
-        };
         let mut psbt = match Psbt::parse(&bytes) {
             Ok(p) => p,
             Err(e) => return reply(req, RESULT_REFUSED, format!("not a PSBT maki can read: {}", e)),
         };
-        let review = match wallet::review(&psbt, &account) {
+        // native SegWit's account, and taproot's where the PSBT has taproot in it: deriving an
+        // account costs maki a moment
+        let mut seed = seed();
+        let mut accounts = Vec::with_capacity(2);
+        for taproot in [false, true] {
+            if taproot && !psbt.has_taproot() {
+                continue;
+            }
+            match self.account(seed.as_ref(), req.network, taproot) {
+                Ok(a) => accounts.push(a),
+                Err(result) => {
+                    seed.zeroize();
+                    return reply(req, result, String::new());
+                }
+            }
+        }
+        seed.zeroize();
+        let review = match wallet::review(&psbt, &accounts) {
             Ok(r) => r,
             Err(e) => return reply(req, RESULT_REFUSED, e.to_string()),
         };
@@ -216,7 +241,7 @@ impl Btc {
         let (signed, busy) = (self.signed.clone(), self.busy.clone());
         busy.store(true, Ordering::SeqCst);
         std::thread::spawn(move || {
-            let net = account.network;
+            let net = accounts[0].network;
             let pages = review
                 .pages()
                 .into_iter()
@@ -228,7 +253,10 @@ impl Btc {
             });
             let mut total = 0;
             if result == RESULT_OK {
-                match wallet::sign(&mut psbt, &account) {
+                // BIP340's auxiliary randomness, for taproot's signatures
+                let mut aux = [0u8; 32];
+                getrandom::getrandom(&mut aux).expect("TRNG unavailable");
+                match wallet::sign(&mut psbt, &accounts, &aux) {
                     Ok(n) => {
                         let out = psbt.serialize();
                         total = out.len() as u32;

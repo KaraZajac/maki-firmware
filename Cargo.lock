@@ -5267,6 +5267,7 @@ version = "0.1.0"
 dependencies = [
  "blitstr2",
  "log",
+ "maki-btc",
  "maki-fido",
  "maki-icons",
  "maki-keys-api",

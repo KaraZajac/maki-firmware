@@ -166,6 +166,8 @@ pub const NETWORK_TESTNET: u8 = 1;
 pub struct Wallet {
     /// `NETWORK_*`
     pub network: u8,
+    /// the taproot account (BIP86) rather than the native SegWit one (BIP84)
+    pub taproot: bool,
     /// an address: on the change chain or the receiving one, at this index
     pub change: bool,
     pub index: u32,
@@ -372,14 +374,14 @@ impl Keys {
 
     /// The Bitcoin account's zpub (`text`) and descriptor. With `ask`, once the owner agrees,
     /// blocking while they decide.
-    pub fn btc_account(&self, network: u8, ask: bool) -> Wallet {
-        self.wallet_call(KeysOp::BtcAccount, Wallet { network, ask, ..Default::default() })
+    pub fn btc_account(&self, network: u8, taproot: bool, ask: bool) -> Wallet {
+        self.wallet_call(KeysOp::BtcAccount, Wallet { network, taproot, ask, ..Default::default() })
     }
 
     /// An address (`text`). With `ask`, the owner compares it on screen first (blocking while
     /// they do), and `result` says whether it matched.
-    pub fn btc_address(&self, network: u8, change: bool, index: u32, ask: bool) -> Wallet {
-        self.wallet_call(KeysOp::BtcAddress, Wallet { network, change, index, ask, ..Default::default() })
+    pub fn btc_address(&self, network: u8, taproot: bool, change: bool, index: u32, ask: bool) -> Wallet {
+        self.wallet_call(KeysOp::BtcAddress, Wallet { network, taproot, change, index, ask, ..Default::default() })
     }
 
     /// A piece of a PSBT to sign. The last one blocks while the owner reviews it; its answer's

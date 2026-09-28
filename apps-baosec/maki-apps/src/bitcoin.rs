@@ -2,8 +2,9 @@
 //! as text, so someone paying you can scan an address that never passed through a computer.
 //!
 //! Left and right go through the addresses, the centre switches between the code and the text,
-//! and the menu shows the account's public key as a code (for a watch-only wallet on a phone) or
-//! switches between bitcoin and the test networks. Signing happens in asks, from the desktop app.
+//! and the menu shows the account's public key as a code (for a watch-only wallet on a phone),
+//! switches between bitcoin and the test networks, or between the native SegWit account and the
+//! taproot one. Signing happens in asks, from the desktop app.
 
 use blitstr2::GlyphStyle;
 use maki_ui::{Key, Screen, H, LINE, SMALL_LINE, W};
@@ -23,13 +24,15 @@ pub(crate) struct Bitcoin {
     screen: Screen,
     keys: maki_keys::Keys,
     network: u8,
+    /// the taproot account (BIP86) rather than native SegWit (BIP84)
+    taproot: bool,
     index: u32,
     view: View,
     front: bool,
-    /// the address on screen: (network, index, address)
-    address: Option<(u8, u32, String)>,
-    /// the account's zpub: (network, zpub)
-    account: Option<(u8, String)>,
+    /// the address on screen: (network, taproot, index, address)
+    address: Option<(u8, bool, u32, String)>,
+    /// the account's key as its code shows it: (network, taproot, key)
+    account: Option<(u8, bool, String)>,
 }
 
 /// Why maki-keys had nothing to show.
@@ -47,6 +50,7 @@ impl Bitcoin {
             screen: Screen::new(xns),
             keys: maki_keys::Keys::new(xns).expect("couldn't connect to maki-keys"),
             network: maki_keys::NETWORK_BITCOIN,
+            taproot: false,
             index: 0,
             view: View::Qr,
             front: false,
@@ -63,35 +67,51 @@ impl Bitcoin {
     fn testnet(&self) -> bool { self.network == maki_keys::NETWORK_TESTNET }
 
     fn address(&mut self) -> Result<String, u32> {
-        if let Some((n, i, a)) = &self.address {
-            if (*n, *i) == (self.network, self.index) {
+        if let Some((n, t, i, a)) = &self.address {
+            if (*n, *t, *i) == (self.network, self.taproot, self.index) {
                 return Ok(a.clone());
             }
         }
-        let w = self.keys.btc_address(self.network, false, self.index, false);
+        let w = self.keys.btc_address(self.network, self.taproot, false, self.index, false);
         if w.result != maki_keys::RESULT_OK {
             return Err(w.result);
         }
-        self.address = Some((self.network, self.index, w.text.clone()));
+        self.address = Some((self.network, self.taproot, self.index, w.text.clone()));
         Ok(w.text)
     }
 
-    fn zpub(&mut self) -> Result<String, u32> {
-        if let Some((n, z)) = &self.account {
-            if *n == self.network {
-                return Ok(z.clone());
+    /// The account's key for a watch-only wallet: the zpub for native SegWit; for taproot, which
+    /// has no key form of its own, a descriptor. Without the key's origin, which only wallets
+    /// that make transactions for maki to sign need (they get it from the desktop app): with it,
+    /// the code would need modules too small for the screen to scan well.
+    fn account_key(&mut self) -> Result<String, u32> {
+        if let Some((n, t, k)) = &self.account {
+            if (*n, *t) == (self.network, self.taproot) {
+                return Ok(k.clone());
             }
         }
-        let w = self.keys.btc_account(self.network, false);
+        let w = self.keys.btc_account(self.network, self.taproot, false);
         if w.result != maki_keys::RESULT_OK {
             return Err(w.result);
         }
-        self.account = Some((self.network, w.text.clone()));
-        Ok(w.text)
+        let key = if self.taproot {
+            let body = format!("tr({}/<0;1>/*)", w.text);
+            format!("{}#{}", body, maki_btc::wallet::descriptor_checksum(&body))
+        } else {
+            w.text
+        };
+        self.account = Some((self.network, self.taproot, key.clone()));
+        Ok(key)
     }
 
     fn title(&self) -> String {
-        format!("{} #{}", if self.testnet() { "Testnet" } else { "Receive" }, self.index)
+        let which = match (self.taproot, self.testnet()) {
+            (false, false) => "Receive",
+            (false, true) => "Testnet",
+            (true, false) => "Taproot",
+            (true, true) => "Test taproot",
+        };
+        format!("{} #{}", which, self.index)
     }
 
     fn message(&self, title: &str, text: &str) {
@@ -106,24 +126,31 @@ impl Bitcoin {
         if !self.front {
             return;
         }
-        let first = match self.view {
-            View::Account => self.account.is_none(),
-            _ => self.address.is_none(),
+        let (network, taproot, index) = (self.network, self.taproot, self.index);
+        let new = match self.view {
+            View::Account => !self.account.as_ref().is_some_and(|(n, t, _)| (*n, *t) == (network, taproot)),
+            _ => !self.address.as_ref().is_some_and(|(n, t, i, _)| (*n, *t, *i) == (network, taproot, index)),
         };
-        if first {
-            // the keys come from the recovery phrase, which takes maki a moment the first time
+        if new {
+            // an account's keys come from the recovery phrase, which takes maki a moment the
+            // first time: not the last screen meanwhile, which would show another address
             self.message("Bitcoin", "One moment…");
         }
         let top = self.screen.bar + 3;
         let room = H - SMALL_LINE - 3 - top;
         match self.view {
-            View::Account => match self.zpub() {
-                Ok(zpub) => {
+            View::Account => match self.account_key() {
+                Ok(key) => {
+                    let title = match (self.taproot, self.testnet()) {
+                        (false, false) => "Account zpub",
+                        (false, true) => "Account vpub",
+                        (true, _) => "Account tr()",
+                    };
                     let s = &self.screen;
                     s.begin();
-                    s.titled_bar(if self.testnet() { "Account vpub" } else { "Account zpub" }, "", false);
-                    if !s.qr(&zpub, W / 2, top, room) {
-                        s.text(top, LINE * 8, GlyphStyle::Monospace, false, false, &lines(&zpub).join("\n"));
+                    s.titled_bar(title, "", false);
+                    if !s.qr(&key, W / 2, top, room) {
+                        s.text(top, LINE * 8, GlyphStyle::Monospace, false, false, &lines(&key).join("\n"));
                     }
                     s.action_bar("done", false);
                     s.end();
@@ -170,11 +197,16 @@ impl Bitcoin {
         self.draw();
     }
 
-    pub(crate) fn menu(&self) -> [&'static str; 2] {
-        ["Account key", if self.testnet() { "Use bitcoin" } else { "Use testnet" }]
+    pub(crate) fn menu(&self) -> [&'static str; 3] {
+        [
+            "Account key",
+            if self.testnet() { "Use bitcoin" } else { "Use testnet" },
+            if self.taproot { "Use SegWit" } else { "Use taproot" },
+        ]
     }
 
-    /// An item of our menu was picked; the launcher gives the screen back after.
+    /// An item of our menu was picked. The launcher has given the screen back already (so the
+    /// app is in front for whatever the item does): draw what it picked.
     pub(crate) fn picked(&mut self, i: usize) {
         match i {
             0 => self.view = View::Account,
@@ -183,8 +215,14 @@ impl Bitcoin {
                 self.index = 0;
                 self.view = View::Qr;
             }
-            _ => {}
+            2 => {
+                self.taproot = !self.taproot;
+                self.index = 0;
+                self.view = View::Qr;
+            }
+            _ => return,
         }
+        self.draw();
     }
 }
 
