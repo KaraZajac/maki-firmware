@@ -134,6 +134,36 @@ impl Launcher {
         })
     }
 
+    /// An installed app's review for the owner (a wallet app's, before it signs; the app host
+    /// asks for it): `pages` to go through, then `question` with `yes` and `no`, all under the
+    /// app's own bar, its name and, if it's sideloaded, the mark.
+    #[allow(clippy::too_many_arguments)]
+    pub fn review_app(
+        &self,
+        name: &str,
+        sideloaded: bool,
+        question: &str,
+        detail: &str,
+        pages: Vec<Page>,
+        yes: &str,
+        no: &str,
+        timeout_s: u32,
+    ) -> Result<Answer, xous::Error> {
+        self.send_ask(AskRequest {
+            subject: name.into(),
+            question: question.into(),
+            detail: detail.into(),
+            choices: Vec::new(),
+            pages,
+            yes: yes.into(),
+            no: no.into(),
+            timeout_s,
+            app: if sideloaded { ASK_APP_SIDELOADED } else { ASK_APP_STORE },
+            answer: ANSWER_TIMED_OUT,
+            choice: 0,
+        })
+    }
+
     /// Ask with something to check first: the owner goes through `pages` with left and right
     /// (the centre moves on), then answers `yes` or `no` ("sign", "reject"). `subject`,
     /// `question` and `detail` show with the answers, as a plain ask shows them.
@@ -165,7 +195,7 @@ impl Launcher {
     fn send_ask(&self, request: AskRequest) -> Result<Answer, xous::Error> {
         // `into_buf` would size the buffer by the struct, one page, which a review with many
         // pages outgrows: room for the text, plus its bookkeeping
-        let text: usize = request.pages.iter().map(|p| p.heading.len() + p.value.len() + p.mono.len() + 64).sum::<usize>()
+        let text: usize = request.pages.iter().map(|p| p.heading.len() + p.value.len() + p.mono.len() + p.prose.len() + 64).sum::<usize>()
             + request.choices.iter().map(|c| c.len() + 16).sum::<usize>();
         let mut buf = Buffer::new((4096 + text).next_multiple_of(4096));
         buf.replace(request).or(Err(xous::Error::InternalError))?;

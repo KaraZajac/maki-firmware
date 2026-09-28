@@ -1,0 +1,17 @@
+[package]
+name = "ethereum"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+# std, for an allocator: the account's code (maki-eth) works in Vecs and Strings
+maki-app = { path = "../../maki-app", default-features = false, features = ["std", "wallet"] }
+# the account: its address, and transactions, messages and typed data read strictly and shown
+# before they're signed; maki holds the key
+maki-eth = { path = "../../../libs/maki-eth" }
+# what maki's keys say when they can't
+maki-hd = { path = "../../../libs/maki-hd" }

@@ -1,4 +1,4 @@
-# maki serial protocol, version 2
+# maki serial protocol, version 3
 
 How the desktop app talks to maki. The badge side is `libs/maki-proto` (framing, messages,
 logic) and `services/maki-link` (USB glue); `examples/fake_maki.rs` runs the same logic on a
@@ -29,7 +29,8 @@ COBS( version:u8  kind:u8  id:u16le  body:bytes  crc32:u32le )  0x00
 - COBS removes every zero byte, so `0x00` only ever ends a frame, and a reader that starts
   mid-stream resynchronises at the next one.
 - `crc32` is CRC-32/ISO-HDLC (zlib's) over `version`, `kind`, `id` and `body`.
-- `version` is `2`. A frame with any other version is rejected.
+- `version` is `3`. A frame with any other version is rejected. (Version 2 had messages for
+  Bitcoin and Ethereum, kinds `0x30`–`0x44`; the wallets are apps now, below.)
 - `id` is chosen by the host and echoed in the reply.
 - A decoded frame is at most 8192 bytes.
 
@@ -58,15 +59,6 @@ bytes. Bodies must be consumed exactly: trailing bytes are an error.
 | `0x12` SAVE_LOGIN | `site:str8` `username:str8` `password:str8` | `approval:u8` |
 | `0x20` BACKUP_GET | `offset:u32` | `status:u8` `total:u32` `offset:u32` `piece:bytes16` |
 | `0x21` BACKUP_PUT | `total:u32` `offset:u32` `piece:bytes16` | `done:u8` `approval:u8` `logins:u16` `codes:u16` `passkeys:u16` |
-| `0x30` BTC_ACCOUNT | `network:u8` `account:u8` | `approval:u8` `zpub:str8` `descriptor:str8` |
-| `0x31` BTC_ADDRESS | `network:u8` `change:u8` `index:u32` `account:u8` | `approval:u8` `address:str8` |
-| `0x32` BTC_SIGN | `network:u8` `total:u32` `offset:u32` `piece:bytes16` | `done:u8` `approval:u8` `signed:u32` `reason:str8` |
-| `0x33` BTC_SIGNED | `offset:u32` | `status:u8` `total:u32` `offset:u32` `piece:bytes16` |
-| `0x40` ETH_ACCOUNT | `site:str8` `index:u32` | `approval:u8` `address:str8` |
-| `0x41` ETH_SIGN_TX | `site:str8` `index:u32` `total:u32` `offset:u32` `piece:bytes16` | `done:u8` `approval:u8` `signed:u32` `reason:str8` |
-| `0x42` ETH_SIGNED | `offset:u32` | `status:u8` `total:u32` `offset:u32` `piece:bytes16` |
-| `0x43` ETH_SIGN_MESSAGE | `site:str8` `index:u32` `message:bytes16` | `approval:u8` `signature:bytes16` |
-| `0x44` ETH_SIGN_TYPED | `site:str8` `index:u32` `total:u32` `offset:u32` `piece:bytes16` | `done:u8` `approval:u8` `signature:bytes16` `reason:str8` |
 | `0x50` APP_LIST | `index:u32` | `status:u8` `count:u32` `present:u8`, then if present: `id:str8` `name:str8` `version:u32` `label:str8` `developer:bytes16` `from_store:u8` `backup:u8` `used:u32` `icon:bytes16` `bundle:u32` `storage:u32` |
 | `0x51` APP_INSTALL | `total:u32` `offset:u32` `piece:bytes16` | `done:u8` `approval:u8` `reason:str8` |
 | `0x52` APP_REMOVE | `id:str8` | `approval:u8` |
@@ -82,10 +74,9 @@ ERROR `code`: 1 malformed, 2 unknown kind, 3 no challenge, 4 challenge expired, 
 `approval`: 0 approved, 1 denied, 2 nothing saved for the site (the owner wasn't asked), 3 timed
 out, 4 vault unavailable (or busy: at most three requests wait for the owner at once), 5 clock
 not verified (GET_TOTP only), 6 locked (maki is waiting for its PIN), 7 not yours (a backup
-this maki's recovery phrase can't open), 8 no phrase (no recovery phrase yet), 9 refused (a PSBT
-maki won't sign; the reply says why). Only an approved reply carries a username, password, code,
-backup piece, account or signed PSBT.
-`network`: 0 bitcoin, 1 the test networks (testnet and signet share keys and addresses).
+this maki's recovery phrase can't open), 8 no phrase (no recovery phrase yet), 9 refused (a bundle
+or record maki won't take; the reply says why). Only an approved reply carries a username,
+password, code or backup piece.
 
 ## Setting the time
 
@@ -170,110 +161,6 @@ the phrase too, so the phrase and a backup are all a new maki needs.
   is `7` not yours, and nothing is asked. If there's nothing new, nothing is asked either:
   approved, with nothing added.
 
-## Bitcoin
-
-maki keeps two Bitcoin accounts, the standard ones, derived from its recovery phrase, so the
-same phrase works in Sparrow, Electrum and the rest: native SegWit (`account` 0: BIP84,
-`m/84'/0'/0'`, or `m/84'/1'/0'` on the test networks) and taproot (`account` 1: BIP86,
-`m/86'/0'/0'` or `m/86'/1'/0'`, spent with the key alone). Wallet software keeps track of coins
-and builds transactions; maki only ever shows and signs.
-
-- **BTC_ACCOUNT** hands out an account's public key, once the owner agrees on maki ("Share
-  account? view only"): for native SegWit, `zpub` (`vpub` on the test networks) and an output
-  descriptor with the master key's fingerprint and both chains, e.g.
-  `wpkh([73c5da0a/84h/0h/0h]xpub…/<0;1>/*)#qf45pmyh`, which Sparrow and Bitcoin Core import
-  as a watch-only wallet that knows maki signs for it; for taproot, the xpub (tpub), which has
-  no form of its own, and `tr([73c5da0a/86h/0h/0h]xpub…/<0;1>/*)#…`. It reveals every address,
-  so it is asked for, but it can't spend.
-- **BTC_ADDRESS** puts an address of either account on maki's screen, the whole of it, for the owner to compare
-  with what the computer shows: `approval` is 0 if they said it matches and 1 if it doesn't
-  (then the computer's copy isn't to be trusted). `address` is maki's, either way.
-- **BTC_SIGN** sends a PSBT (BIP174, version 0; BIP371's fields for taproot) spending coins of
-  either account or both, in pieces of up to 4096 bytes, in order, with
-  the same `total` each time (at most 512 KiB). A piece before the last is answered `done` = 0
-  at once. The last is answered once the owner decides: `done` = 1, `approval` 0 with the
-  signed PSBT's size in `signed`, 1 rejected, 3 timed out, or 9 refused with `reason`.
-- **BTC_SIGNED** hands the signed PSBT out in pieces: everything that came in, plus a partial
-  signature for each native SegWit input and a key signature (BIP340 Schnorr, `tap_key_sig`)
-  for each taproot one. Finalizing and broadcasting are the wallet software's.
-
-What maki checks before it asks, refusing (`9`, with the reason) rather than asking about a
-transaction it can't vouch for:
-
-- **Every input is this wallet's**: its BIP32 derivation (BIP371's for taproot) names this
-  maki's fingerprint and a path on an account's receiving or change chain, the key derived there
-  is the one named, and the coin it spends pays to that key (for taproot, the key tweaked as
-  BIP86 has it, with no scripts: maki signs taproot key spends only, and refuses script paths).
-- **Every native SegWit input comes with the whole transaction it spends**
-  (`non_witness_utxo`), which must hash to the input's outpoint. Amounts are taken from there,
-  never from the computer's word alone: with SegWit, the computer could otherwise lie about one
-  input's amount per signing and have the difference paid out as fee (the 2020 fee attack). A
-  taproot signature covers every input's amount and script, so a taproot input's
-  `witness_utxo` is enough: a false amount makes a signature that fails.
-- **Only SIGHASH_ALL** is signed (for taproot, its default, which is the same, or ALL written
-  out).
-- **The fee is what the inputs hold minus what the outputs pay**, never negative, and no
-  amount is beyond 21 million bitcoin.
-- At most 64 outputs, each of which the owner sees.
-
-The owner then goes through the transaction with left and right, the centre moving on: every
-payment with its amount and full address, the change coming back (an output counts as change
-only if it derives from this wallet's change chain; anything else is shown as a payment), and
-the fee with its rate (called out when over a tenth of what's sent). Last come "sign" and
-"reject". ECDSA signatures are deterministic (RFC 6979) and low-S; taproot's take fresh
-randomness from maki's TRNG, as BIP340 recommends.
-
-## Ethereum
-
-maki keeps an Ethereum account from the same recovery phrase, the standard way
-(`m/44'/60'/0'/0/index`, BIP44, as MetaMask and Ledger make it; `index` 0 is the first account).
-Requests come from sites, through the browser extension's EIP-1193 provider, and carry the site
-(a hostname, checked like GET_LOGIN's) that maki shows the owner.
-
-- **ETH_ACCOUNT** hands the site the account's address (EIP-55), once the owner lets it connect
-  ("Connect wallet?"). maki desktop remembers which sites are connected; a site that isn't sees
-  no account.
-- **ETH_SIGN_MESSAGE** signs a message (EIP-191 `personal_sign`, at most 4096 bytes) once the
-  owner has read it on maki: as text, or in hex if it isn't text. A Sign-In with Ethereum message
-  (EIP-4361) that names another site than the one asking gets a "Wrong site!" page first: that's
-  how a phishing site uses a real site's sign-in. The signature is r, s, v (65
-  bytes, v 27 or 28). The prefix EIP-191 adds means a message can never pass for a transaction.
-- **ETH_SIGN_TYPED** signs typed data (EIP-712, as `eth_signTypedData_v4` takes it: the JSON
-  with `types`, `primaryType`, `domain` and `message`), sent in pieces of up to 4096 bytes, in
-  order, with the same `total` each time (at most 64 KiB of UTF-8). maki reads the JSON itself,
-  strictly, and hashes it from the values it shows: the network and the app the domain names,
-  then a permit (EIP-2612, or Uniswap's Permit2, known by its types' exact shape) as who may
-  spend how much of which token until when, or anything else field by field, every signed field
-  among them. It refuses typed data whose `types` has no `EIP712Domain` of EIP-712's own fields,
-  with a type that refers to itself, with a value its type doesn't declare or missing one it
-  does, or that takes more than 48 pages to show. The last piece is answered once the owner
-  decides: approved with the signature (r, s, v: 65 bytes, v 27 or 28), 1 rejected, 3 timed out,
-  or 9 refused with `reason`.
-- **ETH_SIGN_TX** sends an unsigned transaction in pieces of up to 4096 bytes, in order, with the
-  same `total` each time (at most 128 KiB): EIP-1559 (`0x02 || rlp([...])`) or legacy EIP-155
-  (`rlp([nonce, gas price, gas, to, value, data, chain ID, 0, 0])`). The last piece is answered
-  once the owner decides: approved with the signed transaction's size, to fetch with
-  **ETH_SIGNED** (ready for `eth_sendRawTransaction`), 1 rejected, 3 timed out, or 9 refused
-  with `reason`.
-
-What maki checks and shows:
-
-- **The bytes it signs are the bytes it shows.** The transaction is parsed strictly (one
-  encoding per value: shortest lengths, no leading zeros, no bytes after the end), and the hash
-  signed is of exactly what came.
-- **A chain ID is required**: legacy transactions without one (before EIP-155) could be replayed
-  on every network, and are refused, as are EIP-2930 and blob transactions for now.
-- The owner goes through the network (named when maki knows it, else its chain ID), what's sent
-  and to whom (full EIP-55 address), and the most the fee can be (gas limit times the fee cap),
-  then "sign" or "reject". Contract calls maki can read are spelled out: ERC-20 `transfer` (the
-  recipient, and the amount in the token's smallest units, since maki can't know its decimals),
-  ERC-20 `approve` (the spender, and "any amount" for an unlimited approval) and ERC-721/1155
-  `setApprovalForAll` (the operator gets every item). Any other call is shown as a contract
-  call maki can't read, with its function selector and length.
-- Typed data (EIP-712) is shown as **ETH_SIGN_TYPED** says, from maki's own reading of it:
-  the hash signed is of exactly the values shown. `eth_sign` never will be signed: it signs
-  anything, a transaction included.
-
 ## Apps
 
 maki installs apps from `.maki` bundles (ARCHITECTURE.md in the maki repo, "Apps you can
@@ -327,3 +214,133 @@ the owner before installing or removing anything: whoever sends these can't do e
   root it trusts, and the version of its revocation list and when that goes stale (unix
   seconds; both 0 for none). Stamps, which make a bundle a store app, travel inside bundles
   (APP_INSTALL), not here.
+
+## The wallets
+
+maki's wallets are apps from the maki store (ARCHITECTURE.md, "Wallets are apps"), which a maki
+has only if its owner adds them: **Bitcoin** (`com.leviathan.maki.bitcoin`) and **Ethereum**
+(`com.leviathan.maki.ethereum`), the SDK's examples `bitcoin` and `ethereum`. maki keeps the
+keys, from its recovery phrase, and gives an app only the accounts its manifest names (the wallet
+permission, which the owner sees when installing it); the app reads what it's asked to sign with
+maki's wallet code (`maki-btc`, `maki-eth`), shows it on maki's review screen, and maki signs
+only after the owner says yes there. The computer talks to them with APP_MESSAGE; an APP_MESSAGE
+`status` of 2 means the app isn't installed.
+
+Each message starts with a letter saying what it is; each answer with a status, then its fields.
+`str16` is a `u16` length then UTF-8; `site` is the site asking, a `str8` holding a plain
+hostname (lowercase ASCII letters, digits, dots and hyphens, as for GET_LOGIN: an international
+domain comes as punycode and is shown that way). Something big (a PSBT, a transaction, typed
+data) goes in pieces of as much as fits in a message, in order, with the same `total` each time;
+each piece before the last is answered 6 at once, and the last once the owner decides. What was
+signed comes back with `G`, a piece at a time.
+
+Status: 0 done, 1 the owner said no, 2 no answer in time, 3 locked (or no recovery phrase yet), 4
+a message the app couldn't read (a site maki won't show among them), 5 refused, with `reason`:
+what the app won't sign, and why, 6 piece taken: send the next.
+
+**Bitcoin** keeps two accounts, the standard ones, so the same phrase works in Sparrow, Electrum
+and the rest: native SegWit (`account` 0: BIP84, `m/84'/0'/0'`, or `m/84'/1'/0'` on the test
+networks) and taproot (`account` 1: BIP86, `m/86'/0'/0'` or `m/86'/1'/0'`, spent with the key
+alone). `network` is 0 for bitcoin, 1 for the test networks (testnet and signet share keys and
+addresses). Wallet software keeps track of coins and builds transactions; maki only shows and
+signs.
+
+| Message | Answer |
+|---|---|
+| `A` `network:u8` `account:u8` | `status` `key:str16` `descriptor:str16` |
+| `D` `network:u8` `account:u8` `change:u8` `index:u32` | `status` `address:str16` |
+| `P` `network:u8` `total:u32` `offset:u32` `piece` (at most 256 KiB in all) | 6, or `status` `signed:u32`, or 5 `reason:str16` |
+| `G` `offset:u32` | `status` `total:u32` `offset:u32` `piece` |
+
+- **`A`** hands out an account's public key once the owner agrees on maki ("Share account? view
+  only"): for native SegWit, a `zpub` (`vpub` on the test networks) and an output descriptor with
+  the master key's fingerprint and both chains, e.g.
+  `wpkh([73c5da0a/84h/0h/0h]xpub…/<0;1>/*)#qf45pmyh`, which Sparrow and Bitcoin Core import as a
+  watch-only wallet that knows maki signs for it; for taproot, the xpub (tpub), which has no form
+  of its own, and `tr([73c5da0a/86h/0h/0h]xpub…/<0;1>/*)#…`. It reveals every address, so it's
+  asked for, but it can't spend.
+- **`D`** puts an address on maki's screen, the whole of it, for the owner to compare with what
+  the computer shows: 0 if they said it matches, 1 if it doesn't (then the computer's copy isn't
+  to be trusted). `address` is maki's, either way.
+- **`P`** sends a PSBT (BIP174, version 0; BIP371's fields for taproot) spending coins of either
+  account or both. The last piece is answered with the signed PSBT's size: everything that came
+  in, plus a partial signature for each native SegWit input and a key signature (BIP340 Schnorr,
+  `tap_key_sig`) for each taproot one. Finalizing and broadcasting are the wallet software's.
+
+What the app checks before it asks, refusing (5, with the reason) rather than asking about a
+transaction it can't vouch for:
+
+- **Every input is this wallet's**: its BIP32 derivation (BIP371's for taproot) names this
+  maki's fingerprint and a path on an account's receiving or change chain, the key derived there
+  is the one named, and the coin it spends pays to that key (for taproot, the key tweaked as
+  BIP86 has it, with no scripts: maki signs taproot key spends only, and refuses script paths).
+- **Every native SegWit input comes with the whole transaction it spends**
+  (`non_witness_utxo`), which must hash to the input's outpoint. Amounts are taken from there,
+  never from the computer's word alone: with SegWit, the computer could otherwise lie about one
+  input's amount per signing and have the difference paid out as fee (the 2020 fee attack). A
+  taproot signature covers every input's amount and script, so a taproot input's
+  `witness_utxo` is enough: a false amount makes a signature that fails.
+- **Only SIGHASH_ALL** is signed (for taproot, its default, which is the same, or ALL written
+  out).
+- **The fee is what the inputs hold minus what the outputs pay**, never negative, and no
+  amount is beyond 21 million bitcoin.
+- At most 64 outputs, each of which the owner sees.
+
+The owner then goes through the transaction with left and right: every payment with its amount
+and full address, the change coming back (an output counts as change only if it derives from
+this wallet's change chain; anything else is shown as a payment), and the fee with its rate
+(called out when over a tenth of what's sent); then "sign" or "reject". A yes lets the app have
+one signature for each input, within two minutes. ECDSA signatures are deterministic (RFC 6979)
+and low-S; taproot's take fresh randomness from maki's TRNG, as BIP340 recommends.
+
+**Ethereum** keeps an account from the same phrase, the standard way (`m/44'/60'/0'/0/index`,
+BIP44, as MetaMask and Ledger make it; `index` 0 is the first account). Requests come from sites,
+through the browser extension's EIP-1193 provider, and from maki desktop's own wallet (as the
+site `desktop.maki`); maki shows the owner the site asking on every review.
+
+| Message | Answer |
+|---|---|
+| `A` `index:u32` `site` | `status` `address:str16` |
+| `M` `index:u32` `site` `message` (the rest of the message) | `status` `signature` (65 bytes) |
+| `T` `index:u32` `total:u32` `offset:u32` `site` `piece` (at most 128 KiB in all) | 6, or `status` `signed:u32`, or 5 `reason:str16` |
+| `Y` `index:u32` `total:u32` `offset:u32` `site` `piece` (at most 64 KiB in all) | 6, or `status` `signature` (65 bytes), or 5 `reason:str16` |
+| `G` `offset:u32` | `status` `total:u32` `offset:u32` `piece` |
+
+- **`A`** hands the site the account's address (EIP-55), once the owner lets it connect
+  ("Connect wallet?"). maki desktop remembers which sites are connected; a site that isn't sees
+  no account.
+- **`M`** signs a message (EIP-191 `personal_sign`) once the owner has read it on maki: as text,
+  or in hex if it isn't text. A Sign-In with Ethereum message (EIP-4361) that names another site
+  than the one asking gets a "Wrong site!" page first: that's how a phishing site uses a real
+  site's sign-in. The signature is r, s, v (v 27 or 28). The prefix EIP-191 adds means a message
+  can never pass for a transaction.
+- **`Y`** signs typed data (EIP-712, as `eth_signTypedData_v4` takes it: the JSON with `types`,
+  `primaryType`, `domain` and `message`, in UTF-8). The app reads the JSON itself, strictly, and
+  hashes it from the values it shows: the network and the app the domain names, then a permit
+  (EIP-2612, or Uniswap's Permit2, known by its types' exact shape) as who may spend how much of
+  which token until when, or anything else field by field, every signed field among them. It
+  refuses typed data whose `types` has no `EIP712Domain` of EIP-712's own fields, with a type
+  that refers to itself, with a value its type doesn't declare or missing one it does, or that
+  takes more than 48 pages to show.
+- **`T`** sends an unsigned transaction: EIP-1559 (`0x02 || rlp([...])`) or legacy EIP-155
+  (`rlp([nonce, gas price, gas, to, value, data, chain ID, 0, 0])`). The last piece is answered
+  with the signed transaction's size, to fetch with `G`, ready for `eth_sendRawTransaction`.
+
+What the app checks and shows:
+
+- **The bytes it signs are the bytes it shows.** The transaction is parsed strictly (one
+  encoding per value: shortest lengths, no leading zeros, no bytes after the end), and the hash
+  signed is of exactly what came.
+- **A chain ID is required**: legacy transactions without one (before EIP-155) could be replayed
+  on every network, and are refused, as are EIP-2930 and blob transactions for now.
+- The owner goes through the site asking, the network (named when maki knows it, else its chain
+  ID), what's sent and to whom (full EIP-55 address), and the most the fee can be (gas limit
+  times the fee cap), then "sign" or "reject". Contract calls the app can read are spelled out:
+  ERC-20 `transfer` (the recipient, and the amount in the token's own units when the app knows
+  the token, else its smallest units), ERC-20 `approve` (the spender, and "any amount" for an
+  unlimited approval) and ERC-721/1155 `setApprovalForAll` (the operator gets every item). Any
+  other call is shown as a contract call the app can't read, with its function selector and
+  length.
+- Typed data is shown as `Y` says, from the app's own reading of it: the hash signed is of
+  exactly the values shown. `eth_sign` never will be signed: it signs anything, a transaction
+  included.

@@ -14,7 +14,7 @@ use blitstr2::GlyphStyle;
 use maki_app_host_api::{AppMessage, RESULT_BUSY, RESULT_DENIED, RESULT_FAILED, RESULT_OK, RESULT_REFUSED, RESULT_TIMED_OUT};
 use maki_launcher::Answer;
 use maki_ui::{Key, Screen, LINE};
-use maki_wasm::{Ask, Canvas, Event, Platform, Stop, HEIGHT, TOP, WIDTH};
+use maki_wasm::{Ask, Canvas, Event, Platform, Review, Stop, HEIGHT, TOP, WIDTH};
 use ux_api::minigfx::{Point, Rectangle};
 
 use crate::store::{Record, Store};
@@ -430,6 +430,11 @@ impl Device {
     }
 }
 
+impl Device {
+    /// The wallet permission's paths, from the app's manifest.
+    pub(crate) fn wallet(&self) -> Option<maki_bundle::Wallet> { self.manifest.wallet.clone() }
+}
+
 impl Platform for Device {
     fn wait(&mut self, timeout: Option<Duration>) -> Event {
         if self.state.borrow().stopping {
@@ -639,6 +644,42 @@ impl Platform for Device {
             return None;
         }
         self.ctx.keys.app_secret(&self.id, &self.record.developer, label).ok()
+    }
+
+    /// A wallet app's key work, by maki-keys, which keeps the seed. The session has held the path
+    /// to the app's own, and a signature to the owner's yes to a review.
+    fn wallet(&mut self, op: u8, path: &[u32], digest: &[u8]) -> Result<Vec<u8>, i32> {
+        if !self.ctx.unlocked() {
+            return Err(maki_wasm::LOCKED);
+        }
+        match self.ctx.keys.wallet(op, path, digest) {
+            Ok(answer) => Ok(answer),
+            Err(maki_keys::RESULT_NOT_NOW | maki_keys::RESULT_NO_PHRASE) => Err(maki_wasm::LOCKED),
+            Err(maki_keys::RESULT_REFUSED) => Err(maki_wasm::REFUSED),
+            Err(_) => Err(maki_wasm::FAILED),
+        }
+    }
+
+    /// maki's own review screen, a page at a time under the app's bar, then its question: the
+    /// app waits for the answer, as it does for an ask.
+    fn review(&mut self, review: &Review) -> maki_wasm::Answer {
+        if !self.ctx.unlocked() {
+            return maki_wasm::Answer::NoAnswer;
+        }
+        let pages = review
+            .pages
+            .iter()
+            .map(|p| maki_launcher::Page { heading: p.heading.clone(), value: p.value.clone(), mono: p.mono.clone(), prose: p.prose.clone() })
+            .collect();
+        let yes = if review.yes.is_empty() { "sign" } else { &review.yes };
+        let no = if review.no.is_empty() { "reject" } else { &review.no };
+        let timeout = maki_launcher::ask_timeout(review.timeout_s);
+        log::info!("{}: a review of {} pages", self.id, review.pages.len());
+        match self.ctx.launcher.review_app(&self.name, self.sideloaded, &review.question, &review.detail, pages, yes, no, timeout) {
+            Ok(Answer::Allowed(_)) => maki_wasm::Answer::Yes,
+            Ok(Answer::Denied) => maki_wasm::Answer::No,
+            _ => maki_wasm::Answer::NoAnswer,
+        }
     }
 
     /// maki's own scanner, for the app in front: the camera's view takes the screen until a QR

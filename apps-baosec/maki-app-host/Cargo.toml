@@ -20,6 +20,8 @@ blitstr2 = { path = "../../libs/blitstr2" }
 maki-ui = { path = "../../libs/maki-ui" }
 maki-launcher = { path = "../maki-launcher" }
 maki-keys = { package = "maki-keys-api", path = "../../libs/maki-keys-api" }
+# wallet apps' paths, as native apps send them
+maki-hd = { path = "../../libs/maki-hd" }
 maki-bundle = { path = "../../libs/maki-bundle" }
 maki-store = { path = "../../libs/maki-store" }
 maki-wasm = { path = "../../libs/maki-wasm" }

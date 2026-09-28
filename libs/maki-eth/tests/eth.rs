@@ -7,10 +7,11 @@ use alloy::eips::eip2930::{AccessList, AccessListItem};
 use alloy::primitives::{Address, Bytes, TxKind, B256, U256};
 use alloy::signers::local::PrivateKeySigner;
 use alloy::signers::SignerSync;
-use maki_btc::bip32::{Xpriv, HARDENED};
 use maki_eth::display::{self, Call};
 use maki_eth::tx::{Error, Kind};
 use maki_eth::{checksum, Account, Tx};
+use maki_hd::seed::{OneKey, SeedKeys};
+use maki_hd::HARDENED;
 
 const ABANDON: &str = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
 
@@ -19,6 +20,12 @@ fn hex(s: &str) -> Vec<u8> {
     (0..s.len()).step_by(2).map(|i| u8::from_str_radix(&s[i..i + 2], 16).unwrap()).collect()
 }
 
+/// maki's keys for a seed, for as long as the tests run.
+fn keys(seed: &[u8]) -> &'static SeedKeys { Box::leak(Box::new(SeedKeys::from_seed(seed).unwrap())) }
+
+/// One bare private key, as other software makes them, at every path.
+fn one(secret: &[u8; 32]) -> &'static OneKey { Box::leak(Box::new(OneKey::new(secret).unwrap())) }
+
 fn seed() -> [u8; 64] {
     let words: Vec<&str> = ABANDON.split(' ').collect();
     maki_seed::seed(&words, "")
@@ -26,19 +33,22 @@ fn seed() -> [u8; 64] {
 
 /// alloy's signer for the same key maki derives.
 fn alloy_signer(index: u32) -> PrivateKeySigner {
-    let key = Xpriv::master(&seed()).unwrap().derive(&[44 | HARDENED, 60 | HARDENED, HARDENED, 0, index]).unwrap();
-    PrivateKeySigner::from_slice(&key.secret().to_bytes()).unwrap()
+    // the key rust-bitcoin derives: maki's keys never hand theirs out
+    let secp = bitcoin::secp256k1::Secp256k1::new();
+    let master = bitcoin::bip32::Xpriv::new_master(bitcoin::NetworkKind::Main, &seed()).unwrap();
+    let path: bitcoin::bip32::DerivationPath = format!("m/44'/60'/0'/0/{index}").parse().unwrap();
+    PrivateKeySigner::from_slice(&master.derive_priv(&secp, &path).unwrap().private_key.secret_bytes()).unwrap()
 }
 
 #[test]
 fn the_test_phrases_first_account_is_the_one_everyone_gets() {
-    let account = Account::from_seed(&seed(), 0).unwrap();
+    let account = Account::new(keys(&seed()), 0).unwrap();
     assert_eq!(account.address_string(), "0x9858EfFD232B4033E47d90003D41EC34EcaEda94");
     for i in [0, 1, 7] {
-        let a = Account::from_seed(&seed(), i).unwrap();
+        let a = Account::new(keys(&seed()), i).unwrap();
         assert_eq!(a.address(), alloy_signer(i).address().0 .0, "{i}");
     }
-    assert!(Account::from_seed(&seed(), HARDENED).is_err());
+    assert!(Account::new(keys(&seed()), HARDENED).is_err());
 }
 
 #[test]
@@ -59,7 +69,7 @@ fn eip155s_example_signs_as_published() {
     let tx = Tx::parse(&unsigned).unwrap();
     assert_eq!((tx.kind, tx.chain_id, tx.nonce, tx.value), (Kind::Legacy, 1, 9, 1_000_000_000_000_000_000));
     assert_eq!(tx.sighash().to_vec(), hex("daf5a779ae972f972197303d7b574746c7ef83eadac0f2791ad23db92e4c8e53"));
-    let account = Account::from_private_key(&[0x46; 32]).unwrap();
+    let account = Account::new(one(&[0x46; 32]), 0).unwrap();
     assert_eq!(
         tx.sign(&account).unwrap(),
         hex("f86c098504a817c800825208943535353535353535353535353535353535353535880de0b6b3a76400008025a028ef61340bd939bc2195fe537567866003e1a15d3c71ff63e1590620aa636276a067cbe9d8997f761aecb703304b3800ccf555c9f3dc64214b297fb1966a3b6d83")
@@ -94,7 +104,7 @@ fn erc20(selector: [u8; 4], who: Address, amount: U256) -> Vec<u8> {
 #[test]
 fn eip1559_transactions_sign_as_alloy_signs_them() {
     let signer = alloy_signer(0);
-    let account = Account::from_seed(&seed(), 0).unwrap();
+    let account = Account::new(keys(&seed()), 0).unwrap();
     let list = AccessList(vec![AccessListItem { address: usdc(), storage_keys: vec![B256::repeat_byte(7), B256::ZERO] }]);
     let cases = [
         eip1559(Some(bob()), 50_000_000_000_000_000, vec![], AccessList::default()),
@@ -115,7 +125,7 @@ fn eip1559_transactions_sign_as_alloy_signs_them() {
 #[test]
 fn legacy_transactions_sign_as_alloy_signs_them() {
     let signer = alloy_signer(3);
-    let account = Account::from_seed(&seed(), 3).unwrap();
+    let account = Account::new(keys(&seed()), 3).unwrap();
     for chain_id in [1u64, 137, 11155111] {
         let tx = TxLegacy {
             chain_id: Some(chain_id),
@@ -136,7 +146,7 @@ fn legacy_transactions_sign_as_alloy_signs_them() {
 #[test]
 fn messages_sign_as_alloy_signs_them() {
     let signer = alloy_signer(0);
-    let account = Account::from_seed(&seed(), 0).unwrap();
+    let account = Account::new(keys(&seed()), 0).unwrap();
     for m in [&b"hello"[..], b"", &[0u8, 1, 2, 0xff][..], "example.com wants you to sign in with your Ethereum account".as_bytes()] {
         let theirs = signer.sign_message_sync(m).unwrap().as_bytes();
         assert_eq!(account.sign_message(m).unwrap(), theirs);
@@ -269,7 +279,7 @@ const FIXTURE_TYPED: &str = r#"{"types":{"EIP712Domain":[{"name":"name","type":"
 #[test]
 #[ignore]
 fn write_fixtures() {
-    let account = Account::from_seed(&seed(), 0).unwrap();
+    let account = Account::new(keys(&seed()), 0).unwrap();
     let unsigned = fixture_tx().encoded_for_signing();
     std::fs::create_dir_all(FIXTURES).unwrap();
     std::fs::write(format!("{FIXTURES}/abandon-tx-unsigned.bin"), &unsigned).unwrap();
@@ -282,7 +292,7 @@ fn write_fixtures() {
 
 #[test]
 fn the_fixtures_are_current() {
-    let account = Account::from_seed(&seed(), 0).unwrap();
+    let account = Account::new(keys(&seed()), 0).unwrap();
     let unsigned = std::fs::read(format!("{FIXTURES}/abandon-tx-unsigned.bin")).unwrap();
     assert_eq!(unsigned, fixture_tx().encoded_for_signing());
     let signed = std::fs::read(format!("{FIXTURES}/abandon-tx-signed.bin")).unwrap();

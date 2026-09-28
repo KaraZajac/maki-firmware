@@ -6,7 +6,7 @@ you can install"). Anyone can build one and sideload it through maki desktop; ma
 owner what it is, where it's from and what it may do before installing it, and a sideloaded
 app carries a mark in maki's top bar for as long as it's installed.
 
-This directory has the Rust crate apps are written with (`maki-app`), fourteen examples, and the
+This directory has the Rust crate apps are written with (`maki-app`), sixteen examples, and the
 `maki` tool that packs, signs, checks and simulates them. The examples:
 
 - **Hello**, **Dice** and **Tally**: a screen, the buttons, storage and randomness.
@@ -26,6 +26,11 @@ This directory has the Rust crate apps are written with (`maki-app`), fourteen e
 - **Snake**: the game, with three buttons, timed with `wait`.
 - **Status**: a sign readable across the room, in big letters it draws itself with `blit`, which
   software on the computer can set (the link permission).
+- **Bitcoin** and **Ethereum**: maki's wallets, in the maki store (host API 3's wallet
+  permission). maki keeps the keys; each reads what it's asked to sign with maki's own wallet
+  code (`maki-btc`, `maki-eth`), shows it on maki's review screen and signs once the owner says
+  yes. maki desktop, wallet software and sites talk to them over the link (PROTOCOL.md, "The
+  wallets"). Opened, each shows an address as a QR code.
 - **Hello Native**, Hello built as a native app, and **Pomodoro**, a native focus timer whose
   pie empties like a clock while you work and fills back up while you rest.
 
@@ -161,6 +166,29 @@ function whose permission it didn't ask for):
 - **`motion`**: `motion::read()` gives the accelerometer's x, y and z in thousandths of a g (face
   up and still: about 0, 0, 1000), while the app is in front. Warned at install: it could pick up
   typing nearby.
+- **`wallet`** (host API 3): keys from maki's recovery phrase at the standard BIP32 paths, as
+  other wallets derive them, for the accounts the manifest names and no others:
+
+  ```toml
+  [wallet]
+  paths = ["m/84'/0'", "m/86'/0'"]   # a purpose and a coin type, hardened; up to 8
+  ```
+
+  maki shows the owner the coins those paths are for when installing, and refuses a call for a
+  key off them. `wallet::fingerprint()`, `wallet::public(path)` (with its chain code, for an
+  xpub), `wallet::uncompressed(path)` and `wallet::taproot_output(path)` give public keys;
+  `wallet::sign_ecdsa(path, &digest)` (RFC 6979, low s, with the recovery ID) and
+  `wallet::sign_schnorr(path, &digest, Tweak::Taproot)` (BIP340, fresh randomness) sign, but only
+  after the owner says yes to a review: `Review::new("Sign and spend").detail("0.0007 BTC")
+  .page(Page::new("Send").value("0.0007 BTC").mono(address)).signatures(inputs).show()` puts the
+  pages on maki's review screen under the app's bar, then the question, and a yes allows that
+  many signatures in the next two minutes (a new review ends what the last allowed). The keys
+  never leave maki, which does the curve work itself: the app never holds a secret key, and
+  WebAssembly would be far too slow for it. `wallet::HostKeys` is maki's keys as a
+  `maki_hd::Keys`, for `maki-btc` and `maki-eth`, which do the rest. `Error::Locked` while maki
+  is locked or has no phrase; `Error::Refused` off the paths, or without a yes. The wallet examples show how: they need `std` (for their allocator), so
+  their `Cargo.toml` asks for `maki-app` with `default-features = false, features = ["std",
+  "wallet"]`.
 
 Left and right pressed together are always maki's: they open the app's menu, which ends with
 App info (where it's from, its permissions, its storage, whether it's backed up, Remove) and

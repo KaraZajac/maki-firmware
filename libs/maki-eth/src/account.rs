@@ -3,9 +3,7 @@
 use alloc::format;
 use alloc::string::String;
 
-use k256::ecdsa::{RecoveryId, SigningKey};
-use k256::elliptic_curve::sec1::ToEncodedPoint;
-use maki_btc::bip32::{Xpriv, HARDENED};
+use maki_hd::{Keys, HARDENED};
 use sha3::{Digest, Keccak256};
 
 pub fn keccak256(data: &[u8]) -> [u8; 32] { Keccak256::digest(data).into() }
@@ -15,36 +13,30 @@ pub enum Error {
     Key,
     /// Account indexes stop short of the hardened range.
     Index,
+    /// maki couldn't make a key or a signature: it's locked, or said no.
+    Keys(maki_hd::Error),
 }
 
-/// Account `index`: `m/44'/60'/0'/0/index`.
+/// Where account `index` is: `m/44'/60'/0'/0/index`, as MetaMask and Ledger make it.
+pub fn path(index: u32) -> [u32; 5] { [44 | HARDENED, 60 | HARDENED, HARDENED, 0, index] }
+
+/// Account `index`: `m/44'/60'/0'/0/index`. Its key is maki's (`maki_hd::Keys`): the account asks
+/// for its public key once, and for each signature.
 #[derive(Clone)]
-pub struct Account {
+pub struct Account<'k> {
     pub index: u32,
-    key: Xpriv,
+    keys: &'k dyn Keys,
     address: [u8; 20],
 }
 
-impl Account {
-    pub fn from_seed(seed: &[u8], index: u32) -> Result<Account, Error> {
+impl<'k> Account<'k> {
+    pub fn new(keys: &'k dyn Keys, index: u32) -> Result<Account<'k>, Error> {
         if index >= HARDENED {
             return Err(Error::Index);
         }
-        let master = Xpriv::master(seed).map_err(|_| Error::Key)?;
-        let key = master.derive(&[44 | HARDENED, 60 | HARDENED, HARDENED, 0, index]).map_err(|_| Error::Key)?;
-        let point = key.secret().public_key().to_encoded_point(false);
-        let address = keccak256(&point.as_bytes()[1..])[12..].try_into().unwrap();
-        Ok(Account { index, key, address })
-    }
-
-    /// An account from a bare private key, for tests and tools: maki's own come from the phrase.
-    pub fn from_private_key(key: &[u8; 32]) -> Result<Account, Error> {
-        // a BIP32 master whose key is this one: only its key is used
-        let mut xpriv = Xpriv::master(&[0u8; 16]).map_err(|_| Error::Key)?;
-        xpriv.set_secret(k256::SecretKey::from_slice(key).map_err(|_| Error::Key)?);
-        let point = xpriv.secret().public_key().to_encoded_point(false);
-        let address = keccak256(&point.as_bytes()[1..])[12..].try_into().unwrap();
-        Ok(Account { index: 0, key: xpriv, address })
+        let point = keys.uncompressed(&path(index)).map_err(Error::Keys)?;
+        let address = keccak256(&point[1..])[12..].try_into().unwrap();
+        Ok(Account { index, keys, address })
     }
 
     pub fn address(&self) -> [u8; 20] { self.address }
@@ -53,20 +45,13 @@ impl Account {
     pub fn address_string(&self) -> String { checksum(&self.address) }
 
     /// A signature over a digest: r, s (low), and the recovery ID (0 or 1). Deterministic
-    /// (RFC 6979).
+    /// (RFC 6979); maki checks it before it's returned.
     pub(crate) fn sign(&self, digest: &[u8; 32]) -> Result<([u8; 32], [u8; 32], u8), Error> {
-        let signer = SigningKey::from(self.key.secret());
-        let (mut sig, mut recid) = signer.sign_prehash_recoverable(digest).map_err(|_| Error::Key)?;
-        if let Some(low) = sig.normalize_s() {
-            // the other s is the same point's other y
-            sig = low;
-            recid = RecoveryId::new(!recid.is_y_odd(), recid.is_x_reduced());
-        }
-        let (r, s) = sig.split_bytes();
-        Ok((r.into(), s.into(), recid.to_byte()))
+        let (sig, recid) = self.keys.sign_ecdsa(&path(self.index), digest).map_err(Error::Keys)?;
+        Ok((sig[..32].try_into().unwrap(), sig[32..].try_into().unwrap(), recid))
     }
 
-    /// EIP-191 `personal_sign`: r, s and v (27 or 28), 65 bytes.
+/// EIP-191 `personal_sign`: r, s and v (27 or 28), 65 bytes.
     pub fn sign_message(&self, message: &[u8]) -> Result<[u8; 65], Error> {
         let (r, s, v) = self.sign(&message_hash(message))?;
         let mut out = [0u8; 65];

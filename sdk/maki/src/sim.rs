@@ -10,7 +10,7 @@ use std::rc::Rc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use maki_bundle::Manifest;
-use maki_wasm::{Answer, Ask, Canvas, Color, Event, Platform, Style, TOP, WIDTH};
+use maki_wasm::{Answer, Ask, Canvas, Color, Event, Platform, Review, Style, TOP, WIDTH};
 
 /// maki's screen, 128 pixels square, true for light.
 pub type Screen = [[bool; WIDTH]; WIDTH];
@@ -357,6 +357,53 @@ impl Sim {
         }
     }
 
+    fn interactive_review(s: &mut Shared, review: &Review) -> Answer {
+        use crossterm::event::{poll, read, Event as Term, KeyCode, KeyEventKind};
+        let deadline = Instant::now() + Duration::from_secs(review.timeout_s as u64);
+        let mut page = 0usize;
+        loop {
+            let footer = match review.pages.get(page) {
+                Some(p) => format!(
+                    "review {}/{}: [{}] {} {} {} · right: next · left: back",
+                    page + 1,
+                    review.pages.len(),
+                    p.heading,
+                    p.value,
+                    p.mono.replace('\n', " "),
+                    p.prose.replace('\n', " ")
+                ),
+                None => format!(
+                    "review: {} {} · y {} · n {} · left: back",
+                    review.question,
+                    review.detail,
+                    if review.yes.is_empty() { "sign" } else { &review.yes },
+                    if review.no.is_empty() { "reject" } else { &review.no }
+                ),
+            };
+            s.draw_terminal(&footer);
+            let left = deadline.saturating_duration_since(Instant::now());
+            if left.is_zero() || !poll(left).unwrap_or(false) {
+                if Instant::now() >= deadline {
+                    return Answer::NoAnswer;
+                }
+                continue;
+            }
+            let Ok(Term::Key(k)) = read() else { continue };
+            if k.kind != KeyEventKind::Press {
+                continue;
+            }
+            let on_question = page >= review.pages.len();
+            match k.code {
+                KeyCode::Right | KeyCode::Enter if !on_question => page += 1,
+                KeyCode::Left => page = page.saturating_sub(1),
+                KeyCode::Char('y') if on_question => return Answer::Yes,
+                KeyCode::Char('n') if on_question => return Answer::No,
+                KeyCode::Esc => return Answer::NoAnswer,
+                _ => {}
+            }
+        }
+    }
+
     /// A scan in the terminal: type what the QR code says, then enter; Esc cancels.
     fn interactive_scan(s: &mut Shared) -> Option<String> {
         use crossterm::event::{read, Event as Term, KeyCode, KeyEventKind};
@@ -401,6 +448,23 @@ impl Sim {
                 _ => {}
             }
         }
+    }
+}
+
+impl Sim {
+    /// The BIP39 test phrase's seed, which the simulator's keys come from (said once).
+    fn test_seed(&self) -> [u8; 64] {
+        let mut s = self.0.borrow_mut();
+        if s.seed.is_none() {
+            let words: Vec<&str> = TEST_PHRASE.split(' ').collect();
+            s.seed = Some(maki_seed::seed(&words, ""));
+            let note = "keys: from the BIP39 test phrase (abandon ... about), as on a maki set up with it: never use them for anything real";
+            if !s.interactive {
+                eprintln!("{note}");
+            }
+            s.logs.push(note.into());
+        }
+        s.seed.unwrap()
     }
 }
 
@@ -523,20 +587,50 @@ impl Platform for Sim {
         answer
     }
 
+    /// A wallet app's keys from the BIP39 test phrase, never the owner's: the keys maki would use
+    /// for it on a maki set up with that phrase. The session has held the path to the app's own.
+    fn wallet(&mut self, op: u8, path: &[u32], digest: &[u8]) -> Result<Vec<u8>, i32> {
+        let seed = self.test_seed();
+        let keys = maki_hd::seed::SeedKeys::from_seed(&seed).map_err(|_| maki_wasm::FAILED)?;
+        // no randomness in the simulator's Schnorr signatures: the same every run, for tests
+        maki_hd::seed::answer(&keys, op, path, digest, &[0; 32]).map_err(|_| maki_wasm::FAILED)
+    }
+
+    /// A review: in the terminal, a page at a time (left and right), then y or n; scripted, the
+    /// next answer in the script, its pages written to stderr.
+    fn review(&mut self, review: &Review) -> Answer {
+        let mut s = self.0.borrow_mut();
+        let answer = if s.interactive {
+            Self::interactive_review(&mut s, review)
+        } else {
+            for p in &review.pages {
+                eprintln!("  [{}] {} {} {}", p.heading, p.value, p.mono.replace('\n', " "), p.prose.replace('\n', " "));
+            }
+            match s.script.front() {
+                Some(Press::Answer(a)) => {
+                    let a = *a;
+                    s.script.pop_front();
+                    a
+                }
+                _ => Answer::NoAnswer,
+            }
+        };
+        let line = format!("review \"{}\" ({}), {} pages: {answer:?}", review.question, review.detail, review.pages.len());
+        if !s.interactive {
+            eprintln!("{line}");
+        }
+        s.logs.push(line);
+        s.queued.push_back(Event::Hidden);
+        s.queued.push_back(Event::Shown);
+        answer
+    }
+
     /// From the BIP39 test phrase, never the owner's: the same keys maki would give this app on
     /// a maki set up with that phrase.
     fn app_secret(&mut self, label: &str) -> Option<[u8; 32]> {
-        let mut s = self.0.borrow_mut();
-        if s.seed.is_none() {
-            let words: Vec<&str> = TEST_PHRASE.split(' ').collect();
-            s.seed = Some(maki_seed::seed(&words, ""));
-            let note = "keys: from the BIP39 test phrase (abandon ... about), as on a maki set up with it: never use them for anything real";
-            if !s.interactive {
-                eprintln!("{note}");
-            }
-            s.logs.push(note.into());
-        }
-        let (seed, id, developer) = (s.seed.unwrap(), s.manifest.id.clone(), s.options.developer);
+        let seed = self.test_seed();
+        let s = self.0.borrow();
+        let (id, developer) = (s.manifest.id.clone(), s.options.developer);
         maki_seed::app_secret(&seed, &id, &developer, label)
     }
 

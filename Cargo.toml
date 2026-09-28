@@ -133,6 +133,7 @@ members = [
   "libs/maki-keys-api",
   "libs/maki-seed",
   "libs/maki-btc",
+  "libs/maki-hd",
   "libs/maki-ui",
   "libs/maki-fido",
   "libs/maki-eth",

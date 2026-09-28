@@ -102,7 +102,9 @@ pub fn run(ctx: &Rc<Ctx>, device: Device, elf: Vec<u8>, limits: Limits) -> Stop 
     };
     log::info!("{id}: running in PID {}, confined", pid.get());
     ctx.shared.lock().unwrap().native = Some(pid);
+    let wallet = device.wallet();
     let mut session = Session::new(Box::new(device), limits);
+    session.wallet = wallet;
     let stop = serve(ctx, &mut session, &watch, pid);
     // whatever it's doing: its process ends here, if it hasn't ended itself
     xous::terminate_child(pid).ok();
@@ -285,6 +287,38 @@ fn lent(session: &mut Session, id: usize, request: &[u8], last_log: &mut String)
             *last_log = line.into_owned();
             (0, vec![])
         }
+        service::WALLET_FINGERPRINT => match session.wallet_fingerprint() {
+            Ok(fp) => (0, fp.to_vec()),
+            Err(code) => (code, vec![]),
+        },
+        service::WALLET_PUBLIC => match request.split_first().and_then(|(form, rest)| path_of(rest).map(|p| (*form, p))) {
+            Some((form, path)) => match session.wallet_public(&path, form) {
+                Ok(key) => (0, key),
+                Err(code) => (code, vec![]),
+            },
+            None => (maki_wasm::INVALID, vec![]),
+        },
+        service::WALLET_REVIEW => {
+            let parsed = (request.len() >= 8).then(|| {
+                let signatures = u32::from_le_bytes(request[..4].try_into().unwrap());
+                let timeout = i32::from_le_bytes(request[4..8].try_into().unwrap());
+                (signatures, timeout, std::str::from_utf8(&request[8..]).ok())
+            });
+            match parsed {
+                Some((signatures, timeout, Some(text))) => (session.wallet_review(text, signatures, timeout), vec![]),
+                _ => (maki_wasm::INVALID, vec![]),
+            }
+        }
+        service::WALLET_SIGN => {
+            let parsed = (request.len() >= 33).then(|| (request[0], &request[1..33], path_of(&request[33..])));
+            match parsed {
+                Some((scheme, digest, Some(path))) => match session.wallet_sign(&path, digest, scheme) {
+                    Ok(sig) => (0, sig),
+                    Err(code) => (code, vec![]),
+                },
+                _ => (maki_wasm::INVALID, vec![]),
+            }
+        }
         service::STORAGE_GET => match text().map(|k| session.storage_get(k)) {
             Some(Ok(v)) => (0, v),
             Some(Err(code)) => (code, vec![]),
@@ -418,4 +452,12 @@ fn draw(session: &mut Session, op: maki_native::draw::Draw) {
             }
         }
     }
+}
+
+/// A derivation path, as a native app sends it: little-endian u32s, at most `maki_hd::MAX_DEPTH`.
+fn path_of(bytes: &[u8]) -> Option<Vec<u32>> {
+    if bytes.len() % 4 != 0 || bytes.len() / 4 > maki_hd::MAX_DEPTH {
+        return None;
+    }
+    Some(bytes.chunks_exact(4).map(|b| u32::from_le_bytes(b.try_into().unwrap())).collect())
 }

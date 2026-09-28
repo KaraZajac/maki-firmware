@@ -17,6 +17,8 @@ wasmi = { version = "2.0", default-features = false, features = [
     "portable-dispatch",
 ] }
 maki-bundle = { path = "../maki-bundle" }
+# wallet apps' paths (host API 3)
+maki-hd = { path = "../maki-hd" }
 # apps' Ed25519 keys (the keys permission): the Baochip build, as maki-bundle has it
 ed25519-dalek = { package = "ed25519-dalek-compat", path = "../../bao1x-boot/ed25519-dalek-compat", default-features = false, features = ["zeroize"] }
 zeroize = "1.8.1"
@@ -44,3 +46,6 @@ hkdf = "0.12"
 chacha20poly1305 = "0.10"
 x25519-dalek = { version = "=2.0.1", default-features = false, features = ["static_secrets"] }
 sha2 = { version = "0.10.8", default-features = false }
+# wallet apps' keys (host API 3), from the BIP39 test phrase, as maki-keys makes them
+maki-hd = { path = "../maki-hd", features = ["seed"] }
+maki-seed = { path = "../maki-seed" }

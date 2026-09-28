@@ -34,6 +34,8 @@
 //! permission.
 
 #![no_std]
+#[cfg(feature = "wallet")]
+extern crate alloc;
 
 #[cfg(feature = "std")]
 extern crate std;
@@ -85,6 +87,14 @@ mod sys {
         pub fn link_reply(ptr: *const u8, len: usize) -> i32;
         pub fn camera_scan_qr(ptr: *mut u8, cap: usize) -> i32;
         pub fn motion_read(ptr: *mut u8) -> i32;
+        #[cfg(feature = "wallet")]
+        pub fn wallet_fingerprint(out: *mut u8) -> i32;
+        #[cfg(feature = "wallet")]
+        pub fn wallet_public(pptr: *const u32, plen: usize, form: i32, out: *mut u8, cap: usize) -> i32;
+        #[cfg(feature = "wallet")]
+        pub fn wallet_review(tptr: *const u8, tlen: usize, signatures: i32, timeout_s: i32) -> i32;
+        #[cfg(feature = "wallet")]
+        pub fn wallet_sign(pptr: *const u32, plen: usize, dptr: *const u8, scheme: i32, out: *mut u8, cap: usize) -> i32;
     }
 }
 
@@ -152,6 +162,11 @@ pub enum Error {
     Invalid,
     TooBig,
     Failed,
+    /// Not the app's to do: a permission it doesn't have (a native app can call anything), a
+    /// wallet path its manifest doesn't name, or a signature the owner didn't say yes to.
+    Refused,
+    /// maki is locked, or has no recovery phrase yet (host API 3; before, `Failed`).
+    Locked,
 }
 
 fn result(code: i32) -> Result<i32, Error> {
@@ -160,6 +175,8 @@ fn result(code: i32) -> Result<i32, Error> {
         -2 => Err(Error::Full),
         -3 => Err(Error::Invalid),
         -4 => Err(Error::TooBig),
+        -6 => Err(Error::Refused),
+        -7 => Err(Error::Locked),
         n if n < 0 => Err(Error::Failed),
         n => Ok(n),
     }
@@ -584,4 +601,188 @@ macro_rules! main {
             $f()
         }
     };
+}
+
+/// Wallets' keys (the `wallet` permission, host API 3: `api = 3`): public keys and signatures on
+/// the derivation paths the app's manifest names (`[wallet] paths = ["m/84'/0'"]`), and nowhere
+/// else. maki keeps the seed and does the curve's work, at native speed; the app works out what
+/// to sign, shows the owner on maki's own review screen (`Review`), and makes as many signatures
+/// as it said it would, within two minutes of their yes. `Error::Locked` while maki is locked or
+/// has no phrase; `Error::Refused` off its paths, or without a yes.
+///
+/// With the `wallet` feature, and an allocator (a `std` app has one).
+#[cfg(feature = "wallet")]
+pub mod wallet {
+    use alloc::string::String;
+    use alloc::vec::Vec;
+
+    pub use maki_hd::{format_path, parse_path, Public, Tweak, HARDENED};
+
+    use super::{result, sys, Answer, Error};
+
+    const PUBLIC: i32 = maki_hd::op::PUBLIC as i32;
+    const UNCOMPRESSED: i32 = maki_hd::op::UNCOMPRESSED as i32;
+    const TAPROOT: i32 = maki_hd::op::TAPROOT as i32;
+    const SIGN_ECDSA: i32 = maki_hd::op::SIGN_ECDSA as i32;
+    const SIGN_SCHNORR: i32 = maki_hd::op::SIGN_SCHNORR as i32;
+    const SIGN_TAPROOT: i32 = maki_hd::op::SIGN_TAPROOT as i32;
+
+    /// The master key's fingerprint, as descriptors and PSBTs name the seed.
+    pub fn fingerprint() -> Result<[u8; 4], Error> {
+        let mut out = [0u8; 4];
+        result(unsafe { sys::wallet_fingerprint(out.as_mut_ptr()) })?;
+        Ok(out)
+    }
+
+    fn public_form<const N: usize>(path: &[u32], form: i32) -> Result<[u8; N], Error> {
+        let mut out = [0u8; N];
+        let n = result(unsafe { sys::wallet_public(path.as_ptr(), path.len(), form, out.as_mut_ptr(), N) })?;
+        if n as usize != N {
+            return Err(Error::Failed);
+        }
+        Ok(out)
+    }
+
+    /// The public key at `path` (compressed), with its chain code and its parent's fingerprint:
+    /// what an extended public key carries.
+    pub fn public(path: &[u32]) -> Result<Public, Error> {
+        let b: [u8; 69] = public_form(path, PUBLIC)?;
+        Ok(Public {
+            key: b[..33].try_into().unwrap(),
+            chain_code: b[33..65].try_into().unwrap(),
+            parent_fingerprint: b[65..].try_into().unwrap(),
+        })
+    }
+
+    /// The public key at `path`, uncompressed: what an Ethereum address hashes.
+    pub fn uncompressed(path: &[u32]) -> Result<[u8; 65], Error> { public_form(path, UNCOMPRESSED) }
+
+    /// The taproot output key the key at `path` makes with no scripts (BIP86), x only.
+    pub fn taproot_output(path: &[u32]) -> Result<[u8; 32], Error> { public_form(path, TAPROOT) }
+
+    fn sign<const N: usize>(path: &[u32], digest: &[u8; 32], scheme: i32) -> Result<[u8; N], Error> {
+        let mut out = [0u8; N];
+        let n = result(unsafe { sys::wallet_sign(path.as_ptr(), path.len(), digest.as_ptr(), scheme, out.as_mut_ptr(), N) })?;
+        if n as usize != N {
+            return Err(Error::Failed);
+        }
+        Ok(out)
+    }
+
+    /// An ECDSA signature over a 32-byte digest with the key at `path`: r and s (s low), and the
+    /// recovery ID (0 or 1). Deterministic (RFC 6979), and checked by maki before it's returned.
+    pub fn sign_ecdsa(path: &[u32], digest: &[u8; 32]) -> Result<([u8; 64], u8), Error> {
+        let b: [u8; 65] = sign(path, digest, SIGN_ECDSA)?;
+        Ok((b[..64].try_into().unwrap(), b[64]))
+    }
+
+    /// A BIP340 signature over a 32-byte message with the key at `path`, tweaked for a taproot key
+    /// spend or not. maki adds fresh randomness from its TRNG.
+    pub fn sign_schnorr(path: &[u32], digest: &[u8; 32], tweak: Tweak) -> Result<[u8; 64], Error> {
+        sign(path, digest, if tweak == Tweak::Taproot { SIGN_TAPROOT } else { SIGN_SCHNORR })
+    }
+
+    /// A page of a review, as maki's review screen lays it out: `heading` (a few words at the top,
+    /// up to 32 bytes), `value` (the thing to check, bold), `mono` (fixed-width, across as many
+    /// lines as it takes: an address), `prose` (small words, wrapped: what it means).
+    #[derive(Clone, Debug, Default, PartialEq, Eq)]
+    pub struct Page {
+        pub heading: String,
+        pub value: String,
+        pub mono: String,
+        pub prose: String,
+    }
+
+    impl Page {
+        pub fn new(heading: &str) -> Page { Page { heading: heading.into(), ..Page::default() } }
+        pub fn value(self, value: &str) -> Page { Page { value: value.into(), ..self } }
+        pub fn mono(self, mono: &str) -> Page { Page { mono: mono.into(), ..self } }
+        pub fn prose(self, prose: &str) -> Page { Page { prose: prose.into(), ..self } }
+    }
+
+    /// What the owner goes through on maki's own review screen before the app signs, a page at a
+    /// time under the app's bar, then its question: `Review::new("Sign and spend?").detail("0.0007
+    /// BTC").page(Page::new("Send").value("0.0007 BTC").mono(address)).signatures(2).show()`. A yes
+    /// lets the app make `signatures` signatures in the next two minutes; a new review ends what the
+    /// last allowed.
+    #[derive(Clone, Debug, Default)]
+    pub struct Review {
+        question: String,
+        detail: String,
+        yes: String,
+        no: String,
+        pages: Vec<Page>,
+        signatures: u32,
+        timeout_s: i32,
+    }
+
+    impl Review {
+        /// The question, up to 64 bytes.
+        pub fn new(question: &str) -> Review { Review { question: question.into(), signatures: 1, ..Review::default() } }
+        /// A line more about it, up to 128 bytes.
+        pub fn detail(self, detail: &str) -> Review { Review { detail: detail.into(), ..self } }
+        /// The answers' labels, up to 16 bytes each ("sign" and "reject" if not given).
+        pub fn answers(self, yes: &str, no: &str) -> Review { Review { yes: yes.into(), no: no.into(), ..self } }
+        pub fn page(mut self, page: Page) -> Review {
+            self.pages.push(page);
+            self
+        }
+        /// How many signatures a yes allows (1 if not given).
+        pub fn signatures(self, signatures: u32) -> Review { Review { signatures, ..self } }
+        /// How long the owner has, 5 to 300 seconds (120 if not given).
+        pub fn timeout(self, seconds: u32) -> Review { Review { timeout_s: seconds.min(i32::MAX as u32) as i32, ..self } }
+
+        /// The text maki's `wallet_review` takes.
+        pub fn text(&self) -> String {
+            let mut text = alloc::format!("{}\n{}\n{}\n{}", self.question, self.detail, self.yes, self.no);
+            for p in &self.pages {
+                for (sep, part) in [('\x1e', &p.heading), ('\x1f', &p.value), ('\x1f', &p.mono), ('\x1f', &p.prose)] {
+                    text.push(sep);
+                    text.push_str(part);
+                }
+            }
+            text
+        }
+
+        /// Shows it and waits. `Error::Invalid` for text too long for maki's screen, or with
+        /// control characters where they can't be.
+        pub fn show(self) -> Result<Answer, Error> {
+            let text = self.text();
+            let code = unsafe { sys::wallet_review(text.as_ptr(), text.len(), self.signatures as i32, self.timeout_s) };
+            result(code).map(|a| match a {
+                0 => Answer::Yes,
+                1 => Answer::No,
+                _ => Answer::NoAnswer,
+            })
+        }
+    }
+
+    /// maki's keys as `maki_hd::Keys`, for maki-btc's and maki-eth's accounts: public keys and
+    /// signatures through maki, which checks the paths and the owner's yes.
+    pub struct HostKeys;
+
+    fn keys_error(e: Error, refused: maki_hd::Error) -> maki_hd::Error {
+        match e {
+            Error::Locked => maki_hd::Error::Locked,
+            Error::Refused => refused,
+            _ => maki_hd::Error::Failed,
+        }
+    }
+
+    impl maki_hd::Keys for HostKeys {
+        fn fingerprint(&self) -> Result<[u8; 4], maki_hd::Error> { fingerprint().map_err(|e| keys_error(e, maki_hd::Error::Path)) }
+        fn public(&self, path: &[u32]) -> Result<Public, maki_hd::Error> { public(path).map_err(|e| keys_error(e, maki_hd::Error::Path)) }
+        fn uncompressed(&self, path: &[u32]) -> Result<[u8; 65], maki_hd::Error> {
+            uncompressed(path).map_err(|e| keys_error(e, maki_hd::Error::Path))
+        }
+        fn taproot_output(&self, path: &[u32]) -> Result<[u8; 32], maki_hd::Error> {
+            taproot_output(path).map_err(|e| keys_error(e, maki_hd::Error::Path))
+        }
+        fn sign_ecdsa(&self, path: &[u32], digest: &[u8; 32]) -> Result<([u8; 64], u8), maki_hd::Error> {
+            sign_ecdsa(path, digest).map_err(|e| keys_error(e, maki_hd::Error::NotAllowed))
+        }
+        fn sign_schnorr(&self, path: &[u32], digest: &[u8; 32], tweak: Tweak) -> Result<[u8; 64], maki_hd::Error> {
+            sign_schnorr(path, digest, tweak).map_err(|e| keys_error(e, maki_hd::Error::NotAllowed))
+        }
+    }
 }

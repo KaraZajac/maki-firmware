@@ -1,10 +1,9 @@
-//! maki's own apps, in one process: Bitcoin (bitcoin.rs) and Passkeys (passkeys.rs). Each keeps
-//! its own screen state; this registers them with the launcher and hands each its key presses,
-//! focus and menu. They share a process to spare the badge's memory: each process carries its
-//! own runtime and stacks, and at boot the badge is near its limit (DEVELOPMENT.md, "Known
-//! issues"). Apps from elsewhere, when the app store comes, will get processes of their own.
+//! maki's own apps, in one process: Passkeys (passkeys.rs). It keeps its own screen state; this
+//! registers it with the launcher and hands it its key presses, focus and menu. maki's own apps
+//! share a process to spare the badge's memory: each process carries its own runtime and stacks,
+//! and at boot the badge is near its limit (DEVELOPMENT.md, "Known issues"). Bitcoin was here;
+//! wallets are apps from the maki store now (ARCHITECTURE.md, "Wallets are apps").
 
-mod bitcoin;
 mod passkeys;
 
 use maki_launcher::{Focus, MenuMessage};
@@ -15,9 +14,6 @@ const SERVER_NAME: &str = "_maki apps_";
 
 #[derive(Debug, Clone, Copy, num_derive::FromPrimitive, num_derive::ToPrimitive)]
 enum Op {
-    BitcoinKey = 0,
-    BitcoinFocus = 1,
-    BitcoinMenu = 2,
     PasskeysKey = 3,
     PasskeysFocus = 4,
     PasskeysMenu = 5,
@@ -45,7 +41,6 @@ fn main() -> ! {
     let sid = xns.register_name(SERVER_NAME, None).expect("can't register server");
     let launcher = maki_launcher::Launcher::new(&xns).expect("couldn't connect to the launcher");
     for (name, key, focus, menu, icon) in [
-        ("Bitcoin", Op::BitcoinKey, Op::BitcoinFocus, Op::BitcoinMenu, &maki_icons::BITCOIN),
         ("Passkeys", Op::PasskeysKey, Op::PasskeysFocus, Op::PasskeysMenu, &maki_icons::PASSKEYS),
     ] {
         launcher
@@ -53,19 +48,11 @@ fn main() -> ! {
             .expect("couldn't register with the launcher");
     }
 
-    let mut btc = bitcoin::Bitcoin::new(&xns);
     let mut passkeys = passkeys::Passkeys::new(&xns, launcher);
 
     loop {
         let mut msg = xous::receive_message(sid).unwrap();
         match FromPrimitive::from_usize(msg.body.id()) {
-            Some(Op::BitcoinKey) => keys_of(&msg).into_iter().for_each(|k| btc.key(k)),
-            Some(Op::BitcoinFocus) => btc.focus(in_front(&msg)),
-            Some(Op::BitcoinMenu) => match MenuMessage::of(&msg) {
-                Some(MenuMessage::Fill) => MenuMessage::fill(&mut msg, &btc.menu()),
-                Some(MenuMessage::Picked(i)) => btc.picked(i),
-                None => {}
-            },
             Some(Op::PasskeysKey) => keys_of(&msg).into_iter().for_each(|k| passkeys.key(k)),
             Some(Op::PasskeysFocus) => passkeys.focus(in_front(&msg)),
             Some(Op::PasskeysMenu) => match MenuMessage::of(&msg) {

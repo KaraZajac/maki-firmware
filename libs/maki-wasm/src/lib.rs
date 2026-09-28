@@ -21,11 +21,19 @@ pub use session::{Session, REFUSED};
 use wasmi::{Caller, Config, Engine, Error, Extern, Linker, Memory, Module, Store, StoreLimits, StoreLimitsBuilder};
 
 /// The functions this host offers apps.
-pub const API_VERSION: u16 = 2;
+pub const API_VERSION: u16 = 3;
 
 /// Functions that came after host API 1, and with which: an app calling one says that API or later.
-pub const SINCE: &[(&str, u16)] =
-    &[("key_schnorr_public", 2), ("key_schnorr_sign", 2), ("key_x25519_public", 2), ("key_x25519_agree", 2)];
+pub const SINCE: &[(&str, u16)] = &[
+    ("key_schnorr_public", 2),
+    ("key_schnorr_sign", 2),
+    ("key_x25519_public", 2),
+    ("key_x25519_agree", 2),
+    ("wallet_fingerprint", 3),
+    ("wallet_public", 3),
+    ("wallet_review", 3),
+    ("wallet_sign", 3),
+];
 
 /// What maki's functions return for failures they report (rather than stopping the app).
 pub const NOT_FOUND: i32 = -1;
@@ -33,6 +41,8 @@ pub const FULL: i32 = -2;
 pub const INVALID: i32 = -3;
 pub const TOO_BIG: i32 = -4;
 pub const FAILED: i32 = -5;
+/// Host API 3: maki is locked, or has no recovery phrase yet (a wallet's keys wait for both).
+pub const LOCKED: i32 = -7;
 
 /// Longest storage key, in bytes.
 pub const MAX_KEY: usize = 48;
@@ -65,6 +75,32 @@ pub const ASK_TEXT: usize = MAX_QUESTION + MAX_DETAIL + 2 * MAX_ANSWER_LABEL + 3
 pub const ASK_TIMEOUT_S: u32 = 30;
 pub const MAX_ASK_TIMEOUT_S: u32 = 120;
 
+/// The wallet permission (host API 3). What `wallet_public` gives, and `wallet_sign` makes (as
+/// maki-keys' `WALLET_*`): a public key with its chain code and parent's fingerprint (69 bytes),
+/// uncompressed (65), a taproot output key (32); an ECDSA signature and its recovery ID (65),
+/// BIP340 (64), BIP340 tweaked for a taproot key spend (64).
+pub const WALLET_PUBLIC: u8 = maki_hd::op::PUBLIC;
+pub const WALLET_UNCOMPRESSED: u8 = maki_hd::op::UNCOMPRESSED;
+pub const WALLET_TAPROOT: u8 = maki_hd::op::TAPROOT;
+pub const WALLET_SIGN_ECDSA: u8 = maki_hd::op::SIGN_ECDSA;
+pub const WALLET_SIGN_SCHNORR: u8 = maki_hd::op::SIGN_SCHNORR;
+pub const WALLET_SIGN_TAPROOT: u8 = maki_hd::op::SIGN_TAPROOT;
+/// A review's text, pages, and each page's parts, in bytes. A page's text runs on over as many
+/// screens as it takes ("Message (2)"): a message to sign can be 4 KiB, and a transaction 64
+/// payments, their change and the fee.
+pub const MAX_REVIEW: usize = 16 * 1024;
+pub const MAX_PAGES: usize = 128;
+pub const MAX_HEADING: usize = 32;
+pub const MAX_PAGE_VALUE: usize = 128;
+pub const MAX_PAGE_TEXT: usize = 4096;
+/// How long a review waits, if the app doesn't say, and the most it may: time to read every
+/// page, carefully.
+pub const REVIEW_TIMEOUT_S: u32 = 120;
+pub const MAX_REVIEW_TIMEOUT_S: u32 = 300;
+/// The most signatures one yes allows, and how long it allows them for.
+pub const MAX_SIGNATURES: u32 = 256;
+pub const ALLOWANCE_MS: u64 = 120_000;
+
 /// maki's functions that need a permission, and which.
 pub const GATED: &[(&str, Permission)] = &[
     ("ask", Permission::Ask),
@@ -80,6 +116,10 @@ pub const GATED: &[(&str, Permission)] = &[
     ("link_reply", Permission::Link),
     ("camera_scan_qr", Permission::Camera),
     ("motion_read", Permission::Motion),
+    ("wallet_fingerprint", Permission::Wallet),
+    ("wallet_public", Permission::Wallet),
+    ("wallet_review", Permission::Wallet),
+    ("wallet_sign", Permission::Wallet),
 ];
 
 /// What `wait` hands the app.
@@ -129,6 +169,31 @@ pub struct Ask {
     pub yes: String,
     pub no: String,
     pub timeout_s: u32,
+}
+
+/// What a wallet app shows the owner on maki's own review screen, a page at a time, before its
+/// question: the pages are the app's words, headed with its name.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Review {
+    pub question: String,
+    /// A line more about it; may be empty.
+    pub detail: String,
+    /// The answers' labels; empty for "sign" and "reject".
+    pub yes: String,
+    pub no: String,
+    pub pages: Vec<Page>,
+    pub timeout_s: u32,
+}
+
+/// A review's page, as maki's review screen lays it out: a few words at the top, the thing to
+/// check in bold, then fixed-width type across as many lines as it takes (an address), then small
+/// words wrapped to fit (what something means). Any may be empty but the heading.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Page {
+    pub heading: String,
+    pub value: String,
+    pub mono: String,
+    pub prose: String,
 }
 
 /// What the owner said.
@@ -191,6 +256,14 @@ pub trait Platform {
     /// The accelerometer (the motion permission), while the app is in front: x, y and z in
     /// thousandths of a g. `None` if there's none to read.
     fn motion(&mut self) -> Option<[i16; 3]> { None }
+    /// A wallet app's key work (the wallet permission), done by maki, which keeps the seed: the
+    /// master key's fingerprint (`op` 0, no path), a public key at `path` (`WALLET_PUBLIC`..), or
+    /// a signature over `digest` (`WALLET_SIGN_*`). The session has held the path to the app's
+    /// own, and a signature to the owner's yes. `LOCKED` while maki is.
+    fn wallet(&mut self, _op: u8, _path: &[u32], _digest: &[u8]) -> Result<Vec<u8>, i32> { Err(FAILED) }
+    /// Puts a review on maki's own screen (the wallet permission), headed with the app's name,
+    /// and waits for the answer. A platform that can't show one gets no answer.
+    fn review(&mut self, _review: &Review) -> Answer { Answer::NoAnswer }
 }
 
 /// Permissions an app has: those its manifest asks for (each of which maki offers).
@@ -293,6 +366,8 @@ pub struct Loaded {
     engine: Engine,
     module: Module,
     pub limits: Limits,
+    /// The wallet permission's paths, from the manifest.
+    pub wallet: Option<maki_bundle::Wallet>,
 }
 
 /// What `admit` checks, keeping the compiled code to run.
@@ -314,7 +389,7 @@ pub fn load(manifest: &Manifest, code: &[u8]) -> Result<Loaded, String> {
         }
     }
     instantiate(&loaded, Box::new(Nothing))?;
-    Ok(loaded)
+    Ok(Loaded { wallet: manifest.wallet.clone(), ..loaded })
 }
 
 impl Loaded {
@@ -401,6 +476,27 @@ fn style(v: i32) -> Result<Style, Error> { Style::from_i32(v).ok_or_else(|| trap
 
 /// A gated function called without its permission. `compile` refuses apps that import one
 /// they didn't ask for, so this is a second line.
+/// A derivation path from the app's memory: `len` little-endian u32s, at most `maki_hd::MAX_DEPTH`
+/// of them (None if more, or fewer than none).
+fn read_path(caller: &Caller<'_, State>, ptr: i32, len: i32, what: &str) -> Result<Option<Vec<u32>>, Error> {
+    let Ok(n) = usize::try_from(len) else { return Ok(None) };
+    if n > maki_hd::MAX_DEPTH {
+        return Ok(None);
+    }
+    let bytes = read(caller, ptr, (n * 4) as i32, maki_hd::MAX_DEPTH * 4, what)?;
+    Ok(Some(bytes.chunks_exact(4).map(|b| u32::from_le_bytes(b.try_into().unwrap())).collect()))
+}
+
+/// `bytes` into the app's buffer of `cap` bytes at `out`: its length, or `TOO_BIG` if it doesn't
+/// fit.
+fn written(caller: &mut Caller<'_, State>, out: i32, cap: i32, bytes: &[u8], what: &str) -> Result<i32, Error> {
+    if bytes.len() > cap.max(0) as usize {
+        return Ok(TOO_BIG);
+    }
+    write(caller, out, bytes, what)?;
+    Ok(bytes.len() as i32)
+}
+
 fn permitted(c: &Caller<'_, State>, p: Permission, what: &str) -> Result<(), Error> {
     if c.data().session.permitted(p) {
         Ok(())
@@ -669,6 +765,53 @@ fn link(linker: &mut Linker<State>) -> Result<(), Error> {
             written.map(|_| 0)
         },
     )?;
+    linker.func_wrap(M, "wallet_fingerprint", |mut c: Caller<'_, State>, out: i32| -> Result<i32, Error> {
+        permitted(&c, Permission::Wallet, "wallet_fingerprint")?;
+        match c.data_mut().session.wallet_fingerprint() {
+            Ok(fp) => write(&mut c, out, &fp, "wallet_fingerprint").map(|_| 0),
+            Err(code) => Ok(code),
+        }
+    })?;
+    linker.func_wrap(
+        M,
+        "wallet_public",
+        |mut c: Caller<'_, State>, pptr: i32, plen: i32, form: i32, out: i32, cap: i32| -> Result<i32, Error> {
+            permitted(&c, Permission::Wallet, "wallet_public")?;
+            let Some(path) = read_path(&c, pptr, plen, "wallet_public")? else { return Ok(INVALID) };
+            let form = u8::try_from(form).unwrap_or(0);
+            match c.data_mut().session.wallet_public(&path, form) {
+                Ok(bytes) => written(&mut c, out, cap, &bytes, "wallet_public"),
+                Err(code) => Ok(code),
+            }
+        },
+    )?;
+    linker.func_wrap(
+        M,
+        "wallet_review",
+        |mut c: Caller<'_, State>, tptr: i32, tlen: i32, signatures: i32, timeout_s: i32| -> Result<i32, Error> {
+            permitted(&c, Permission::Wallet, "wallet_review")?;
+            if tlen as u32 as usize > MAX_REVIEW {
+                return Ok(TOO_BIG);
+            }
+            let text = read_str(&c, tptr, tlen, MAX_REVIEW, "wallet_review")?;
+            let Ok(signatures) = u32::try_from(signatures) else { return Ok(INVALID) };
+            Ok(c.data_mut().session.wallet_review(&text, signatures, timeout_s))
+        },
+    )?;
+    linker.func_wrap(
+        M,
+        "wallet_sign",
+        |mut c: Caller<'_, State>, pptr: i32, plen: i32, dptr: i32, scheme: i32, out: i32, cap: i32| -> Result<i32, Error> {
+            permitted(&c, Permission::Wallet, "wallet_sign")?;
+            let Some(path) = read_path(&c, pptr, plen, "wallet_sign")? else { return Ok(INVALID) };
+            let digest = read(&c, dptr, 32, 32, "wallet_sign")?;
+            let scheme = u8::try_from(scheme).unwrap_or(0);
+            match c.data_mut().session.wallet_sign(&path, &digest, scheme) {
+                Ok(sig) => written(&mut c, out, cap, &sig, "wallet_sign"),
+                Err(code) => Ok(code),
+            }
+        },
+    )?;
     linker.func_wrap(M, "type_text", |mut c: Caller<'_, State>, ptr: i32, len: i32| -> Result<i32, Error> {
         permitted(&c, Permission::Keyboard, "type_text")?;
         if len as u32 as usize > MAX_TYPE {
@@ -783,16 +926,18 @@ fn compile(code: &[u8], limits: Limits) -> Result<Loaded, String> {
             }
         }
     }
-    Ok(Loaded { engine, module, limits })
+    Ok(Loaded { engine, module, limits, wallet: None })
 }
 
 /// A fresh instance of a compiled app, linked to maki's functions on `platform`.
 fn instantiate(loaded: &Loaded, platform: Box<dyn Platform>) -> Result<(Store<State>, wasmi::TypedFunc<(), ()>), String> {
-    let Loaded { engine, module, limits } = loaded;
+    let Loaded { engine, module, limits, wallet } = loaded;
     let limits = *limits;
     let mut t = now();
+    let mut session = Session::new(platform, limits);
+    session.wallet = wallet.clone();
     let state = State {
-        session: Session::new(platform, limits),
+        session,
         memory: None,
         limiter: StoreLimitsBuilder::new().memory_size(limits.memory).instances(1).memories(1).tables(4).build(),
         exited: false,

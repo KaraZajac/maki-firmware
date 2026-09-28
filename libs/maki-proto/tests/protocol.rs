@@ -163,7 +163,7 @@ fn hello_names_the_firmware() {
     let (k, body) = ask(&mut d, kind::HELLO, vec![]);
     assert_eq!(k, kind::HELLO | kind::REPLY);
     let mut r = Reader::new(&body);
-    assert_eq!((r.u8().unwrap(), r.str8().unwrap(), r.str8().unwrap()), (2, "maki", "0.1.0"));
+    assert_eq!((r.u8().unwrap(), r.str8().unwrap(), r.str8().unwrap()), (frame::PROTOCOL_VERSION, "maki", "0.1.0"));
 }
 
 #[test]
@@ -424,164 +424,19 @@ fn backup_replies_carry_nothing_unless_approved() {
 }
 
 #[test]
-fn bitcoin_requests_go_to_the_wallet() {
+fn bitcoin_and_ethereum_are_wallet_apps_now() {
+    // protocol 3: what maki-keys used to answer goes to the apps, over APP_MESSAGE; an older
+    // maki desktop asking the old way learns it's unknown
     let mut d = device();
-    assert_eq!(
-        handled(&mut d, kind::BTC_ACCOUNT, Writer::new().u8(NETWORK_TESTNET).u8(ACCOUNT_SEGWIT).finish()),
-        Handled::Bitcoin(Bitcoin::Account { network: NETWORK_TESTNET, account: ACCOUNT_SEGWIT })
-    );
-    assert_eq!(
-        handled(&mut d, kind::BTC_ACCOUNT, Writer::new().u8(NETWORK_BITCOIN).u8(ACCOUNT_TAPROOT).finish()),
-        Handled::Bitcoin(Bitcoin::Account { network: NETWORK_BITCOIN, account: ACCOUNT_TAPROOT })
-    );
-    assert_eq!(
-        handled(&mut d, kind::BTC_ADDRESS, Writer::new().u8(NETWORK_BITCOIN).u8(1).u32(42).u8(ACCOUNT_TAPROOT).finish()),
-        Handled::Bitcoin(Bitcoin::Address { network: NETWORK_BITCOIN, change: true, index: 42, account: ACCOUNT_TAPROOT })
-    );
-    let piece = vec![0x70u8; 64];
-    assert_eq!(
-        handled(&mut d, kind::BTC_SIGN, Writer::new().u8(0).u32(100).u32(36).bytes16(&piece).finish()),
-        Handled::Bitcoin(Bitcoin::Sign { network: 0, total: 100, offset: 36, data: piece })
-    );
-    assert_eq!(
-        handled(&mut d, kind::BTC_SIGNED, Writer::new().u32(8192).finish()),
-        Handled::Bitcoin(Bitcoin::Signed { offset: 8192 })
-    );
-}
-
-#[test]
-fn bitcoin_requests_out_of_range_are_refused() {
-    let mut d = device();
-    let bad = [
-        (kind::BTC_ACCOUNT, Writer::new().u8(2).u8(0).finish()),
-        (kind::BTC_ACCOUNT, Writer::new().u8(0).u8(2).finish()),
-        (kind::BTC_ADDRESS, Writer::new().u8(0).u8(2).u32(0).u8(0).finish()),
-        (kind::BTC_ADDRESS, Writer::new().u8(0).u8(0).u32(0x8000_0000).u8(0).finish()),
-        (kind::BTC_ADDRESS, Writer::new().u8(0).u8(0).u32(0).u8(2).finish()),
-        (kind::BTC_SIGN, Writer::new().u8(0).u32(0).u32(0).bytes16(&[]).finish()),
-        (kind::BTC_SIGN, Writer::new().u8(0).u32(MAX_PSBT + 1).u32(0).bytes16(&[1]).finish()),
-        (kind::BTC_SIGN, Writer::new().u8(0).u32(100).u32(90).bytes16(&[0; 20]).finish()),
-        (kind::BTC_SIGN, Writer::new().u8(0).u32(10_000).u32(0).bytes16(&vec![0; PSBT_PIECE + 1]).finish()),
-    ];
-    for (k, body) in bad {
-        let reply = ask(&mut d, k, body.clone());
-        assert_eq!(error_code(&reply), ErrorCode::BadArgument as u8, "0x{k:02x} {body:?}");
+    for k in [0x30u8, 0x31, 0x32, 0x33, 0x40, 0x41, 0x42, 0x43, 0x44] {
+        match handled(&mut d, k, vec![0; 8]) {
+            Handled::Reply(kind, body) => {
+                assert_eq!(kind, kind::ERROR, "0x{k:02x}");
+                assert_eq!(body[0], ErrorCode::UnknownKind as u8, "0x{k:02x}");
+            }
+            other => panic!("0x{k:02x}: {other:?}"),
+        }
     }
-    let reply = ask(&mut d, kind::BTC_ACCOUNT, Writer::new().u8(0).u8(0).u8(0).finish());
-    assert_eq!(error_code(&reply), ErrorCode::Malformed as u8);
-    // the account byte is needed
-    let reply = ask(&mut d, kind::BTC_ACCOUNT, Writer::new().u8(0).finish());
-    assert_eq!(error_code(&reply), ErrorCode::Malformed as u8);
-}
-
-#[test]
-fn bitcoin_replies_carry_only_what_the_answer_allows() {
-    let (k, body) = reply::btc_account(Approval::Denied, "zpub…", "wpkh(…)");
-    assert_eq!(k, kind::BTC_ACCOUNT | kind::REPLY);
-    let mut r = Reader::new(&body);
-    assert_eq!((r.u8().unwrap(), r.str8().unwrap(), r.str8().unwrap()), (Approval::Denied as u8, "", ""));
-
-    // the address maki showed comes back whether or not it matched: it's maki's word either way
-    let (_, body) = reply::btc_address(Approval::Denied, "bc1q…");
-    let mut r = Reader::new(&body);
-    assert_eq!((r.u8().unwrap(), r.str8().unwrap()), (Approval::Denied as u8, "bc1q…"));
-    let (_, body) = reply::btc_address(Approval::Locked, "bc1q…");
-    assert_eq!(Reader::new(&body).u8().unwrap(), Approval::Locked as u8);
-    assert_eq!(body.len(), 2);
-
-    let (_, body) = reply::btc_sign(true, Approval::Refused, 500, "input 0 isn't this wallet's");
-    let mut r = Reader::new(&body);
-    assert_eq!(
-        (r.u8().unwrap(), r.u8().unwrap(), r.u32().unwrap(), r.str8().unwrap()),
-        (1, Approval::Refused as u8, 0, "input 0 isn't this wallet's")
-    );
-    let (_, body) = reply::btc_sign(true, Approval::Approved, 500, "ignored");
-    let mut r = Reader::new(&body);
-    assert_eq!((r.u8().unwrap(), r.u8().unwrap(), r.u32().unwrap(), r.str8().unwrap()), (1, 0, 500, ""));
-
-    let (k, body) = reply::btc_signed(Approval::Unavailable, 10, 0, &[1, 2]);
-    assert_eq!(k, kind::BTC_SIGNED | kind::REPLY);
-    let mut r = Reader::new(&body);
-    assert_eq!((r.u8().unwrap(), r.u32().unwrap(), r.u32().unwrap(), r.bytes16().unwrap()), (Approval::Unavailable as u8, 10, 0, &[][..]));
-    assert_eq!(Approval::from_u8(9), Some(Approval::Refused));
-}
-
-#[test]
-fn ethereum_requests_go_to_the_account() {
-    let mut d = device();
-    assert_eq!(
-        handled(&mut d, kind::ETH_ACCOUNT, Writer::new().str8("app.uniswap.org").u32(0).finish()),
-        Handled::Ethereum(Ethereum::Account { site: "app.uniswap.org".into(), index: 0 })
-    );
-    let piece = vec![0x02u8, 0xc0];
-    assert_eq!(
-        handled(&mut d, kind::ETH_SIGN_TX, Writer::new().str8("example.com").u32(1).u32(2).u32(0).bytes16(&piece).finish()),
-        Handled::Ethereum(Ethereum::Sign { site: "example.com".into(), index: 1, total: 2, offset: 0, data: piece })
-    );
-    assert_eq!(
-        handled(&mut d, kind::ETH_SIGNED, Writer::new().u32(4096).finish()),
-        Handled::Ethereum(Ethereum::Signed { offset: 4096 })
-    );
-    assert_eq!(
-        handled(&mut d, kind::ETH_SIGN_MESSAGE, Writer::new().str8("example.com").u32(0).bytes16(b"hi").finish()),
-        Handled::Ethereum(Ethereum::Message { site: "example.com".into(), index: 0, message: b"hi".to_vec() })
-    );
-    let piece = b"{\"types\":".to_vec();
-    assert_eq!(
-        handled(&mut d, kind::ETH_SIGN_TYPED, Writer::new().str8("app.uniswap.org").u32(0).u32(900).u32(0).bytes16(&piece).finish()),
-        Handled::Ethereum(Ethereum::Typed { site: "app.uniswap.org".into(), index: 0, total: 900, offset: 0, data: piece })
-    );
-}
-
-#[test]
-fn ethereum_requests_out_of_range_are_refused() {
-    let mut d = device();
-    let bad = [
-        (kind::ETH_ACCOUNT, Writer::new().str8("Example.COM").u32(0).finish()),
-        (kind::ETH_ACCOUNT, Writer::new().str8("example.com").u32(0x8000_0000).finish()),
-        (kind::ETH_SIGN_TX, Writer::new().str8("example.com").u32(0).u32(0).u32(0).bytes16(&[]).finish()),
-        (kind::ETH_SIGN_TX, Writer::new().str8("example.com").u32(0).u32(MAX_TX + 1).u32(0).bytes16(&[1]).finish()),
-        (kind::ETH_SIGN_TX, Writer::new().str8("example.com").u32(0).u32(10).u32(5).bytes16(&[0; 6]).finish()),
-        (kind::ETH_SIGN_MESSAGE, Writer::new().str8("example.com").u32(0).bytes16(&vec![0; MAX_MESSAGE + 1]).finish()),
-        (kind::ETH_SIGN_TYPED, Writer::new().str8("example.com").u32(0).u32(0).u32(0).bytes16(&[]).finish()),
-        (kind::ETH_SIGN_TYPED, Writer::new().str8("example.com").u32(0).u32(MAX_TYPED + 1).u32(0).bytes16(&[1]).finish()),
-        (kind::ETH_SIGN_TYPED, Writer::new().str8("example.com").u32(0).u32(10).u32(5).bytes16(&[0; 6]).finish()),
-        (kind::ETH_SIGN_TYPED, Writer::new().str8("Example.com").u32(0).u32(10).u32(0).bytes16(&[0; 6]).finish()),
-    ];
-    for (k, body) in bad {
-        let reply = ask(&mut d, k, body);
-        assert_eq!(error_code(&reply), ErrorCode::BadArgument as u8, "0x{k:02x}");
-    }
-}
-
-#[test]
-fn ethereum_replies_carry_only_what_the_answer_allows() {
-    let (k, body) = reply::eth_account(Approval::Denied, "0xabc");
-    assert_eq!(k, kind::ETH_ACCOUNT | kind::REPLY);
-    let mut r = Reader::new(&body);
-    assert_eq!((r.u8().unwrap(), r.str8().unwrap()), (Approval::Denied as u8, ""));
-    let (_, body) = reply::eth_message(Approval::TimedOut, &[1; 65]);
-    let mut r = Reader::new(&body);
-    assert_eq!((r.u8().unwrap(), r.bytes16().unwrap()), (Approval::TimedOut as u8, &[][..]));
-    let (_, body) = reply::eth_message(Approval::Approved, &[1; 65]);
-    let mut r = Reader::new(&body);
-    assert_eq!((r.u8().unwrap(), r.bytes16().unwrap().len()), (0, 65));
-    let (k, body) = reply::eth_typed(true, Approval::Approved, &[2; 65], "ignored");
-    assert_eq!(k, kind::ETH_SIGN_TYPED | kind::REPLY);
-    let mut r = Reader::new(&body);
-    assert_eq!(
-        (r.u8().unwrap(), r.u8().unwrap(), r.bytes16().unwrap().len(), r.str8().unwrap()),
-        (1, Approval::Approved as u8, 65, "")
-    );
-    let (_, body) = reply::eth_typed(true, Approval::Denied, &[2; 65], "");
-    let mut r = Reader::new(&body);
-    assert_eq!((r.u8().unwrap(), r.u8().unwrap(), r.bytes16().unwrap()), (1, Approval::Denied as u8, &[][..]));
-    let (_, body) = reply::eth_sign(true, Approval::Refused, 99, "maki doesn't sign blob transactions");
-    let mut r = Reader::new(&body);
-    assert_eq!(
-        (r.u8().unwrap(), r.u8().unwrap(), r.u32().unwrap(), r.str8().unwrap()),
-        (1, Approval::Refused as u8, 0, "maki doesn't sign blob transactions")
-    );
 }
 
 #[test]

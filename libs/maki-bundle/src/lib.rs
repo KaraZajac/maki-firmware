@@ -58,6 +58,12 @@ const FIELD_STORAGE: u8 = 9;
 const FIELD_MEMORY: u8 = 10;
 const FIELD_BACKUP: u8 = 11;
 const FIELD_DESCRIPTION: u8 = 12;
+/// The wallet permission's paths: the curve (1, secp256k1), how many, then each as its depth and
+/// that many little-endian u32s (a hardened one with the top bit set).
+const FIELD_WALLET: u8 = 13;
+
+/// A wallet app names at most this many derivation paths.
+pub const MAX_WALLET_PATHS: usize = 8;
 
 /// Longest app ID, in bytes: `maki.app.` and the ID must make a PDDB dictionary name.
 pub const MAX_ID: usize = 64;
@@ -91,16 +97,18 @@ pub enum Permission {
     Keyboard = 4,
     Camera = 5,
     Motion = 6,
+    Wallet = 7,
 }
 
 impl Permission {
-    pub const ALL: [Permission; 6] = [
+    pub const ALL: [Permission; 7] = [
         Permission::Ask,
         Permission::Link,
         Permission::Keys,
         Permission::Keyboard,
         Permission::Camera,
         Permission::Motion,
+        Permission::Wallet,
     ];
 
     pub fn from_u8(b: u8) -> Option<Permission> { Permission::ALL.iter().copied().find(|p| *p as u8 == b) }
@@ -114,6 +122,7 @@ impl Permission {
             Permission::Keyboard => "keyboard",
             Permission::Camera => "camera",
             Permission::Motion => "motion",
+            Permission::Wallet => "wallet",
         }
     }
 
@@ -128,6 +137,7 @@ impl Permission {
             Permission::Keyboard => "Type on your computer",
             Permission::Camera => "Use the camera",
             Permission::Motion => "Sense motion",
+            Permission::Wallet => "Sign for your wallets",
         }
     }
 
@@ -144,6 +154,9 @@ impl Permission {
             Permission::Keyboard => "It can type anything into your computer while it's open, commands included.",
             Permission::Camera => "It can see what the camera sees while it's open.",
             Permission::Motion => "It can read the accelerometer, which can pick up typing nearby.",
+            Permission::Wallet => {
+                "It can sign for the accounts named next, once you say yes on maki: it could spend what they hold."
+            }
         }
     }
 }
@@ -174,10 +187,50 @@ pub struct Manifest {
     pub backup: bool,
     /// For maki desktop to show. May be empty.
     pub description: String,
+    /// With the wallet permission: the derivation paths it may use (ARCHITECTURE.md, "Wallets
+    /// are apps").
+    pub wallet: Option<Wallet>,
 }
 
 impl Manifest {
     pub fn wants(&self, p: Permission) -> bool { self.permissions.iter().any(|(q, _)| *q == p) }
+}
+
+/// The curve a wallet's keys are on.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(u8)]
+pub enum Curve {
+    /// BIP32 on secp256k1: Bitcoin's, Ethereum's.
+    Secp256k1 = 1,
+}
+
+/// What a wallet app may use: paths on a curve, each a purpose and a coin type at least, both
+/// hardened, and everything under them.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Wallet {
+    pub curve: Curve,
+    pub paths: Vec<Vec<u32>>,
+}
+
+impl Wallet {
+    /// Whether the app may use `path`: it's under one of its paths.
+    pub fn allows(&self, path: &[u32]) -> bool { self.paths.iter().any(|p| maki_hd::under(path, p)) }
+
+    /// The coins its paths name (SLIP-44), each once, as the install screen says them: from the
+    /// paths themselves, never the app's say-so.
+    pub fn coins(&self) -> Vec<String> {
+        let mut out: Vec<String> = Vec::new();
+        for p in &self.paths {
+            let name = match maki_hd::coin(p) {
+                Some(n) => String::from(n),
+                None => alloc::format!("coin type {}", p[1] & !maki_hd::HARDENED),
+            };
+            if !out.contains(&name) {
+                out.push(name);
+            }
+        }
+        out
+    }
 }
 
 /// A bundle that `read` found well formed and signed by `developer`.
@@ -353,6 +406,7 @@ fn manifest(b: &[u8]) -> Result<Manifest, Error> {
     let (mut id, mut name, mut version, mut kind, mut storage, mut memory, mut backup) =
         (None, None, None, None, None, None, None);
     let (mut label, mut api, mut firmware, mut description) = (String::new(), 0u16, String::new(), String::new());
+    let mut wallet: Option<Wallet> = None;
     let mut permissions: Vec<(Permission, String)> = Vec::new();
     while !r.done() {
         let tag = r.u8()?;
@@ -434,10 +488,15 @@ fn manifest(b: &[u8]) -> Result<Manifest, Error> {
                 })
             }
             FIELD_DESCRIPTION => description = text(v, MAX_DESCRIPTION, "description")?,
+            FIELD_WALLET => wallet = Some(wallet_field(v)?),
             _ => return Err(Error::Manifest("a field this maki doesn't know")),
         }
     }
     let kind = kind.ok_or(Error::Manifest("no kind"))?;
+    // paths go with the wallet permission, and only with it
+    if wallet.is_some() != permissions.iter().any(|(p, _)| *p == Permission::Wallet) {
+        return Err(Error::Manifest("wallet paths without the wallet permission, or the other way round"));
+    }
     match kind {
         Kind::Wasm if api == 0 || !firmware.is_empty() => return Err(Error::Manifest("api")),
         Kind::Native if api != 0 || firmware.is_empty() => return Err(Error::Manifest("firmware")),
@@ -456,7 +515,39 @@ fn manifest(b: &[u8]) -> Result<Manifest, Error> {
         memory_kib: memory.ok_or(Error::Manifest("no memory"))?,
         backup: backup.ok_or(Error::Manifest("no backup"))?,
         description,
+        wallet,
     })
+}
+
+/// The wallet field: a curve maki knows, and 1 to `MAX_WALLET_PATHS` paths, each a purpose and a
+/// coin type at least (both hardened), none repeated.
+fn wallet_field(v: &[u8]) -> Result<Wallet, Error> {
+    let bad = || Error::Manifest("wallet paths");
+    let mut r = Reader { b: v, at: 0 };
+    let curve = match r.u8()? {
+        1 => Curve::Secp256k1,
+        _ => return Err(Error::Manifest("a wallet curve this maki doesn't know")),
+    };
+    let n = r.u8()? as usize;
+    if n == 0 || n > MAX_WALLET_PATHS {
+        return Err(bad());
+    }
+    let mut paths: Vec<Vec<u32>> = Vec::with_capacity(n);
+    for _ in 0..n {
+        let depth = r.u8()? as usize;
+        let mut path = Vec::with_capacity(depth);
+        for _ in 0..depth {
+            path.push(u32::from_le_bytes(r.take(4)?.try_into().unwrap()));
+        }
+        if !maki_hd::prefix_ok(&path) || paths.contains(&path) {
+            return Err(bad());
+        }
+        paths.push(path);
+    }
+    if !r.done() {
+        return Err(bad());
+    }
+    Ok(Wallet { curve, paths })
 }
 
 fn field(out: &mut Vec<u8>, tag: u8, v: &[u8]) {
@@ -491,6 +582,16 @@ pub fn encode_manifest(m: &Manifest) -> Vec<u8> {
     field(&mut out, FIELD_BACKUP, &[m.backup as u8]);
     if !m.description.is_empty() {
         field(&mut out, FIELD_DESCRIPTION, m.description.as_bytes());
+    }
+    if let Some(w) = &m.wallet {
+        let mut v = alloc::vec![w.curve as u8, w.paths.len() as u8];
+        for p in &w.paths {
+            v.push(p.len() as u8);
+            for i in p {
+                v.extend_from_slice(&i.to_le_bytes());
+            }
+        }
+        field(&mut out, FIELD_WALLET, &v);
     }
     out
 }

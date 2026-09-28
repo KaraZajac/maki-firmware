@@ -24,6 +24,16 @@ struct Record {
     replies: Vec<Vec<u8>>,
     qr: Option<String>,
     motion: Option<[i16; 3]>,
+    /// maki is locked: no wallet keys
+    locked: bool,
+    /// what wallet apps put on maki's review screen
+    reviews: Vec<Review>,
+}
+
+/// The BIP39 test phrase's seed: wallet apps' keys here, as on a maki set up with it.
+fn test_seed() -> [u8; 64] {
+    let words: Vec<&str> = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about".split(' ').collect();
+    maki_seed::seed(&words, "")
 }
 
 struct Script(Rc<RefCell<Record>>);
@@ -75,6 +85,19 @@ impl Platform for Script {
         }
         r.replies.push(reply.to_vec());
         true
+    }
+    fn wallet(&mut self, op: u8, path: &[u32], digest: &[u8]) -> Result<Vec<u8>, i32> {
+        if self.0.borrow().locked {
+            return Err(LOCKED);
+        }
+        let keys = maki_hd::seed::SeedKeys::from_seed(&test_seed()).unwrap();
+        // no randomness in Schnorr signatures: the same as maki-btc's fixtures
+        maki_hd::seed::answer(&keys, op, path, digest, &[0; 32]).map_err(|_| FAILED)
+    }
+    fn review(&mut self, review: &Review) -> Answer {
+        let mut r = self.0.borrow_mut();
+        r.reviews.push(review.clone());
+        r.answers.pop_front().unwrap_or(Answer::NoAnswer)
     }
 }
 
@@ -557,4 +580,216 @@ fn wifi_keeps_networks_from_the_camera_and_the_computer() {
     assert_eq!(replies, ["ok", "maki guests\nCafe;Bar\n", "that isn't a network: a WIFI: text with a name", "maki guests\n"]);
     // kept as its QR code had it, for the next time
     assert_eq!(r.storage.get("networks").unwrap(), b"WIFI:T:WPA;S:maki guests;P:correct horse;;\n");
+}
+
+/// A wallet app, run as maki runs it (its manifest's paths and all), on these messages and
+/// answers.
+fn run_wallet(name: &str, inbox: Vec<Vec<u8>>, answers: Vec<Answer>, locked: bool) -> Record {
+    let bytes = std::fs::read(format!("{}/tests/fixtures/{name}.maki", env!("CARGO_MANIFEST_DIR"))).unwrap();
+    let bundle = maki_bundle::read(&bytes).unwrap();
+    let record = Rc::new(RefCell::new(Record {
+        events: inbox.iter().map(|_| Event::Message).collect(),
+        inbox: inbox.into_iter().collect(),
+        answers: answers.into_iter().collect(),
+        locked,
+        ..Default::default()
+    }));
+    let loaded = load(&bundle.manifest, bundle.code).unwrap();
+    assert_eq!(loaded.run(Box::new(Script(record.clone()))), Stop::Finished);
+    Rc::try_unwrap(record).ok().unwrap().into_inner()
+}
+
+/// An answer's fields after the status: strings (a u16 length, then the bytes).
+fn texts(answer: &[u8]) -> Vec<String> {
+    let (mut out, mut at) = (Vec::new(), 1);
+    while at + 2 <= answer.len() {
+        let n = u16::from_le_bytes([answer[at], answer[at + 1]]) as usize;
+        out.push(String::from_utf8(answer[at + 2..at + 2 + n].to_vec()).unwrap());
+        at += 2 + n;
+    }
+    out
+}
+
+const BTC_FIXTURES: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../maki-btc/tests/fixtures");
+
+/// A PSBT sent to the Bitcoin app in pieces, as maki desktop sends it: `P` messages, then the
+/// signed one fetched with `G`s (the number of those is a guess: enough for these fixtures).
+fn psbt_messages(network: u8, psbt: &[u8], fetches: usize) -> Vec<Vec<u8>> {
+    let mut out = Vec::new();
+    for (i, piece) in psbt.chunks(4000).enumerate() {
+        let mut m = vec![b'P', network];
+        m.extend_from_slice(&(psbt.len() as u32).to_le_bytes());
+        m.extend_from_slice(&((i * 4000) as u32).to_le_bytes());
+        m.extend_from_slice(piece);
+        out.push(m);
+    }
+    for i in 0..fetches {
+        let mut m = vec![b'G'];
+        m.extend_from_slice(&((i * 4000) as u32).to_le_bytes());
+        out.push(m);
+    }
+    out
+}
+
+/// The signed PSBT the `G` answers put together.
+fn fetched(replies: &[Vec<u8>]) -> Vec<u8> {
+    let mut out = Vec::new();
+    for r in replies {
+        assert_eq!(r[0], 0);
+        let total = u32::from_le_bytes(r[1..5].try_into().unwrap()) as usize;
+        let offset = u32::from_le_bytes(r[5..9].try_into().unwrap()) as usize;
+        assert_eq!(offset, out.len());
+        out.extend_from_slice(&r[9..]);
+        if out.len() == total {
+            break;
+        }
+    }
+    out
+}
+
+#[test]
+fn bitcoin_shares_its_account_and_compares_addresses_once_asked() {
+    // BIP84's test vectors: the account key and first address the phrase makes everywhere
+    let r = run_wallet("bitcoin", vec![vec![b'A', 0, 0], vec![b'A', 0, 0], vec![b'D', 0, 0, 0, 0, 0, 0, 0]], vec![Answer::Yes, Answer::No, Answer::Yes], false);
+    assert_eq!(r.replies[0][0], 0);
+    let [zpub, descriptor] = <[String; 2]>::try_from(texts(&r.replies[0])).unwrap();
+    assert_eq!(zpub, "zpub6rFR7y4Q2AijBEqTUquhVz398htDFrtymD9xYYfG1m4wAcvPhXNfE3EfH1r1ADqtfSdVCToUG868RvUUkgDKf31mGDtKsAYz2oz2AGutZYs");
+    assert!(descriptor.starts_with("wpkh([73c5da0a/84h/0h/0h]xpub"), "{descriptor}");
+    assert_eq!(r.reviews[0].question, "Share account?");
+    assert_eq!(r.replies[1], [1], "the owner said no: nothing");
+    assert_eq!(r.replies[2][0], 0);
+    assert_eq!(texts(&r.replies[2]), ["bc1qcr8te4kr609gcawutmrza0j4xv80jy8z306fyu"]);
+    assert_eq!(r.reviews[2].question, "Same on computer?");
+    assert_eq!(r.reviews[2].pages[0].mono.replace('\n', ""), "bc1qcr8te4kr609gcawutmrza0j4xv80jy8z306fyu");
+    // taproot's first address (BIP86's vector), and a locked maki
+    let r = run_wallet("bitcoin", vec![vec![b'D', 0, 1, 0, 0, 0, 0, 0]], vec![Answer::Yes], false);
+    assert_eq!(texts(&r.replies[0]), ["bc1p5cyxnuxmeuwuvkwfem96lqzszd02n6xdcjrs20cac6yqjjwudpxqkedrcr"]);
+    let r = run_wallet("bitcoin", vec![vec![b'A', 0, 0]], vec![Answer::Yes], true);
+    assert_eq!(r.replies[0], [3]);
+    assert!(r.reviews.is_empty());
+}
+
+#[test]
+fn bitcoin_signs_what_the_owner_reviewed_as_maki_always_has() {
+    for (unsigned, signed) in [("abandon-unsigned.psbt", "abandon-signed.psbt"), ("abandon-taproot-unsigned.psbt", "abandon-taproot-signed.psbt")] {
+        let psbt = std::fs::read(format!("{BTC_FIXTURES}/{unsigned}")).unwrap();
+        let expected = std::fs::read(format!("{BTC_FIXTURES}/{signed}")).unwrap();
+        let fetches = expected.len().div_ceil(4000);
+        let pieces = psbt.len().div_ceil(4000);
+        let r = run_wallet("bitcoin", psbt_messages(0, &psbt, fetches), vec![Answer::Yes], false);
+        for more in &r.replies[..pieces - 1] {
+            assert_eq!(more, &[6], "{unsigned}: a piece taken");
+        }
+        let done = &r.replies[pieces - 1];
+        assert_eq!((done[0], u32::from_le_bytes(done[1..5].try_into().unwrap()) as usize), (0, expected.len()), "{unsigned}");
+        // the very bytes maki's wallet code signs: rust-bitcoin's, byte for byte
+        assert_eq!(fetched(&r.replies[pieces..]), expected, "{unsigned}");
+        let review = &r.reviews[0];
+        assert_eq!(review.question, "Sign and spend");
+        // each payment, the change and the fee (this fixture's is flagged: 24 sat/vB)
+        let headings: Vec<&str> = review.pages.iter().map(|p| p.heading.as_str()).collect();
+        assert!(headings.contains(&"Change") && (headings.contains(&"Fee") || headings.contains(&"High fee!")), "{headings:?}");
+        assert_eq!(review.timeout_s, 300);
+    }
+    // a no signs nothing, and there's nothing to fetch
+    let psbt = std::fs::read(format!("{BTC_FIXTURES}/abandon-unsigned.psbt")).unwrap();
+    let r = run_wallet("bitcoin", psbt_messages(0, &psbt, 1), vec![Answer::No], false);
+    assert_eq!(r.replies[psbt.len().div_ceil(4000) - 1], [1]);
+    assert_eq!(r.replies.last().unwrap(), &[4]);
+    // on the test networks' accounts it isn't this wallet's, and says why
+    let r = run_wallet("bitcoin", psbt_messages(1, &psbt, 0), vec![Answer::Yes], false);
+    let last = r.replies.last().unwrap();
+    assert_eq!(last[0], 5);
+    assert!(texts(last)[0].contains("isn't this wallet's"), "{:?}", texts(last));
+    assert!(r.reviews.is_empty(), "nothing shown for what can't be signed");
+    // what isn't a PSBT
+    let r = run_wallet("bitcoin", psbt_messages(0, b"not a psbt", 0), vec![], false);
+    assert!(texts(&r.replies[0])[0].starts_with("not a PSBT maki can read"));
+}
+
+const ETH_FIXTURES: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../maki-eth/tests/fixtures");
+
+/// The Ethereum app's header for account `index` from `site`, after the message's kind.
+fn eth_head(kind: u8, index: u32, site: &str) -> Vec<u8> {
+    let mut m = vec![kind];
+    m.extend_from_slice(&index.to_le_bytes());
+    m.push(site.len() as u8);
+    m.extend_from_slice(site.as_bytes());
+    m
+}
+
+/// A transaction (`T`) or typed data (`Y`) in pieces, as maki desktop sends them.
+fn eth_pieces(kind: u8, site: &str, bytes: &[u8]) -> Vec<Vec<u8>> {
+    let mut out = Vec::new();
+    for (i, piece) in bytes.chunks(4000).enumerate() {
+        let mut m = vec![kind];
+        m.extend_from_slice(&0u32.to_le_bytes());
+        m.extend_from_slice(&(bytes.len() as u32).to_le_bytes());
+        m.extend_from_slice(&((i * 4000) as u32).to_le_bytes());
+        m.push(site.len() as u8);
+        m.extend_from_slice(site.as_bytes());
+        m.extend_from_slice(piece);
+        out.push(m);
+    }
+    out
+}
+
+#[test]
+fn ethereum_connects_sites_the_owner_lets_in() {
+    let r = run_wallet("ethereum", vec![eth_head(b'A', 0, "app.example"), eth_head(b'A', 0, "app.example")], vec![Answer::Yes, Answer::No], false);
+    // MetaMask's and Ledger's first account for the phrase
+    assert_eq!(r.replies[0][0], 0);
+    assert_eq!(texts(&r.replies[0]), ["0x9858EfFD232B4033E47d90003D41EC34EcaEda94"]);
+    assert_eq!(r.reviews[0].question, "Connect wallet?");
+    assert_eq!((r.reviews[0].pages[0].heading.as_str(), r.reviews[0].pages[0].mono.as_str()), ("Asked by", "app.example"));
+    assert_eq!(r.replies[1], [1]);
+    let r = run_wallet("ethereum", vec![eth_head(b'A', 0, "app.example")], vec![Answer::Yes], true);
+    assert_eq!(r.replies[0], [3], "locked");
+    // what maki shows must mean what it says: plain hostnames only, as for logins
+    for site in ["App.Example", "аpp.example", "app..example", ".example", "app example"] {
+        let r = run_wallet("ethereum", vec![eth_head(b'A', 0, site)], vec![Answer::Yes], false);
+        assert_eq!(r.replies[0], [4], "{site}");
+        assert!(r.reviews.is_empty(), "{site}");
+    }
+}
+
+#[test]
+fn ethereum_signs_what_the_owner_read_as_maki_always_has() {
+    // a sign-in message: the signature maki's code makes, and alloy agrees
+    let sig = std::fs::read(format!("{ETH_FIXTURES}/abandon-message.sig")).unwrap();
+    let message = [eth_head(b'M', 0, "demo.maki"), b"Sign in to demo.maki".to_vec()].concat();
+    // and one that's a sign-in for another site than the one asking
+    let phish = [eth_head(b'M', 0, "demo.maki"), b"evil.example wants you to sign in with your Ethereum account:\n0x9858".to_vec()].concat();
+    let r = run_wallet("ethereum", vec![message, phish], vec![Answer::Yes, Answer::No], false);
+    assert_eq!(r.replies[0], [&[0u8][..], &sig].concat());
+    assert_eq!(r.reviews[0].question, "Sign message?");
+    assert_eq!(r.reviews[1].pages[1].heading, "Wrong site!");
+    assert_eq!(r.replies[1], [1]);
+
+    // a transaction: pieces, then the signed one fetched
+    let unsigned = std::fs::read(format!("{ETH_FIXTURES}/abandon-tx-unsigned.bin")).unwrap();
+    let signed = std::fs::read(format!("{ETH_FIXTURES}/abandon-tx-signed.bin")).unwrap();
+    let mut inbox = eth_pieces(b'T', "demo.maki", &unsigned);
+    let pieces = inbox.len();
+    for i in 0..signed.len().div_ceil(4000) {
+        inbox.push([&[b'G'][..], &((i * 4000) as u32).to_le_bytes()].concat());
+    }
+    let r = run_wallet("ethereum", inbox, vec![Answer::Yes], false);
+    let done = &r.replies[pieces - 1];
+    assert_eq!((done[0], u32::from_le_bytes(done[1..5].try_into().unwrap()) as usize), (0, signed.len()));
+    assert_eq!(fetched(&r.replies[pieces..]), signed);
+    assert_eq!(r.reviews[0].question, "Sign and send");
+    assert_eq!(r.reviews[0].pages[0].mono, "demo.maki");
+
+    // typed data (a permit): its signature, from the values shown
+    let json = std::fs::read(format!("{ETH_FIXTURES}/abandon-typed.json")).unwrap();
+    let sig = std::fs::read(format!("{ETH_FIXTURES}/abandon-typed.sig")).unwrap();
+    let r = run_wallet("ethereum", eth_pieces(b'Y', "demo.maki", &json), vec![Answer::Yes], false);
+    assert_eq!(r.replies.last().unwrap(), &[&[0u8][..], &sig].concat());
+    assert!(r.reviews[0].pages.len() > 1);
+
+    // what isn't a transaction: refused, with why, and nothing shown
+    let r = run_wallet("ethereum", eth_pieces(b'T', "demo.maki", b"\x02not rlp"), vec![], false);
+    assert_eq!(r.replies[0][0], 5);
+    assert!(r.reviews.is_empty());
 }

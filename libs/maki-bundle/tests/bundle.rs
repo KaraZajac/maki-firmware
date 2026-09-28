@@ -21,7 +21,58 @@ fn dice() -> Manifest {
         memory_kib: 128,
         backup: true,
         description: "Rolls dice.".into(),
+        wallet: None,
     }
+}
+
+const H: u32 = 0x8000_0000;
+
+/// A wallet app's manifest: Bitcoin's paths, on bitcoin and the test networks.
+fn wallet_app() -> Manifest {
+    Manifest {
+        id: "org.example.wallet".into(),
+        name: "Wallet".into(),
+        permissions: vec![(Permission::Link, "for wallet software".into()), (Permission::Wallet, "to sign what you approve".into())],
+        wallet: Some(Wallet { curve: Curve::Secp256k1, paths: vec![vec![84 | H, H], vec![86 | H, H], vec![84 | H, 1 | H]] }),
+        ..dice()
+    }
+}
+
+#[test]
+fn a_wallet_app_names_its_paths() {
+    let bundle = write(&wallet_app(), CODE, None, &key()).unwrap();
+    let back = read(&bundle).unwrap();
+    assert_eq!(back.manifest, wallet_app());
+    let w = back.manifest.wallet.unwrap();
+    assert!(w.allows(&[84 | H, H, H, 0, 5]));
+    assert!(w.allows(&[86 | H, H]));
+    assert!(!w.allows(&[86 | H, 1 | H, H]), "not a path it named");
+    assert!(!w.allows(&[44 | H, 60 | H, H, 0, 0]));
+    assert!(!w.allows(&[84 | H]), "above its paths");
+    assert_eq!(w.coins(), vec!["Bitcoin", "test networks"]);
+    let odd = Wallet { curve: Curve::Secp256k1, paths: vec![vec![44 | H, 60 | H], vec![44 | H, 9999 | H]] };
+    assert_eq!(odd.coins(), vec!["Ethereum", "coin type 9999"]);
+}
+
+#[test]
+fn wallet_paths_go_with_the_wallet_permission_and_are_checked() {
+    let bad = |m: Manifest| assert!(write(&m, CODE, None, &key()).is_err(), "{:?}", m.wallet);
+    // the permission without paths, and paths without the permission
+    bad(Manifest { wallet: None, ..wallet_app() });
+    bad(Manifest { permissions: vec![(Permission::Link, "because".into())], ..wallet_app() });
+    let paths = |paths: Vec<Vec<u32>>| Manifest { wallet: Some(Wallet { curve: Curve::Secp256k1, paths }), ..wallet_app() };
+    // a purpose alone would be every coin under it; the whole tree, everything
+    bad(paths(vec![vec![84 | H]]));
+    bad(paths(vec![vec![]]));
+    // both hardened
+    bad(paths(vec![vec![84 | H, 0]]));
+    bad(paths(vec![vec![84, H]]));
+    // none, too many, or one twice
+    bad(paths(vec![]));
+    bad(paths((0..=MAX_WALLET_PATHS as u32).map(|c| vec![84 | H, c | H]).collect()));
+    bad(paths(vec![vec![84 | H, H], vec![84 | H, H]]));
+    // deeper paths are fine: an account alone
+    assert!(write(&paths(vec![vec![44 | H, 60 | H, H]]), CODE, None, &key()).is_ok());
 }
 
 const CODE: &[u8] = b"\0asm\x01\0\0\0";
@@ -227,7 +278,10 @@ fn permissions_know_their_names() {
         assert!(!p.title().is_empty() && p.warning().ends_with('.'));
     }
     assert_eq!(Permission::from_u8(0), None);
-    assert_eq!(Permission::from_name("wallet"), None);
+    // no permission gives an app the recovery phrase, or the PIN
+    assert_eq!(Permission::from_name("phrase"), None);
+    assert_eq!(Permission::from_name("pin"), None);
+    assert_eq!(Permission::from_u8(8), None);
 }
 
 #[test]

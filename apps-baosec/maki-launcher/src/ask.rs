@@ -185,8 +185,17 @@ impl Prompt {
         let mut y = screen.bar + 4;
 
         if let Stop::Page { heading, value, rows } = &self.stops[self.selected] {
-            screen.titled_bar(heading, &countdown, linked);
-            screen.time_left(left_ms, total_ms);
+            if self.req.app != 0 {
+                // an app's page (a wallet app's review): under its own bar, which it can't draw,
+                // its heading below, so its words can't pass for maki's own screens
+                screen.app_bar(&self.req.subject, &countdown, self.req.app == ASK_APP_SIDELOADED);
+                screen.time_left(left_ms, total_ms);
+                screen.text(y, SMALL_LINE, GlyphStyle::Small, false, false, heading);
+                y += SMALL_LINE + 2;
+            } else {
+                screen.titled_bar(heading, &countdown, linked);
+                screen.time_left(left_ms, total_ms);
+            }
             if !value.is_empty() {
                 screen.text(y, LINE, GlyphStyle::Bold, false, false, value);
                 y += LINE + 2;

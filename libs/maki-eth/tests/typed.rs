@@ -3,6 +3,10 @@
 
 use maki_eth::display::{self, Page};
 use maki_eth::{keccak256, Account, TypedData};
+use maki_hd::seed::OneKey;
+
+/// One bare private key, as other software makes them, at every path.
+fn one(secret: &[u8; 32]) -> &'static OneKey { Box::leak(Box::new(OneKey::new(secret).unwrap())) }
 
 fn hex(b: &[u8]) -> String { b.iter().map(|x| format!("{:02x}", x)).collect() }
 
@@ -45,7 +49,7 @@ fn the_spec_example_hashes_and_signs_as_the_spec_says() {
     assert_eq!(hex(&td.domain_separator().unwrap()), "f2cee375fa42b42143804025fc449deafd50cc031ca257e0b194a650a912090f");
     assert_eq!(hex(&td.signing_hash().unwrap()), "be609aee343fb3c4b28e1df9e632fca64fcfaede20f02e86244efddf30957bd2");
     // the spec's key: keccak256("cow"), whose address is Cow's
-    let cow = Account::from_private_key(&keccak256(b"cow")).unwrap();
+    let cow = Account::new(one(&keccak256(b"cow")), 0).unwrap();
     assert_eq!(cow.address_string(), "0xCD2a3d9F938E13CD947Ec05AbC7FE734Df8DD826");
     let sig = cow.sign_typed(&td).unwrap();
     assert_eq!(hex(&sig[..32]), "4355c47d63924e8a72e509b65029052eb6c299d53a04e167c5775fd466751c9d");
@@ -152,7 +156,7 @@ fn typed_data_of_every_shape_hashes_as_alloy_hashes_it() {
 
 #[test]
 fn signatures_recover_to_the_account() {
-    let account = Account::from_private_key(&[7u8; 32]).unwrap();
+    let account = Account::new(one(&[7u8; 32]), 0).unwrap();
     for json in shapes() {
         let td = TypedData::parse(&json).unwrap();
         let sig = account.sign_typed(&td).unwrap();

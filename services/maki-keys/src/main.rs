@@ -8,8 +8,6 @@
 //! The secret basis gets a fresh random name at each setup: after a wipe, the old one can't be
 //! opened (its key is gone), and its name mustn't collide with the new one.
 
-mod bitcoin;
-mod ethereum;
 mod passkeys;
 
 use std::io::{Read, Write};
@@ -153,7 +151,7 @@ fn open(key: &[u8; 32], blob: &[u8]) -> Option<Vec<u8>> {
 }
 
 /// The BIP39 seed, made once per unlock and kept until Lock: PBKDF2 over the phrase is slow on
-/// maki's core, and the wallet, the Ethereum account, the passkeys' keys and the backup key all
+/// maki's core, and wallet apps' keys, apps' secrets, the passkeys' keys and the backup key all
 /// start from it.
 struct SeedCache(Option<[u8; 64]>);
 
@@ -355,6 +353,16 @@ impl Lock {
         let wrapped = take(n)?.to_vec();
         Some(Lock { basis, rounds, salt, nonce, wrapped })
     }
+}
+
+/// A wallet op on the keys (`KeysOp::Wallet`). Every path starts with a hardened purpose and
+/// coin type (the app host holds each app to its own paths too); the fingerprint's takes none.
+fn wallet_op(keys: &maki_hd::seed::SeedKeys, op: u8, path: &[u32], digest: &[u8]) -> Result<Vec<u8>, maki_hd::Error> {
+    if op != WALLET_FINGERPRINT && (!maki_hd::prefix_ok(&path[..path.len().min(2)]) || path.len() > maki_hd::MAX_DEPTH) {
+        return Err(maki_hd::Error::Path);
+    }
+    // fresh randomness in each Schnorr signature, as BIP340 advises
+    maki_hd::seed::answer(keys, op, path, digest, &random())
 }
 
 fn random<const N: usize>() -> [u8; N] {
@@ -589,9 +597,9 @@ fn main() -> ! {
     let mut sealed: Option<Vec<u8>> = None;
     let mut incoming: Vec<u8> = Vec::new();
     let mut incoming_total: u32 = 0;
-    let mut btc = bitcoin::Btc::new();
-    let mut eth = ethereum::Eth::new();
     let mut seed = SeedCache(None);
+    // wallet apps' keys (maki_hd), from the seed, while unlocked
+    let mut wallet: Option<maki_hd::seed::SeedKeys> = None;
     // bumped when a restore writes to the FIDO store behind the vault's back
     let generation = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
     // who's waiting for the secrets to open (and whether for the phrase too): see `WaitUnlocked`
@@ -783,62 +791,6 @@ fn main() -> ! {
                     }
                 });
             }
-            // nothing of the Ethereum account's before the PIN
-            Some(KeysOp::EthAccount) if state != State::Unlocked => {
-                let Some(mem) = msg.body.memory_message_mut() else { continue };
-                let mut buffer = unsafe { Buffer::from_memory_message_mut(mem) };
-                if let Ok(mut req) = buffer.to_original::<EthRequest, _>() {
-                    req.result = RESULT_NOT_NOW;
-                    buffer.replace(req).ok();
-                }
-            }
-            Some(KeysOp::EthMessage) if state != State::Unlocked => {
-                let Some(mem) = msg.body.memory_message_mut() else { continue };
-                let mut buffer = unsafe { Buffer::from_memory_message_mut(mem) };
-                if let Ok(mut req) = buffer.to_original::<EthMessage, _>() {
-                    req.message.clear();
-                    req.result = RESULT_NOT_NOW;
-                    buffer.replace(req).ok();
-                }
-            }
-            Some(KeysOp::EthSign | KeysOp::EthTyped) if state != State::Unlocked => {
-                let Some(mem) = msg.body.memory_message_mut() else { continue };
-                let mut buffer = unsafe { Buffer::from_memory_message_mut(mem) };
-                if let Ok(mut req) = buffer.to_original::<Chunk, _>() {
-                    req.data.clear();
-                    req.result = RESULT_NOT_NOW;
-                    req.done = true;
-                    buffer.replace(req).ok();
-                }
-            }
-            Some(KeysOp::EthAccount) => eth.share_account(msg, seed.get(&store, state)),
-            Some(KeysOp::EthMessage) => eth.sign_message(msg, seed.get(&store, state)),
-            Some(KeysOp::EthSign) => eth.sign_piece(msg, || seed.get(&store, state)),
-            Some(KeysOp::EthSigned) => eth.signed_piece(&mut msg),
-            Some(KeysOp::EthTyped) => eth.typed_piece(msg, || seed.get(&store, state)),
-            // nothing of the wallet's before the PIN
-            Some(KeysOp::BtcAccount | KeysOp::BtcAddress) if state != State::Unlocked => {
-                let Some(mem) = msg.body.memory_message_mut() else { continue };
-                let mut buffer = unsafe { Buffer::from_memory_message_mut(mem) };
-                if let Ok(mut req) = buffer.to_original::<Wallet, _>() {
-                    req.result = RESULT_NOT_NOW;
-                    buffer.replace(req).ok();
-                }
-            }
-            Some(KeysOp::BtcSign) if state != State::Unlocked => {
-                let Some(mem) = msg.body.memory_message_mut() else { continue };
-                let mut buffer = unsafe { Buffer::from_memory_message_mut(mem) };
-                if let Ok(mut req) = buffer.to_original::<Chunk, _>() {
-                    req.data.clear();
-                    req.result = RESULT_NOT_NOW;
-                    req.done = true;
-                    buffer.replace(req).ok();
-                }
-            }
-            Some(KeysOp::BtcAccount) => btc.share_account(msg, seed.get(&store, state)),
-            Some(KeysOp::BtcAddress) => btc.address(msg, seed.get(&store, state)),
-            Some(KeysOp::BtcSign) => btc.sign_piece(msg, || seed.get(&store, state)),
-            Some(KeysOp::BtcSigned) => btc.signed_piece(&mut msg),
             Some(KeysOp::FidoStoreChanged) => {
                 generation.fetch_add(1, Ordering::SeqCst);
             }
@@ -882,6 +834,36 @@ fn main() -> ! {
                 };
                 buffer.replace(req).ok();
             }
+            Some(KeysOp::Wallet) => {
+                let Some(mem) = msg.body.memory_message_mut() else { continue };
+                let mut buffer = unsafe { Buffer::from_memory_message_mut(mem) };
+                let Ok(mut req) = buffer.to_original::<WalletRequest, _>() else { continue };
+                req.answer.clear();
+                let authorized = apps.is_some() && msg.sender.pid() == apps;
+                req.result = if !authorized {
+                    RESULT_NOT_NOW
+                } else {
+                    if wallet.is_none() {
+                        if let Some(mut s) = seed.get(&store, state) {
+                            wallet = maki_hd::seed::SeedKeys::from_seed(&s).ok();
+                            s.zeroize();
+                        }
+                    }
+                    match &wallet {
+                        None if state == State::Unlocked => RESULT_NO_PHRASE,
+                        None => RESULT_NOT_NOW,
+                        Some(keys) => match wallet_op(keys, req.op, &req.path, &req.digest) {
+                            Ok(answer) => {
+                                req.answer = answer;
+                                RESULT_OK
+                            }
+                            Err(maki_hd::Error::Path) => RESULT_REFUSED,
+                            Err(_) => RESULT_FAILED,
+                        },
+                    }
+                };
+                buffer.replace(req).ok();
+            }
             Some(KeysOp::FidoKeys) => {
                 let Some(mem) = msg.body.memory_message_mut() else { continue };
                 let mut buffer = unsafe { Buffer::from_memory_message_mut(mem) };
@@ -913,8 +895,7 @@ fn main() -> ! {
             Some(op @ (KeysOp::NewPhrase | KeysOp::RestorePhrase)) => {
                 // whatever was derived before comes from another phrase, if any
                 seed.forget();
-                btc.forget();
-                eth.forget();
+                wallet = None;
                 let Some(mem) = msg.body.memory_message_mut() else { continue };
                 let mut buffer = unsafe { Buffer::from_memory_message_mut(mem) };
                 let Ok(mut req) = buffer.to_original::<PhraseRequest, _>() else { continue };
@@ -1026,8 +1007,7 @@ fn main() -> ! {
                             if let Some(mut b) = sealed.take() {
                                 b.zeroize();
                             }
-                            btc.forget();
-                            eth.forget();
+                            wallet = None;
                             seed.forget();
                             state = State::Unset;
                             (RESULT_WIPED, 0)
@@ -1049,8 +1029,7 @@ fn main() -> ! {
                             if let Some(mut b) = sealed.take() {
                                 b.zeroize();
                             }
-                            btc.forget();
-                            eth.forget();
+                            wallet = None;
                             seed.forget();
                             log::info!("locked");
                             true

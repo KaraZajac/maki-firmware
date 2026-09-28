@@ -25,25 +25,6 @@ pub mod kind {
     pub const BACKUP_GET: u8 = 0x20;
     /// A piece of a backup to restore; the last is answered once the owner decides.
     pub const BACKUP_PUT: u8 = 0x21;
-    /// The Bitcoin account for wallet software, once the owner agrees.
-    pub const BTC_ACCOUNT: u8 = 0x30;
-    /// An address, put on maki's screen for the owner to compare.
-    pub const BTC_ADDRESS: u8 = 0x31;
-    /// A piece of a PSBT to sign; the last is answered once the owner decides.
-    pub const BTC_SIGN: u8 = 0x32;
-    /// A piece of the PSBT maki signed.
-    pub const BTC_SIGNED: u8 = 0x33;
-    /// The Ethereum account's address, once the owner lets the site connect.
-    pub const ETH_ACCOUNT: u8 = 0x40;
-    /// A piece of an Ethereum transaction to sign; the last is answered once the owner decides.
-    pub const ETH_SIGN_TX: u8 = 0x41;
-    /// A piece of the transaction maki signed.
-    pub const ETH_SIGNED: u8 = 0x42;
-    /// A message to sign (EIP-191 personal_sign), answered once the owner decides.
-    pub const ETH_SIGN_MESSAGE: u8 = 0x43;
-    /// A piece of typed data to sign (EIP-712 `eth_signTypedData_v4`, JSON); the last is
-    /// answered, with the signature, once the owner decides.
-    pub const ETH_SIGN_TYPED: u8 = 0x44;
     /// The apps installed on maki, one per request.
     pub const APP_LIST: u8 = 0x50;
     /// A piece of a `.maki` bundle to install; the last is answered once the owner decides.

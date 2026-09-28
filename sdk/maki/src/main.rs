@@ -458,6 +458,10 @@ fn inspect(path: &Path) -> Result<(), String> {
             println!("                the developer says: \"{reason}\"");
         }
     }
+    if let Some(w) = &m.wallet {
+        let paths: Vec<String> = w.paths.iter().map(|p| maki_hd::format_path(p)).collect();
+        println!("  wallet        {}: {}", w.coins().join(", "), paths.join(", "));
+    }
     let hash: String = b.hash.iter().map(|x| format!("{x:02x}")).collect();
     println!("  sha-256       {hash}");
     if let Some(icon) = &b.icon {
@@ -482,7 +486,8 @@ fn run(args: &Args) -> Result<(), String> {
                 .into(),
         );
     }
-    let limits = maki_wasm::admit(&m, b.code).map_err(|e| format!("maki wouldn't run it: {e}"))?;
+    // loaded as maki loads it: the manifest's wallet paths come with it
+    let loaded = maki_wasm::load(&m, b.code).map_err(|e| format!("maki wouldn't run it: {e}"))?;
     let options = sim::Options {
         presses: args.value("--press").map(sim::parse_presses).transpose()?,
         shot: args.value("--shot").map(PathBuf::from),
@@ -504,7 +509,7 @@ fn run(args: &Args) -> Result<(), String> {
         crossterm::terminal::enable_raw_mode().map_err(|e| format!("terminal: {e}"))?;
         print!("\x1b[2J\x1b[?25l");
     }
-    let stop = maki_wasm::run(b.code, Box::new(sim), limits);
+    let stop = loaded.run(Box::new(sim));
     if interactive {
         crossterm::terminal::disable_raw_mode().ok();
         print!("\x1b[?25h");

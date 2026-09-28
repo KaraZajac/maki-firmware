@@ -8,11 +8,10 @@ description = "maki's serial protocol: framing, messages, and the device-side lo
 roughtime = { path = "../roughtime" }
 
 [dev-dependencies]
-# fake_maki computes real TOTP codes, the way the vault does, and signs with maki's wallet code
+# fake_maki computes real TOTP codes, the way the vault does, and makes wallet apps' keys as maki-keys does
 hmac = "0.12.1"
 sha1 = "0.10.6"
-maki-btc = { path = "../maki-btc" }
-maki-eth = { path = "../maki-eth" }
+maki-hd = { path = "../maki-hd", features = ["seed"] }
 maki-seed = { path = "../maki-seed" }
 # and checks app bundles as maki's app host does
 maki-bundle = { path = "../maki-bundle" }

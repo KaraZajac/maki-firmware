@@ -12,8 +12,7 @@ use std::sync::{Arc, Mutex};
 
 use maki_app_host_api as app_host;
 use maki_proto::device::{
-    reply, AppEntry, AppSpace, Apps, Approval, Ask, Backup, Bitcoin, Device, Ethereum, Handled, Platform, StoreState, TimeState,
-    ACCOUNT_TAPROOT,
+    reply, AppEntry, AppSpace, Apps, Approval, Ask, Backup, Device, Handled, Platform, StoreState, TimeState,
 };
 use maki_proto::frame::{self, Deframer};
 use num_traits::ToPrimitive;
@@ -58,13 +57,11 @@ fn unavailable(ask: &Ask) -> (u8, Vec<u8>) { refused(ask, Approval::Unavailable)
 fn locked(ask: &Ask) -> (u8, Vec<u8>) { refused(ask, Approval::Locked) }
 
 /// What the worker does: a request for the owner, the last piece of a restore (which asks the
-/// owner too), a wallet request that waits for them, an app to install or remove, or a message
-/// for an app (which may ask the owner before it answers).
+/// owner too), an app to install or remove, or a message for an app (which may ask the owner
+/// before it answers: wallet apps among them).
 enum Work {
     Ask(u16, Ask),
     Restore { id: u16, total: u32, offset: u32, data: Vec<u8> },
-    Bitcoin(u16, Bitcoin),
-    Ethereum(u16, Ethereum),
     AppInstall { id: u16, total: u32, offset: u32, data: Vec<u8> },
     AppRemove { id: u16, app: String },
     AppMessage { id: u16, app: String, message: Vec<u8> },
@@ -177,18 +174,6 @@ fn vault_worker(work: mpsc::Receiver<Work>, waiting: Arc<AtomicU32>, send_lock: 
                 send(&usb, &send_lock, &frame::encode(kind, id, &body));
                 continue;
             }
-            Work::Bitcoin(id, request) => {
-                let (kind, body) = bitcoin(&keys, request);
-                waiting.fetch_sub(1, Ordering::SeqCst);
-                send(&usb, &send_lock, &frame::encode(kind, id, &body));
-                continue;
-            }
-            Work::Ethereum(id, request) => {
-                let (kind, body) = ethereum(&keys, request);
-                waiting.fetch_sub(1, Ordering::SeqCst);
-                send(&usb, &send_lock, &frame::encode(kind, id, &body));
-                continue;
-            }
             Work::AppInstall { id, total, offset, data } => {
                 let (kind, body) = app_install(app_host::AppHost::try_new(&xns), total, offset, data);
                 waiting.fetch_sub(1, Ordering::SeqCst);
@@ -230,74 +215,6 @@ fn vault_worker(work: mpsc::Receiver<Work>, waiting: Arc<AtomicU32>, send_lock: 
         };
         waiting.fetch_sub(1, Ordering::SeqCst);
         send(&usb, &send_lock, &frame::encode(kind, id, &body));
-    }
-}
-
-/// A Bitcoin request, through maki-keys, which asks the owner where it must.
-fn bitcoin(keys: &maki_keys::Keys, request: Bitcoin) -> (u8, Vec<u8>) {
-    match request {
-        Bitcoin::Account { network, account } => {
-            let w = keys.btc_account(network, account == ACCOUNT_TAPROOT, true);
-            reply::btc_account(approval(w.result), &w.text, &w.descriptor)
-        }
-        Bitcoin::Address { network, change, index, account } => {
-            let w = keys.btc_address(network, account == ACCOUNT_TAPROOT, change, index, true);
-            reply::btc_address(approval(w.result), &w.text)
-        }
-        Bitcoin::Sign { network, total, offset, data } => {
-            let c = keys.btc_sign_chunk(network, total, offset, data);
-            reply::btc_sign(c.done, approval(c.result), if c.done { c.total } else { 0 }, &c.reason)
-        }
-        Bitcoin::Signed { offset } => {
-            let c = keys.btc_signed_chunk(offset);
-            reply::btc_signed(approval(c.result), c.total, offset, &c.data)
-        }
-    }
-}
-
-/// An Ethereum request, through maki-keys, which asks the owner.
-fn ethereum(keys: &maki_keys::Keys, request: Ethereum) -> (u8, Vec<u8>) {
-    match request {
-        Ethereum::Account { site, index } => {
-            let r = keys.eth_account(&site, index, true);
-            reply::eth_account(approval(r.result), &r.address)
-        }
-        Ethereum::Sign { site, index, total, offset, data } => {
-            let c = keys.eth_sign_chunk(&site, index, total, offset, data);
-            reply::eth_sign(c.done, approval(c.result), if c.done { c.total } else { 0 }, &c.reason)
-        }
-        Ethereum::Signed { offset } => {
-            let c = keys.eth_signed_chunk(offset);
-            reply::eth_signed(approval(c.result), c.total, offset, &c.data)
-        }
-        Ethereum::Message { site, index, message } => {
-            let m = keys.eth_message(&site, index, &message);
-            reply::eth_message(approval(m.result), &m.signature)
-        }
-        Ethereum::Typed { site, index, total, offset, data } => {
-            let c = keys.eth_typed_chunk(&site, index, total, offset, data);
-            reply::eth_typed(c.done, approval(c.result), &c.data, &c.reason)
-        }
-    }
-}
-
-/// Whether an Ethereum request waits for the owner: then the worker takes it.
-fn eth_waits(request: &Ethereum) -> bool {
-    match request {
-        Ethereum::Account { .. } | Ethereum::Message { .. } => true,
-        Ethereum::Sign { total, offset, data, .. } | Ethereum::Typed { total, offset, data, .. } => {
-            *offset as usize + data.len() >= *total as usize
-        }
-        Ethereum::Signed { .. } => false,
-    }
-}
-
-/// Whether a request waits for the owner: then the worker takes it.
-fn waits(request: &Bitcoin) -> bool {
-    match request {
-        Bitcoin::Account { .. } | Bitcoin::Address { .. } => true,
-        Bitcoin::Sign { total, offset, data, .. } => *offset as usize + data.len() >= *total as usize,
-        Bitcoin::Signed { .. } => false,
     }
 }
 
@@ -650,6 +567,137 @@ fn main() -> ! {
         });
     }
 
+    // The wallets: built with MAKI_DEMO_WALLET, once maki has its PIN and phrase, maki-link
+    // installs the SDK's Bitcoin and Ethereum apps (each asks, with a page for each permission;
+    // the wallet's names the accounts it may sign for), then does what maki desktop does with
+    // them: shares the Bitcoin account, shows address #0 to compare, has the fixture PSBT
+    // reviewed and signed and checks it against the one maki's wallet code makes on a computer,
+    // then the same for the taproot account; then connects a site, demo.maki, to the Ethereum
+    // app, and has it sign a message, a transaction (0.05 ETH on Ethereum) and typed data (a
+    // permit to spend 1 USDC), each checked the same way. The fixtures belong to the BIP39 test
+    // phrase: restore that at setup. It logs `demo wallet ...` lines.
+    if option_env!("MAKI_DEMO_WALLET").is_some() {
+        std::thread::spawn(|| {
+            const BTC: &str = "com.leviathan.maki.bitcoin";
+            const ETH: &str = "com.leviathan.maki.ethereum";
+            let host = demo_host();
+            let bundles: [(&str, &[u8]); 2] = [
+                ("bitcoin", include_bytes!("../../../libs/maki-wasm/tests/fixtures/bitcoin.maki")),
+                ("ethereum", include_bytes!("../../../libs/maki-wasm/tests/fixtures/ethereum.maki")),
+            ];
+            for (name, bytes) in bundles {
+                let r = demo_install(&host, bytes);
+                log::warn!("demo wallet install {name}: result {} '{}'", r.result, r.reason);
+            }
+            // an answer's strings, after its status: each a u16 length, then the bytes
+            let texts = |a: &[u8]| -> Vec<String> {
+                let (mut out, mut i) = (Vec::new(), 1);
+                while let Some(n) = a.get(i..i + 2).map(|n| u16::from_le_bytes([n[0], n[1]]) as usize) {
+                    let Some(s) = a.get(i + 2..i + 2 + n) else { break };
+                    out.push(String::from_utf8_lossy(s).into_owned());
+                    i += 2 + n;
+                }
+                out
+            };
+            let ask = |id: &str, m: Vec<u8>| {
+                let r = host.message(id, m);
+                if r.result == app_host::RESULT_OK { r.answer } else { vec![0xf0 | r.result as u8] }
+            };
+            // something big, in the pieces maki desktop sends: `head`, the total and the
+            // offset, `tail`, then the piece; the last piece's answer
+            let pieces = |id: &str, head: &[u8], tail: &[u8], bytes: &[u8]| -> Vec<u8> {
+                let mut last = Vec::new();
+                for (i, piece) in bytes.chunks(4000).enumerate() {
+                    let mut m = head.to_vec();
+                    m.extend_from_slice(&(bytes.len() as u32).to_le_bytes());
+                    m.extend_from_slice(&((i * 4000) as u32).to_le_bytes());
+                    m.extend_from_slice(tail);
+                    m.extend_from_slice(piece);
+                    last = ask(id, m);
+                    // 6: taken, send the next
+                    if last.first() != Some(&6) {
+                        break;
+                    }
+                }
+                last
+            };
+            // what was signed, fetched a piece at a time: None if it wasn't
+            let signed = |id: &str, answer: &[u8]| -> Option<Vec<u8>> {
+                let total = match answer {
+                    [0, n @ ..] if n.len() == 4 => u32::from_le_bytes(n.try_into().unwrap()) as usize,
+                    _ => return None,
+                };
+                let mut out = Vec::new();
+                while out.len() < total {
+                    let a = ask(id, [&[b'G'][..], &(out.len() as u32).to_le_bytes()].concat());
+                    if a.len() <= 9 || a[0] != 0 {
+                        return None;
+                    }
+                    out.extend_from_slice(&a[9..]);
+                }
+                Some(out)
+            };
+
+            let unsigned: &[u8] = include_bytes!("../../../libs/maki-btc/tests/fixtures/abandon-unsigned.psbt");
+            let expected: &[u8] = include_bytes!("../../../libs/maki-btc/tests/fixtures/abandon-signed.psbt");
+            let tap_unsigned: &[u8] = include_bytes!("../../../libs/maki-btc/tests/fixtures/abandon-taproot-unsigned.psbt");
+            let tap_expected: &[u8] = include_bytes!("../../../libs/maki-btc/tests/fixtures/abandon-taproot-signed.psbt");
+            // taproot's signatures take fresh randomness: compare all but them (a key
+            // signature's pair: key 0x13, 64 bytes)
+            let blank = |b: &[u8]| {
+                let (mut v, mut i) = (b.to_vec(), 0);
+                while i + 3 + 64 <= v.len() {
+                    if v[i..i + 3] == [0x01, 0x13, 0x40] {
+                        v[i + 3..i + 3 + 64].fill(0);
+                        i += 3 + 64;
+                    } else {
+                        i += 1;
+                    }
+                }
+                v
+            };
+            for (kind, name, unsigned, expected) in [(0u8, "", unsigned, expected), (1, " taproot", tap_unsigned, tap_expected)] {
+                let a = ask(BTC, vec![b'A', 0, kind]);
+                log::warn!("demo wallet btc{name} account: status {:?} {:?}", a.first(), texts(&a));
+                let a = ask(BTC, [&[b'D', 0, kind, 0][..], &0u32.to_le_bytes()].concat());
+                log::warn!("demo wallet btc{name} address: status {:?} {:?}", a.first(), texts(&a));
+                let a = pieces(BTC, &[b'P', 0], &[], unsigned);
+                // 5: refused, with why
+                let why = if a.first() == Some(&5) { texts(&a) } else { Vec::new() };
+                log::warn!("demo wallet btc{name} sign: status {:?} {why:?}", a.first());
+                if let Some(s) = signed(BTC, &a) {
+                    log::warn!(
+                        "demo wallet btc{name} signed: {} bytes, as expected: {}, but for fresh signatures: {}",
+                        s.len(),
+                        s == expected,
+                        blank(&s) == blank(expected)
+                    );
+                }
+            }
+
+            let tx: &[u8] = include_bytes!("../../../libs/maki-eth/tests/fixtures/abandon-tx-unsigned.bin");
+            let tx_signed: &[u8] = include_bytes!("../../../libs/maki-eth/tests/fixtures/abandon-tx-signed.bin");
+            let message_sig: &[u8] = include_bytes!("../../../libs/maki-eth/tests/fixtures/abandon-message.sig");
+            let typed: &[u8] = include_bytes!("../../../libs/maki-eth/tests/fixtures/abandon-typed.json");
+            let typed_sig: &[u8] = include_bytes!("../../../libs/maki-eth/tests/fixtures/abandon-typed.sig");
+            // account 0, and the site asking
+            let head = |kind: u8| [&[kind][..], &0u32.to_le_bytes()].concat();
+            let site = [&[9u8][..], b"demo.maki"].concat();
+            let a = ask(ETH, [head(b'A'), site.clone()].concat());
+            log::warn!("demo wallet eth account: status {:?} {:?}", a.first(), texts(&a));
+            let a = ask(ETH, [head(b'M'), site.clone(), b"Sign in to demo.maki".to_vec()].concat());
+            log::warn!("demo wallet eth message: status {:?}, as expected: {}", a.first(), a.get(1..) == Some(message_sig));
+            let a = pieces(ETH, &head(b'T'), &site, tx);
+            let why = if a.first() == Some(&5) { texts(&a) } else { Vec::new() };
+            log::warn!("demo wallet eth sign: status {:?} {why:?}", a.first());
+            if let Some(s) = signed(ETH, &a) {
+                log::warn!("demo wallet eth signed: {} bytes, as expected: {}", s.len(), s == tx_signed);
+            }
+            let a = pieces(ETH, &head(b'Y'), &site, typed);
+            log::warn!("demo wallet eth typed: status {:?}, as expected: {}", a.first(), a.get(1..) == Some(typed_sig));
+        });
+    }
+
     // The clock: built with MAKI_DEMO_CLOCK, maki-link sets maki's clock at boot to a fixed
     // evening, as maki desktop would (Sunday 27 September 2026, 22:38 at UTC-4), and calls it
     // verified: the bar's clock and the screensaver have a time to show.
@@ -724,127 +772,6 @@ fn main() -> ! {
         });
     }
 
-    // The emulator again: built with MAKI_DEMO_BTC, once maki is unlocked with a phrase, go
-    // through what the desktop's wallet section does, as maki-link would for it: share the
-    // account, show an address, and sign a PSBT, then check the signature against the one maki's
-    // wallet code makes on a computer; then the same for the taproot account. The PSBTs are the
-    // test phrase's ("abandon" eleven times, then "about"): restore that phrase at setup, or
-    // signing is refused as not this wallet's.
-    if option_env!("MAKI_DEMO_BTC").is_some() {
-        std::thread::spawn(|| {
-            let unsigned: &[u8] = include_bytes!("../../../libs/maki-btc/tests/fixtures/abandon-unsigned.psbt");
-            let expected: &[u8] = include_bytes!("../../../libs/maki-btc/tests/fixtures/abandon-signed.psbt");
-            let tap_unsigned: &[u8] = include_bytes!("../../../libs/maki-btc/tests/fixtures/abandon-taproot-unsigned.psbt");
-            let tap_expected: &[u8] = include_bytes!("../../../libs/maki-btc/tests/fixtures/abandon-taproot-signed.psbt");
-            let xns = xous_names::XousNames::new().unwrap();
-            let keys = maki_keys::Keys::new(&xns).expect("maki-keys");
-            let tt = ticktimer_server::Ticktimer::new().unwrap();
-            while !(keys.status().0 == maki_keys::State::Unlocked && keys.has_phrase()) {
-                tt.sleep_ms(500).ok();
-            }
-            tt.sleep_ms(3_000).ok();
-            // a PSBT through maki-keys in pieces, and the signed one back: None if not signed
-            let sign = |unsigned: &[u8], what: &str| -> Option<Vec<u8>> {
-                let mut c = maki_keys::Chunk::default();
-                let mut offset = 0;
-                while offset < unsigned.len() {
-                    let end = (offset + maki_keys::CHUNK).min(unsigned.len());
-                    c = keys.btc_sign_chunk(
-                        maki_keys::NETWORK_BITCOIN,
-                        unsigned.len() as u32,
-                        offset as u32,
-                        unsigned[offset..end].to_vec(),
-                    );
-                    offset = end;
-                    if c.done {
-                        break;
-                    }
-                }
-                log::warn!("demo btc {what}: result {} total {} reason '{}'", c.result, c.total, c.reason);
-                if c.result != maki_keys::RESULT_OK {
-                    return None;
-                }
-                let mut signed = Vec::new();
-                while signed.len() < c.total as usize {
-                    let p = keys.btc_signed_chunk(signed.len() as u32);
-                    if p.result != maki_keys::RESULT_OK || p.data.is_empty() {
-                        break;
-                    }
-                    signed.extend_from_slice(&p.data);
-                }
-                Some(signed)
-            };
-            let w = keys.btc_account(maki_keys::NETWORK_BITCOIN, false, true);
-            log::warn!("demo btc account: result {} {} {}", w.result, w.text, w.descriptor);
-            let w = keys.btc_address(maki_keys::NETWORK_BITCOIN, false, false, 0, true);
-            log::warn!("demo btc address: result {} {}", w.result, w.text);
-            if let Some(signed) = sign(unsigned, "sign") {
-                log::warn!("demo btc signed: {} bytes, as expected: {}", signed.len(), signed == expected);
-            }
-            let w = keys.btc_account(maki_keys::NETWORK_BITCOIN, true, true);
-            log::warn!("demo btc taproot account: result {} {}", w.result, w.descriptor);
-            let w = keys.btc_address(maki_keys::NETWORK_BITCOIN, true, false, 0, true);
-            log::warn!("demo btc taproot address: result {} {}", w.result, w.text);
-            if let Some(signed) = sign(tap_unsigned, "taproot sign") {
-                // taproot's signatures take fresh randomness: the same as the fixture's but for
-                // them (a key signature's pair: key 0x13, 64 bytes)
-                let blank = |b: &[u8]| {
-                    let mut v = b.to_vec();
-                    let mut i = 0;
-                    while i + 3 + 64 <= v.len() {
-                        if v[i..i + 3] == [0x01, 0x13, 0x40] {
-                            v[i + 3..i + 3 + 64].fill(0);
-                            i += 3 + 64;
-                        } else {
-                            i += 1;
-                        }
-                    }
-                    v
-                };
-                let fresh = signed != tap_expected;
-                log::warn!(
-                    "demo btc taproot signed: {} bytes, as expected but for its signatures: {}, fresh signatures: {}",
-                    signed.len(),
-                    blank(&signed) == blank(tap_expected),
-                    fresh
-                );
-            }
-        });
-    }
-
-    // The emulator again: built with MAKI_DEMO_ETH, once maki is unlocked with a phrase, do what
-    // the browser extension's Ethereum provider does for a site, "demo.maki": connect, sign a
-    // message, sign a transaction (0.05 ETH on Ethereum), and sign typed data (a permit for 1
-    // USDC), then check the signatures against the ones maki's code makes on a computer for the
-    // BIP39 test phrase: restore that at setup.
-    if option_env!("MAKI_DEMO_ETH").is_some() {
-        std::thread::spawn(|| {
-            let unsigned: &[u8] = include_bytes!("../../../libs/maki-eth/tests/fixtures/abandon-tx-unsigned.bin");
-            let expected: &[u8] = include_bytes!("../../../libs/maki-eth/tests/fixtures/abandon-tx-signed.bin");
-            let expected_sig: &[u8] = include_bytes!("../../../libs/maki-eth/tests/fixtures/abandon-message.sig");
-            let xns = xous_names::XousNames::new().unwrap();
-            let keys = maki_keys::Keys::new(&xns).expect("maki-keys");
-            let tt = ticktimer_server::Ticktimer::new().unwrap();
-            while !(keys.status().0 == maki_keys::State::Unlocked && keys.has_phrase()) {
-                tt.sleep_ms(500).ok();
-            }
-            tt.sleep_ms(3_000).ok();
-            let a = keys.eth_account("demo.maki", 0, true);
-            log::warn!("demo eth account: result {} {}", a.result, a.address);
-            let m = keys.eth_message("demo.maki", 0, b"Sign in to demo.maki");
-            log::warn!("demo eth message: result {}, as expected: {}", m.result, m.signature == expected_sig);
-            let c = keys.eth_sign_chunk("demo.maki", 0, unsigned.len() as u32, 0, unsigned.to_vec());
-            log::warn!("demo eth sign: result {} total {} reason '{}'", c.result, c.total, c.reason);
-            if c.result == maki_keys::RESULT_OK {
-                let p = keys.eth_signed_chunk(0);
-                log::warn!("demo eth signed: {} bytes, as expected: {}", p.data.len(), p.data == expected);
-            }
-            let typed: &[u8] = include_bytes!("../../../libs/maki-eth/tests/fixtures/abandon-typed.json");
-            let typed_sig: &[u8] = include_bytes!("../../../libs/maki-eth/tests/fixtures/abandon-typed.sig");
-            let t = keys.eth_typed_chunk("demo.maki", 0, typed.len() as u32, 0, typed.to_vec());
-            log::warn!("demo eth typed: result {}, as expected: {} reason '{}'", t.result, t.data == typed_sig, t.reason);
-        });
-    }
 
     let usb = usb_bao1x::UsbHid::new();
     let mut deframer = Deframer::default();
@@ -922,51 +849,6 @@ fn main() -> ! {
                                         waiting.fetch_sub(1, Ordering::SeqCst);
                                         unavailable
                                     }
-                                }
-                            }
-                        }
-                        Handled::Bitcoin(request) if !waits(&request) => bitcoin(&keys, request),
-                        Handled::Bitcoin(request) => {
-                            if waiting.fetch_add(1, Ordering::SeqCst) >= MAX_WAITING_ASKS {
-                                waiting.fetch_sub(1, Ordering::SeqCst);
-                                log::warn!("too many requests waiting on the owner");
-                                match request {
-                                    Bitcoin::Account { .. } => reply::btc_account(Approval::Unavailable, "", ""),
-                                    Bitcoin::Address { .. } => reply::btc_address(Approval::Unavailable, ""),
-                                    _ => reply::btc_sign(true, Approval::Unavailable, 0, ""),
-                                }
-                            } else {
-                                match to_vault.send(Work::Bitcoin(packet.id, request)) {
-                                    Ok(()) => continue,
-                                    Err(_) => {
-                                        log::error!("the worker is gone");
-                                        waiting.fetch_sub(1, Ordering::SeqCst);
-                                        reply::btc_sign(true, Approval::Unavailable, 0, "")
-                                    }
-                                }
-                            }
-                        }
-                        Handled::Ethereum(request) if !eth_waits(&request) => ethereum(&keys, request),
-                        Handled::Ethereum(request) => {
-                            let busy = |request: &Ethereum| match request {
-                                Ethereum::Account { .. } => reply::eth_account(Approval::Unavailable, ""),
-                                Ethereum::Message { .. } => reply::eth_message(Approval::Unavailable, &[]),
-                                Ethereum::Typed { .. } => reply::eth_typed(true, Approval::Unavailable, &[], ""),
-                                _ => reply::eth_sign(true, Approval::Unavailable, 0, ""),
-                            };
-                            if waiting.fetch_add(1, Ordering::SeqCst) >= MAX_WAITING_ASKS {
-                                waiting.fetch_sub(1, Ordering::SeqCst);
-                                log::warn!("too many requests waiting on the owner");
-                                busy(&request)
-                            } else {
-                                match to_vault.send(Work::Ethereum(packet.id, request)) {
-                                    Ok(()) => continue,
-                                    Err(mpsc::SendError(Work::Ethereum(_, request))) => {
-                                        log::error!("the worker is gone");
-                                        waiting.fetch_sub(1, Ordering::SeqCst);
-                                        busy(&request)
-                                    }
-                                    Err(_) => unreachable!(),
                                 }
                             }
                         }

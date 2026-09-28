@@ -292,6 +292,16 @@ fn install(w: &Worker, bytes: Vec<u8>) -> (u32, String) {
             prose.push_str(&format!("\n\nThe developer says: \"{reason}\""));
         }
         pages.push(Page { heading: "It asks to".into(), value: p.title().into(), mono: String::new(), prose });
+        // the accounts the wallet permission's warning names next: the coins from the paths
+        // themselves, never the app's say-so
+        if let (maki_bundle::Permission::Wallet, Some(w)) = (p, &m.wallet) {
+            pages.push(Page {
+                heading: "Its accounts".into(),
+                value: w.coins().join(", "),
+                mono: w.paths.iter().map(|p| maki_hd::format_path(p)).collect::<Vec<_>>().join("\n"),
+                prose: "From your recovery phrase, where other wallets find them too.".into(),
+            });
+        }
     }
     pages.push(Page {
         heading: "It needs".into(),

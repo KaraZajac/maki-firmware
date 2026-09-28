@@ -8,6 +8,7 @@ use std::panic::{catch_unwind, AssertUnwindSafe};
 use maki_btc::psbt::Psbt;
 use maki_btc::tx::Tx;
 use maki_btc::{wallet, Account, Network};
+use maki_hd::seed::SeedKeys;
 
 struct Rng(u64);
 impl Rng {
@@ -48,13 +49,16 @@ fn mutate(rng: &mut Rng, base: &[u8]) -> Vec<u8> {
     b
 }
 
+/// maki's keys for a seed, for as long as the tests run.
+fn keys(seed: &[u8]) -> &'static SeedKeys { Box::leak(Box::new(SeedKeys::from_seed(seed).unwrap())) }
+
 const FIXTURES: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures");
 
 #[test]
 fn nothing_the_computer_sends_panics_the_wallet() {
     let words: Vec<&str> =
         "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about".split(' ').collect();
-    let account = Account::from_seed(&maki_seed::seed(&words, ""), Network::Bitcoin).unwrap();
+    let account = Account::segwit(keys(&maki_seed::seed(&words, "")), Network::Bitcoin).unwrap();
     let unsigned = std::fs::read(format!("{FIXTURES}/abandon-unsigned.psbt")).unwrap();
     let signed = std::fs::read(format!("{FIXTURES}/abandon-signed.psbt")).unwrap();
     let mut rng = Rng(0x9e37_79b9_7f4a_7c15);
@@ -73,7 +77,7 @@ fn nothing_the_computer_sends_panics_the_wallet() {
                 if wallet::review(&psbt, std::slice::from_ref(&account)).is_ok() {
                     reviewed += 1;
                 }
-                let _ = wallet::sign(&mut psbt, std::slice::from_ref(&account), &[0; 32]);
+                let _ = wallet::sign(&mut psbt, std::slice::from_ref(&account));
             }
         }));
         assert!(outcome.is_ok(), "panicked on {:02x?}", input);

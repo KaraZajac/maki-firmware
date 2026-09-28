@@ -1,6 +1,6 @@
 //! maki-keys: the boot PIN, and the secrets it guards (ARCHITECTURE.md, "Boot PIN").
 //!
-//! maki's secrets (the vault's passwords and codes, passkeys, the wallet) live in a PDDB secret
+//! maki's secrets (the vault's passwords and codes, passkeys, the recovery phrase) live in a PDDB secret
 //! basis. A random 32-byte key opens it; that key is kept wrapped under one derived from the PIN,
 //! so a PIN can be checked, and changed, without touching the basis. Five wrong PINs in a row
 //! destroy the wrapped key: the basis can't be opened again, and maki is set up anew. The launcher
@@ -41,17 +41,6 @@ pub enum KeysOp {
     /// Memory message (mutable lend) with a `Chunk`: a piece of a backup to restore. The last
     /// piece opens it, asks the owner on screen, and adds what maki doesn't have.
     RestoreChunk = 8,
-    /// Memory message (mutable lend) with a `Wallet`: the Bitcoin account for wallet software
-    /// (its zpub and descriptor). With `ask`, once the owner agrees on screen.
-    BtcAccount = 9,
-    /// Memory message (mutable lend) with a `Wallet`: an address. With `ask`, it's put on screen
-    /// for the owner to compare with the computer's, and the answer says whether it matched.
-    BtcAddress = 10,
-    /// Memory message (mutable lend) with a `Chunk`: a piece of a PSBT to sign. The last piece
-    /// checks it, shows the owner what it does, and signs it if they say so.
-    BtcSign = 11,
-    /// Memory message (mutable lend) with a `Chunk`: a piece of the PSBT last signed.
-    BtcSigned = 12,
     /// Memory message (mutable lend) with a `PinRequest` (`pin` the current one, `new_pin`),
     /// from the screen, while unlocked. A wrong current PIN counts toward the wipe.
     ChangePin = 13,
@@ -65,18 +54,6 @@ pub enum KeysOp {
     /// Scalar: something changed the FIDO store behind the vault's back (the Passkeys app
     /// deleted one): bumps the store generation in `Status`, so the vault re-reads it.
     FidoStoreChanged = 16,
-    /// Memory message (mutable lend) with an `EthRequest`: the Ethereum account's address. With
-    /// `ask`, once the owner lets the site connect.
-    EthAccount = 17,
-    /// Memory message (mutable lend) with a `Chunk` (`site`, `index` set): a piece of an Ethereum
-    /// transaction to sign. The last piece checks it, shows the owner what it does, and signs it
-    /// if they say so.
-    EthSign = 18,
-    /// Memory message (mutable lend) with a `Chunk`: a piece of the transaction last signed.
-    EthSigned = 19,
-    /// Memory message (mutable lend) with an `EthMessage`: a message (EIP-191) to sign, once the
-    /// owner has read it on screen.
-    EthMessage = 20,
     /// Blocking scalar: answered once the secrets are open, and with `arg1` = 1, once there's a
     /// recovery phrase too. Held rather than polled for.
     WaitUnlocked = 21,
@@ -90,37 +67,15 @@ pub enum KeysOp {
     /// from the recovery phrase (`maki_seed::app_secret`), for the app host, once there's a
     /// phrase and maki is unlocked.
     AppSecret = 24,
-    /// Memory message (mutable lend) with a `Chunk` (`site`, `index` set): a piece of typed data
-    /// (EIP-712, JSON) to sign. The last piece reads it, shows the owner what it says, and signs
-    /// it if they say so: `data` then holds the 65-byte signature.
-    EthTyped = 25,
     /// Blocking scalar: this maki's name, a maki roll it picked the first time it started
     /// (`maki_proto::names`), which it keeps through wipes. Returns its length and its bytes in
     /// four words, little-endian.
     DeviceName = 26,
-}
-
-/// A question about the Ethereum account, and its answer.
-#[derive(Debug, Default, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
-pub struct EthRequest {
-    /// who asks: shown to the owner
-    pub site: String,
-    /// the account, `m/44'/60'/0'/0/index`
-    pub index: u32,
-    pub ask: bool,
-    pub result: u32,
-    /// EIP-55
-    pub address: String,
-}
-
-/// A message to sign, and its signature (r, s, v: 65 bytes).
-#[derive(Debug, Default, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
-pub struct EthMessage {
-    pub site: String,
-    pub index: u32,
-    pub message: Vec<u8>,
-    pub result: u32,
-    pub signature: Vec<u8>,
+    /// Memory message (mutable lend) with a `WalletRequest`: a wallet app's key at a path, or a
+    /// signature with it (ARCHITECTURE.md, "Wallets are apps"). Only for the app host, which holds
+    /// each app to the paths its manifest names and signs only after the owner's yes; here, every
+    /// path must start with a hardened purpose and coin type. Once unlocked with a phrase.
+    Wallet = 27,
 }
 
 /// `FidoKeys`' answer: `keys` is 128 bytes (encryption, authentication, CredRandom).
@@ -130,60 +85,45 @@ pub struct FidoSecret {
     pub keys: Vec<u8>,
 }
 
-/// Backups and PSBTs travel in pieces this big, here and over USB.
+/// Backups travel in pieces this big, here and over USB.
 pub const CHUNK: usize = 4096;
 /// Bigger than any vault maki could hold, and a bound on what a restore will take in.
 pub const MAX_BACKUP: usize = 512 * 1024;
-/// The biggest PSBT maki takes in.
-pub const MAX_PSBT: usize = 512 * 1024;
-/// The biggest Ethereum transaction maki takes in.
-pub const MAX_TX: usize = 128 * 1024;
 
-/// A piece of a backup or a PSBT, either way. On the way back: `result` (`RESULT_*`), `total`,
-/// and for a finished restore, what it added; for a finished signing, the signed PSBT's size.
+/// A piece of a backup, either way. On the way back: `result` (`RESULT_*`), `total`, and for a
+/// finished restore, what it added.
 #[derive(Debug, Default, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
 pub struct Chunk {
     pub offset: u32,
     pub total: u32,
     pub data: Vec<u8>,
     pub result: u32,
-    /// a restore or a signing: whether that was the last piece
+    /// a restore: whether that was the last piece
     pub done: bool,
     pub logins: u32,
     pub codes: u32,
     pub passkeys: u32,
-    /// a PSBT: `NETWORK_*`
-    pub network: u8,
-    /// a PSBT or transaction refused (`RESULT_REFUSED`): why, for the computer to show
-    pub reason: String,
-    /// an Ethereum transaction: the site asking, and the account
-    pub site: String,
-    pub index: u32,
 }
 
-/// Bitcoin itself, and its test networks (testnet, signet), which share addresses.
-pub const NETWORK_BITCOIN: u8 = 0;
-pub const NETWORK_TESTNET: u8 = 1;
+/// `WalletRequest::op`: what's wanted of the key at `path` (`maki_hd::op`).
+pub const WALLET_FINGERPRINT: u8 = 0;
+pub const WALLET_PUBLIC: u8 = 1;
+pub const WALLET_UNCOMPRESSED: u8 = 2;
+pub const WALLET_TAPROOT: u8 = 3;
+pub const WALLET_SIGN_ECDSA: u8 = 4;
+pub const WALLET_SIGN_SCHNORR: u8 = 5;
+pub const WALLET_SIGN_TAPROOT: u8 = 6;
 
-/// A question about the Bitcoin account, and its answer.
+/// A wallet app's request, through the app host, and its answer (`answer`, when `result` is
+/// `RESULT_OK`).
 #[derive(Debug, Default, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
-pub struct Wallet {
-    /// `NETWORK_*`
-    pub network: u8,
-    /// the taproot account (BIP86) rather than the native SegWit one (BIP84)
-    pub taproot: bool,
-    /// an address: on the change chain or the receiving one, at this index
-    pub change: bool,
-    pub index: u32,
-    /// Ask the owner first: for what goes to the computer. An app on maki that shows the answer
-    /// on maki's own screen doesn't. (Every process on maki is maki's own firmware; third-party
-    /// apps will need this narrowed.)
-    pub ask: bool,
+pub struct WalletRequest {
+    pub op: u8,
+    pub path: Vec<u32>,
+    /// 32 bytes, to sign
+    pub digest: Vec<u8>,
     pub result: u32,
-    /// the account's zpub, or the address
-    pub text: String,
-    /// the account's output descriptor
-    pub descriptor: String,
+    pub answer: Vec<u8>,
 }
 
 /// A recovery phrase, one way or the other, and what became of it (`RESULT_*`).
@@ -382,38 +322,6 @@ impl Keys {
         self.chunk_call(KeysOp::RestoreChunk, Chunk { offset, total, data, ..Default::default() })
     }
 
-    fn wallet_call(&self, op: KeysOp, request: Wallet) -> Wallet {
-        let failed = Wallet { result: RESULT_FAILED, ..Default::default() };
-        let Ok(mut buf) = Buffer::into_buf(request) else { return failed };
-        if buf.lend_mut(self.conn, op.to_u32().unwrap()).is_err() {
-            return failed;
-        }
-        buf.to_original::<Wallet, _>().unwrap_or(failed)
-    }
-
-    /// The Bitcoin account's zpub (`text`) and descriptor. With `ask`, once the owner agrees,
-    /// blocking while they decide.
-    pub fn btc_account(&self, network: u8, taproot: bool, ask: bool) -> Wallet {
-        self.wallet_call(KeysOp::BtcAccount, Wallet { network, taproot, ask, ..Default::default() })
-    }
-
-    /// An address (`text`). With `ask`, the owner compares it on screen first (blocking while
-    /// they do), and `result` says whether it matched.
-    pub fn btc_address(&self, network: u8, taproot: bool, change: bool, index: u32, ask: bool) -> Wallet {
-        self.wallet_call(KeysOp::BtcAddress, Wallet { network, taproot, change, index, ask, ..Default::default() })
-    }
-
-    /// A piece of a PSBT to sign. The last one blocks while the owner reviews it; its answer's
-    /// `total` is the signed PSBT's size, or `reason` says why it was refused.
-    pub fn btc_sign_chunk(&self, network: u8, total: u32, offset: u32, data: Vec<u8>) -> Chunk {
-        self.chunk_call(KeysOp::BtcSign, Chunk { offset, total, data, network, ..Default::default() })
-    }
-
-    /// A piece of the PSBT last signed, from `offset`.
-    pub fn btc_signed_chunk(&self, offset: u32) -> Chunk {
-        self.chunk_call(KeysOp::BtcSigned, Chunk { offset, ..Default::default() })
-    }
-
     /// Take the FIDO authenticator's role (the vault, at boot). See `KeysOp::ClaimFido`.
     pub fn claim_fido(&self) -> bool {
         matches!(
@@ -455,46 +363,17 @@ impl Keys {
         (answer.result == RESULT_OK && answer.keys.len() == 128).then_some(answer.keys)
     }
 
-    /// The Ethereum account's address (`address`). With `ask`, once the owner lets `site`
-    /// connect, blocking while they decide.
-    pub fn eth_account(&self, site: &str, index: u32, ask: bool) -> EthRequest {
-        let failed = EthRequest { result: RESULT_FAILED, ..Default::default() };
-        let Ok(mut buf) = Buffer::into_buf(EthRequest { site: site.into(), index, ask, ..Default::default() }) else {
-            return failed;
-        };
-        if buf.lend_mut(self.conn, KeysOp::EthAccount.to_u32().unwrap()).is_err() {
-            return failed;
+    /// A wallet app's key at `path`, or a signature over `digest` with it (`WALLET_*`), for the
+    /// app host: the answer's bytes, or a `RESULT_*` code.
+    pub fn wallet(&self, op: u8, path: &[u32], digest: &[u8]) -> Result<Vec<u8>, u32> {
+        let request = WalletRequest { op, path: path.to_vec(), digest: digest.to_vec(), result: RESULT_FAILED, answer: Vec::new() };
+        let mut buf = Buffer::into_buf(request).map_err(|_| RESULT_FAILED)?;
+        buf.lend_mut(self.conn, KeysOp::Wallet.to_u32().unwrap()).map_err(|_| RESULT_FAILED)?;
+        let answer = buf.to_original::<WalletRequest, _>().map_err(|_| RESULT_FAILED)?;
+        match answer.result {
+            RESULT_OK => Ok(answer.answer),
+            code => Err(code),
         }
-        buf.to_original::<EthRequest, _>().unwrap_or(failed)
-    }
-
-    /// A piece of an Ethereum transaction to sign. The last blocks while the owner reviews it; its
-    /// answer's `total` is the signed transaction's size, or `reason` says why it was refused.
-    pub fn eth_sign_chunk(&self, site: &str, index: u32, total: u32, offset: u32, data: Vec<u8>) -> Chunk {
-        self.chunk_call(KeysOp::EthSign, Chunk { offset, total, data, site: site.into(), index, ..Default::default() })
-    }
-
-    /// A piece of typed data (EIP-712) to sign. The last one blocks while the owner decides, and
-    /// comes back with the signature in `data`.
-    pub fn eth_typed_chunk(&self, site: &str, index: u32, total: u32, offset: u32, data: Vec<u8>) -> Chunk {
-        self.chunk_call(KeysOp::EthTyped, Chunk { offset, total, data, site: site.into(), index, ..Default::default() })
-    }
-
-    /// A piece of the transaction last signed, from `offset`.
-    pub fn eth_signed_chunk(&self, offset: u32) -> Chunk {
-        self.chunk_call(KeysOp::EthSigned, Chunk { offset, ..Default::default() })
-    }
-
-    /// Sign a message (EIP-191) once the owner has read it: the 65-byte signature, or why not.
-    pub fn eth_message(&self, site: &str, index: u32, message: &[u8]) -> EthMessage {
-        let failed = EthMessage { result: RESULT_FAILED, ..Default::default() };
-        let request = EthMessage { site: site.into(), index, message: message.to_vec(), ..Default::default() };
-        // a message of up to 4 KiB and its bookkeeping: two pages
-        let mut buf = Buffer::new(2 * CHUNK);
-        if buf.replace(request).is_err() || buf.lend_mut(self.conn, KeysOp::EthMessage.to_u32().unwrap()).is_err() {
-            return failed;
-        }
-        buf.to_original::<EthMessage, _>().unwrap_or(failed)
     }
 
     /// Tell the vault the FIDO store changed behind its back. See `KeysOp::FidoStoreChanged`.

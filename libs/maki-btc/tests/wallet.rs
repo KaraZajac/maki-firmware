@@ -12,15 +12,20 @@ use bitcoin::{
     absolute, transaction, Address, Amount, CompressedPublicKey, OutPoint, ScriptBuf, Sequence, Transaction,
     TxIn, TxOut, Txid, Witness,
 };
-use maki_btc::bip32::{Xpriv, HARDENED};
+use maki_btc::bip32::{xpub, HARDENED};
 use maki_btc::psbt::Psbt;
 use maki_btc::wallet::{self, descriptor_checksum, Error};
 use maki_btc::{Account, Network};
+use maki_hd::seed::SeedKeys;
+use maki_hd::Keys;
 
 const ABANDON: &str = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
 const XPUB: [u8; 4] = [0x04, 0x88, 0xb2, 0x1e];
 
 fn hex(s: &str) -> Vec<u8> { (0..s.len()).step_by(2).map(|i| u8::from_str_radix(&s[i..i + 2], 16).unwrap()).collect() }
+
+/// maki's keys for a seed, for as long as the tests run.
+fn keys(seed: &[u8]) -> &'static SeedKeys { Box::leak(Box::new(SeedKeys::from_seed(seed).unwrap())) }
 
 fn seed(phrase: &str) -> [u8; 64] {
     let words: Vec<&str> = phrase.split(' ').collect();
@@ -41,13 +46,13 @@ fn path_string(path: &[u32]) -> String {
 
 #[test]
 fn bip32_test_vector_1() {
-    let m = Xpriv::master(&hex("000102030405060708090a0b0c0d0e0f")).unwrap();
+    let m = keys(&hex("000102030405060708090a0b0c0d0e0f"));
     assert_eq!(
-        m.xpub(XPUB),
+        xpub(XPUB, 0, 0, &m.public(&[]).unwrap()),
         "xpub661MyMwAqRbcFtXgS5sYJABqqG9YLmC4Q1Rdap9gSE8NqtwybGhePY2gZ29ESFjqJoCu1Rupje8YtGqsefD265TMg7usUDFdp6W1EGMcet8"
     );
     assert_eq!(
-        m.child(HARDENED).unwrap().xpub(XPUB),
+        xpub(XPUB, 1, HARDENED, &m.public(&[HARDENED]).unwrap()),
         "xpub68Gmy5EdvgibQVfPdqkBBCHxA5htiqg55crXYuXoQRKfDBFA1WEjWgP6LHhwBZeNK1VTsfTFUHCdrfp1bgwQ9xv5ski8PX9rL2dZXvgGDnw"
     );
 }
@@ -70,22 +75,23 @@ fn derivation_agrees_with_rust_bitcoin() {
         &[44 | HARDENED, 60 | HARDENED, HARDENED, 0, 0],
     ];
     for s in &seeds {
-        let ours = Xpriv::master(s).unwrap();
+        let ours = keys(s);
         let theirs = BXpriv::new_master(bitcoin::NetworkKind::Main, s).unwrap();
-        assert_eq!(ours.fingerprint(), theirs.fingerprint(&secp).to_bytes());
+        assert_eq!(ours.fingerprint().unwrap(), theirs.fingerprint(&secp).to_bytes());
         for path in paths {
             let p = DerivationPath::from_str(&path_string(path)).unwrap();
             let expected = BXpub::from_priv(&secp, &theirs.derive_priv(&secp, &p).unwrap());
-            let got = ours.derive(path).unwrap();
-            assert_eq!(got.xpub(XPUB), expected.to_string(), "{}", path_string(path));
-            assert_eq!(got.public_key(), expected.public_key.serialize());
+            let got = ours.public(path).unwrap();
+            let child = path.last().copied().unwrap_or(0);
+            assert_eq!(xpub(XPUB, path.len() as u8, child, &got), expected.to_string(), "{}", path_string(path));
+            assert_eq!(got.key, expected.public_key.serialize());
         }
     }
 }
 
 #[test]
 fn bip84_test_vectors() {
-    let account = Account::from_seed(&seed(ABANDON), Network::Bitcoin).unwrap();
+    let account = Account::segwit(keys(&seed(ABANDON)), Network::Bitcoin).unwrap();
     assert_eq!(account.master_fingerprint, hex("73c5da0a")[..]);
     assert_eq!(
         account.zpub(),
@@ -101,7 +107,7 @@ fn bip84_test_vectors() {
 fn testnet_keys_and_addresses_agree_with_rust_bitcoin() {
     let secp = Secp256k1::new();
     let s = seed(ABANDON);
-    let account = Account::from_seed(&s, Network::Testnet).unwrap();
+    let account = Account::segwit(keys(&s), Network::Testnet).unwrap();
     let master = BXpriv::new_master(bitcoin::NetworkKind::Test, &s).unwrap();
     let key = master.derive_priv(&secp, &DerivationPath::from_str("m/84'/1'/0'").unwrap()).unwrap();
     // vpub: the tpub's key under BIP84's testnet version bytes
@@ -127,7 +133,7 @@ fn descriptor_checksums() {
 fn the_descriptor_is_one_wallet_software_reads() {
     use miniscript::{Descriptor, DescriptorPublicKey};
     for (network, btc) in [(Network::Bitcoin, bitcoin::Network::Bitcoin), (Network::Testnet, bitcoin::Network::Testnet)] {
-        let account = Account::from_seed(&seed(ABANDON), network).unwrap();
+        let account = Account::segwit(keys(&seed(ABANDON)), network).unwrap();
         let text = account.descriptor();
         // parsing checks the checksum
         let desc = Descriptor::<DescriptorPublicKey>::from_str(&text).unwrap();
@@ -140,7 +146,7 @@ fn the_descriptor_is_one_wallet_software_reads() {
             }
         }
     }
-    let account = Account::from_seed(&seed(ABANDON), Network::Bitcoin).unwrap();
+    let account = Account::segwit(keys(&seed(ABANDON)), Network::Bitcoin).unwrap();
     assert!(account.descriptor().starts_with("wpkh([73c5da0a/84h/0h/0h]xpub"), "{}", account.descriptor());
 }
 
@@ -149,7 +155,7 @@ fn the_descriptor_is_one_wallet_software_reads() {
 struct Fixture {
     secp: Secp256k1<secp256k1::All>,
     master: BXpriv,
-    account: Account,
+    account: Account<'static>,
     psbt: BPsbt,
     payee: ScriptBuf,
 }
@@ -178,7 +184,7 @@ impl Fixture {
         let secp = Secp256k1::new();
         let s = seed(ABANDON);
         let master = BXpriv::new_master(bitcoin::NetworkKind::Main, &s).unwrap();
-        let account = Account::from_seed(&s, Network::Bitcoin).unwrap();
+        let account = Account::segwit(keys(&s), Network::Bitcoin).unwrap();
         let script = |chain, index| {
             let k = master.derive_priv(&secp, &key_path(chain, index)).unwrap();
             ScriptBuf::new_p2wpkh(&CompressedPublicKey(k.private_key.public_key(&secp)).wpubkey_hash())
@@ -258,7 +264,7 @@ fn review_shows_payments_change_and_fee() {
 fn signatures_match_rust_bitcoins_and_verify() {
     let f = Fixture::new();
     let mut ours = f.ours();
-    assert_eq!(wallet::sign(&mut ours, std::slice::from_ref(&f.account), &[0; 32]).unwrap(), 2);
+    assert_eq!(wallet::sign(&mut ours, std::slice::from_ref(&f.account)).unwrap(), 2);
     let signed = BPsbt::deserialize(&ours.serialize()).unwrap();
 
     let mut theirs = f.psbt.clone();
@@ -352,13 +358,13 @@ fn inputs_that_arent_this_wallets_are_refused() {
 
     // a wallet from another phrase signs nothing
     let f = Fixture::new();
-    let stranger = Account::from_seed(&[9u8; 64], Network::Bitcoin).unwrap();
+    let stranger = Account::segwit(keys(&[9u8; 64]), Network::Bitcoin).unwrap();
     let mut psbt = f.ours();
-    assert_eq!(wallet::sign(&mut psbt, std::slice::from_ref(&stranger), &[0; 32]), Err(Error::NotOurs(0)));
+    assert_eq!(wallet::sign(&mut psbt, std::slice::from_ref(&stranger)), Err(Error::NotOurs(0)));
     assert_eq!(psbt.serialize(), f.psbt.serialize());
 
     // the testnet wallet doesn't sign for bitcoin's
-    let testnet = Account::from_seed(&seed(ABANDON), Network::Testnet).unwrap();
+    let testnet = Account::segwit(keys(&seed(ABANDON)), Network::Testnet).unwrap();
     assert_eq!(wallet::review(&f.ours(), std::slice::from_ref(&testnet)), Err(Error::NotOurs(0)));
 }
 
@@ -516,7 +522,7 @@ fn write_fixtures() {
     std::fs::create_dir_all(FIXTURES).unwrap();
     std::fs::write(format!("{FIXTURES}/abandon-unsigned.psbt"), f.psbt.serialize()).unwrap();
     let mut psbt = f.ours();
-    wallet::sign(&mut psbt, std::slice::from_ref(&f.account), &[0; 32]).unwrap();
+    wallet::sign(&mut psbt, std::slice::from_ref(&f.account)).unwrap();
     std::fs::write(format!("{FIXTURES}/abandon-signed.psbt"), psbt.serialize()).unwrap();
 }
 
@@ -527,7 +533,7 @@ fn the_fixtures_are_current_and_rust_bitcoin_agrees() {
     let signed = std::fs::read(format!("{FIXTURES}/abandon-signed.psbt")).unwrap();
     assert_eq!(unsigned, f.psbt.serialize());
     let mut psbt = Psbt::parse(&unsigned).unwrap();
-    wallet::sign(&mut psbt, std::slice::from_ref(&f.account), &[0; 32]).unwrap();
+    wallet::sign(&mut psbt, std::slice::from_ref(&f.account)).unwrap();
     assert_eq!(psbt.serialize(), signed);
     let mut theirs = f.psbt.clone();
     theirs.sign(&f.master, &f.secp).unwrap();
@@ -539,7 +545,7 @@ fn bitcoin_cores_script_interpreter_accepts_what_maki_signs() {
     // libbitcoinconsensus: Bitcoin Core's own consensus code, built from source
     let f = Fixture::new();
     let mut psbt = f.ours();
-    wallet::sign(&mut psbt, std::slice::from_ref(&f.account), &[0; 32]).unwrap();
+    wallet::sign(&mut psbt, std::slice::from_ref(&f.account)).unwrap();
     let mut signed = BPsbt::deserialize(&psbt.serialize()).unwrap();
     for input in signed.inputs.iter_mut() {
         let (pk, sig) = input.partial_sigs.pop_first().unwrap();

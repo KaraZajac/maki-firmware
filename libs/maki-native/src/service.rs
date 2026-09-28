@@ -56,6 +56,15 @@ pub const KEY_SCHNORR_SIGN: usize = 28;
 /// X25519 keys (host API 2's `key_x25519_public` and `key_x25519_agree`), likewise.
 pub const KEY_X25519_PUBLIC: usize = 29;
 pub const KEY_X25519_AGREE: usize = 31;
+/// Host API 3's wallet functions (the wallet permission), likewise: `WALLET_FINGERPRINT` takes
+/// nothing and gives 4 bytes; `WALLET_PUBLIC` takes the form (a byte) and the path (little-endian
+/// u32s) and gives the key; `WALLET_REVIEW` takes how many signatures (u32), the timeout (i32)
+/// and the review's text, and its status is the answer; `WALLET_SIGN` takes the scheme (a byte),
+/// the digest (32 bytes) and the path, and gives the signature.
+pub const WALLET_FINGERPRINT: usize = 32;
+pub const WALLET_PUBLIC: usize = 33;
+pub const WALLET_REVIEW: usize = 34;
+pub const WALLET_SIGN: usize = 35;
 // a plain scalar
 pub const EXIT: usize = 30;
 /// maki's own, from the app host to itself: look at what's waiting (the owner left the app, or

@@ -2,7 +2,7 @@
 name = "maki-apps"
 version = "0.1.0"
 edition = "2021"
-description = "maki's own apps, in one process: Bitcoin (addresses and the account key as QR codes) and Passkeys"
+description = "maki's own apps, in one process: Passkeys"
 
 [dependencies]
 log = "0.4.14"
@@ -19,8 +19,6 @@ maki-keys = { package = "maki-keys-api", path = "../../libs/maki-keys-api" }
 pddb = { path = "../../services/pddb" }
 maki-proto = { path = "../../libs/maki-proto" }
 maki-fido = { path = "../../libs/maki-fido" }
-# the taproot account's descriptor checksum, for its code
-maki-btc = { path = "../../libs/maki-btc" }
 
 [features]
 board-baosec = ["maki-ui/board-baosec", "blitstr2/board-baosec", "pddb/board-baosec"]

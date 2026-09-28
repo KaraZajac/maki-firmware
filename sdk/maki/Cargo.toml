@@ -11,6 +11,8 @@ maki-wasm = { path = "../../libs/maki-wasm" }
 maki-native = { path = "../../libs/maki-native" }
 # apps' keys in the simulator: from the BIP39 test phrase, as maki derives them from yours
 maki-seed = { path = "../../libs/maki-seed" }
+# wallet apps' keys in the simulator, and their paths in maki.toml
+maki-hd = { path = "../../libs/maki-hd", features = ["seed"] }
 # the store's records, for `maki store`
 maki-store = { path = "../../libs/maki-store" }
 sha2 = "0.10.8"

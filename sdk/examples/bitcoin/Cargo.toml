@@ -1,0 +1,16 @@
+[package]
+name = "bitcoin"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+# std, for an allocator: the wallet's code (maki-btc) works in Vecs and Strings
+maki-app = { path = "../../maki-app", default-features = false, features = ["std", "wallet"] }
+# the wallet: accounts, addresses and PSBTs, checked before they're shown; maki holds the keys
+maki-btc = { path = "../../../libs/maki-btc" }
+# what maki's keys say when they can't
+maki-hd = { path = "../../../libs/maki-hd" }

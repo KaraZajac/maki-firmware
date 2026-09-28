@@ -292,3 +292,66 @@ pub extern "C" fn maki_native_finished() {
 #[doc(hidden)]
 #[no_mangle]
 pub unsafe extern "C" fn maki_native_crashed(ptr: *const u8, len: usize) -> ! { abort_str(str(ptr, len)) }
+
+#[cfg(feature = "wallet")]
+mod wallet_calls {
+    use super::*;
+
+    /// A derivation path as the app service takes it: little-endian u32s, at most eight.
+    unsafe fn path_bytes(pptr: *const u32, plen: usize) -> Option<Vec<u8>> {
+        if plen > 8 {
+            return None;
+        }
+        let path = if plen == 0 { &[][..] } else { core::slice::from_raw_parts(pptr, plen) };
+        Some(path.iter().flat_map(|i| i.to_le_bytes()).collect())
+    }
+
+    /// What came back, if it fits the app's buffer: its length, or the status, or `TOO_BIG`.
+    unsafe fn fits(status: i32, got: &[u8], out: *mut u8, cap: usize) -> i32 {
+        if status != 0 {
+            return status;
+        }
+        if got.len() > cap {
+            return -4;
+        }
+        slice_mut(out, got.len()).copy_from_slice(got);
+        got.len() as i32
+    }
+
+    pub unsafe fn wallet_fingerprint(out: *mut u8) -> i32 {
+        let (status, got) = request(service::WALLET_FINGERPRINT, &[], 4);
+        if status == 0 && got.len() == 4 {
+            slice_mut(out, 4).copy_from_slice(&got);
+        }
+        status
+    }
+
+    pub unsafe fn wallet_public(pptr: *const u32, plen: usize, form: i32, out: *mut u8, cap: usize) -> i32 {
+        let (Some(path), Ok(form)) = (path_bytes(pptr, plen), u8::try_from(form)) else { return INVALID };
+        let mut payload = Vec::with_capacity(1 + path.len());
+        payload.push(form);
+        payload.extend_from_slice(&path);
+        let (status, got) = request(service::WALLET_PUBLIC, &payload, 69);
+        fits(status, &got, out, cap)
+    }
+
+    pub unsafe fn wallet_review(tptr: *const u8, tlen: usize, signatures: i32, timeout_s: i32) -> i32 {
+        let mut payload = Vec::with_capacity(8 + tlen);
+        payload.extend_from_slice(&(signatures as u32).to_le_bytes());
+        payload.extend_from_slice(&timeout_s.to_le_bytes());
+        payload.extend_from_slice(slice(tptr, tlen));
+        request(service::WALLET_REVIEW, &payload, 0).0
+    }
+
+    pub unsafe fn wallet_sign(pptr: *const u32, plen: usize, dptr: *const u8, scheme: i32, out: *mut u8, cap: usize) -> i32 {
+        let (Some(path), Ok(scheme)) = (path_bytes(pptr, plen), u8::try_from(scheme)) else { return INVALID };
+        let mut payload = Vec::with_capacity(33 + path.len());
+        payload.push(scheme);
+        payload.extend_from_slice(slice(dptr, 32));
+        payload.extend_from_slice(&path);
+        let (status, got) = request(service::WALLET_SIGN, &payload, 65);
+        fits(status, &got, out, cap)
+    }
+}
+#[cfg(feature = "wallet")]
+pub use wallet_calls::*;

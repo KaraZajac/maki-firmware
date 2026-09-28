@@ -23,8 +23,7 @@ pbkdf2 = { version = "0.12.2", default-features = false, features = ["hmac"] }
 aes-gcm-siv = { version = "0.11.1", default-features = false, features = ["alloc", "aes"] }
 zeroize = "1.8.1"
 maki-seed = { path = "../../libs/maki-seed" }
-maki-btc = { path = "../../libs/maki-btc" }
-maki-eth = { path = "../../libs/maki-eth" }
+maki-hd = { path = "../../libs/maki-hd", features = ["seed"] }
 maki-fido = { path = "../../libs/maki-fido" }
 maki-app-host-api = { path = "../../libs/maki-app-host-api" }
 maki-launcher = { path = "../../apps-baosec/maki-launcher" }

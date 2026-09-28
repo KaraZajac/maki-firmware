@@ -3,7 +3,7 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 
-use maki_bundle::{Kind, Manifest, Permission};
+use maki_bundle::{Curve, Kind, Manifest, Permission, Wallet};
 use serde::Deserialize;
 
 #[derive(Deserialize)]
@@ -36,7 +36,20 @@ struct Toml {
     /// What it asks for: `keys = "why it needs them"`.
     #[serde(default)]
     permissions: BTreeMap<String, String>,
+    /// With the wallet permission: `[wallet] paths = ["m/84'/0'"]`.
+    #[serde(default)]
+    wallet: Option<WalletToml>,
 }
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WalletToml {
+    #[serde(default = "secp256k1")]
+    curve: String,
+    paths: Vec<String>,
+}
+
+fn secp256k1() -> String { "secp256k1".into() }
 
 fn wasm() -> String { "wasm".into() }
 fn memory() -> u32 { 64 }
@@ -81,6 +94,12 @@ pub fn load(path: &Path) -> Result<Project, String> {
     for (p, reason) in &permissions {
         long(format!("the reason for {}", p.name()), reason, maki_bundle::MAX_REASON)?;
     }
+    let wallet = match (t.wallet, permissions.iter().any(|(p, _)| *p == Permission::Wallet)) {
+        (None, false) => None,
+        (None, true) => return Err(format!("{}: the wallet permission names its paths: [wallet] paths = [\"m/84'/0'\"]", path.display())),
+        (Some(_), false) => return Err(format!("{}: [wallet] needs the wallet permission too", path.display())),
+        (Some(w), true) => Some(wallet(path, w)?),
+    };
     let manifest = Manifest {
         id: t.id,
         name: t.name,
@@ -95,7 +114,34 @@ pub fn load(path: &Path) -> Result<Project, String> {
         memory_kib: t.memory,
         backup: t.backup,
         description: t.description,
+        wallet,
     };
     let icon = t.icon.map(|i| path.parent().unwrap_or(Path::new(".")).join(i));
     Ok(Project { manifest, icon })
+}
+
+/// `[wallet]`, checked as maki checks it, and said in maki.toml's words.
+fn wallet(path: &Path, w: WalletToml) -> Result<Wallet, String> {
+    let curve = match w.curve.as_str() {
+        "secp256k1" => Curve::Secp256k1,
+        other => return Err(format!("{}: [wallet] curve \"{other}\": maki's wallets are secp256k1", path.display())),
+    };
+    if w.paths.is_empty() || w.paths.len() > maki_bundle::MAX_WALLET_PATHS {
+        return Err(format!("{}: [wallet] names 1 to {} paths", path.display(), maki_bundle::MAX_WALLET_PATHS));
+    }
+    let mut paths: Vec<Vec<u32>> = Vec::new();
+    for text in &w.paths {
+        let p = maki_hd::parse_path(text).ok_or_else(|| format!("{}: [wallet] \"{text}\" isn't a path (m/84'/0', say)", path.display()))?;
+        if !maki_hd::prefix_ok(&p) {
+            return Err(format!(
+                "{}: [wallet] \"{text}\": a wallet's path is a purpose and a coin type at least, both hardened (m/84'/0'), so no app gets every coin's keys",
+                path.display()
+            ));
+        }
+        if paths.contains(&p) {
+            return Err(format!("{}: [wallet] names \"{text}\" twice", path.display()));
+        }
+        paths.push(p);
+    }
+    Ok(Wallet { curve, paths })
 }

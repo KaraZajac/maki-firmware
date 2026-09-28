@@ -30,6 +30,18 @@ struct Record {
     qr: Option<String>,
     scans: usize,
     motion: Option<[i16; 3]>,
+    /// maki's clock, in millis (5 s after boot, unless a test moves it)
+    now: u64,
+    /// what wallet apps put on maki's review screen
+    reviews: Vec<Review>,
+    /// the wallet ops maki did for the app: which, on what path
+    wallet_calls: Vec<(u8, Vec<u32>)>,
+}
+
+/// The BIP39 test phrase's seed: wallet apps' keys in these tests.
+fn test_seed() -> [u8; 64] {
+    let words: Vec<&str> = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about".split(' ').collect();
+    maki_seed::seed(&words, "")
 }
 
 /// The test platform's secret for a label: made up, different for each label.
@@ -56,7 +68,7 @@ impl Platform for Script {
     }
     fn present(&mut self, canvas: &Canvas) { self.0.borrow_mut().frames.push(canvas.clone()) }
     fn set_menu(&mut self, items: &[String]) { self.0.borrow_mut().menu = items.to_vec() }
-    fn millis(&self) -> u64 { 5_000 }
+    fn millis(&self) -> u64 { self.0.borrow().now.max(5_000) }
     fn unix_time(&self) -> Option<(u64, bool)> { Some((1_790_000_000, true)) }
     fn random(&mut self, buf: &mut [u8]) { buf.iter_mut().for_each(|b| *b = 0x5a) }
     fn log(&mut self, line: &str) { self.0.borrow_mut().logs.push(line.into()) }
@@ -87,6 +99,20 @@ impl Platform for Script {
         r.qr.clone()
     }
     fn motion(&mut self) -> Option<[i16; 3]> { self.0.borrow().motion }
+    fn wallet(&mut self, op: u8, path: &[u32], digest: &[u8]) -> Result<Vec<u8>, i32> {
+        let mut r = self.0.borrow_mut();
+        if r.locked {
+            return Err(LOCKED);
+        }
+        r.wallet_calls.push((op, path.to_vec()));
+        let keys = maki_hd::seed::SeedKeys::from_seed(&test_seed()).unwrap();
+        maki_hd::seed::answer(&keys, op, path, digest, &[0; 32]).map_err(|_| FAILED)
+    }
+    fn review(&mut self, review: &Review) -> Answer {
+        let mut r = self.0.borrow_mut();
+        r.reviews.push(review.clone());
+        r.answers.pop_front().unwrap_or(Answer::NoAnswer)
+    }
     fn message(&mut self) -> Option<Vec<u8>> { self.0.borrow().current.clone() }
     fn reply(&mut self, reply: &[u8]) -> bool {
         let mut r = self.0.borrow_mut();
@@ -491,7 +517,7 @@ fn qr_codes_fit_or_say_so() {
 
 #[test]
 fn admit_says_what_maki_takes() {
-    use maki_bundle::{Kind, Manifest, Permission};
+    use maki_bundle::{Kind, Manifest};
     let ok = module(r#"(module (memory (export "memory") 1) (func (export "maki_main")))"#);
     let m = Manifest {
         id: "com.example.ok".into(),
@@ -506,6 +532,7 @@ fn admit_says_what_maki_takes() {
         memory_kib: 64,
         backup: true,
         description: String::new(),
+        wallet: None,
     };
     let limits = admit(&m, &ok).unwrap();
     assert_eq!((limits.memory, limits.storage), (64 * 1024, 4 * 1024));
@@ -562,6 +589,10 @@ fn gated_functions_need_their_permission() {
         ("link_reply", "(param i32 i32) (result i32)"),
         ("camera_scan_qr", "(param i32 i32) (result i32)"),
         ("motion_read", "(param i32) (result i32)"),
+        ("wallet_fingerprint", "(param i32) (result i32)"),
+        ("wallet_public", "(param i32 i32 i32 i32 i32) (result i32)"),
+        ("wallet_review", "(param i32 i32 i32 i32) (result i32)"),
+        ("wallet_sign", "(param i32 i32 i32 i32 i32 i32) (result i32)"),
     ];
     assert_eq!(signatures.len(), GATED.len());
     for (name, signature) in signatures {
@@ -807,10 +838,166 @@ fn an_app_calling_what_came_later_says_so_in_its_manifest() {
         memory_kib: 64,
         backup: true,
         description: String::new(),
+        wallet: None,
     };
     let err = admit(&manifest(1), &code).unwrap_err();
     assert!(err.contains("key_schnorr_sign, which came with host API 2, and its manifest says 1"), "{err}");
     admit(&manifest(2), &code).unwrap();
     // and an older maki says it needs a newer one
     assert!(admit(&manifest(API_VERSION + 1), &code).unwrap_err().contains("needs a newer maki"));
+}
+
+fn path(p: &str) -> Vec<u32> { maki_hd::parse_path(p).unwrap() }
+
+/// A session for a wallet app with these paths, on a platform whose keys are the test phrase's.
+fn wallet_session(paths: &[&str], permissions: &[maki_bundle::Permission]) -> (Session, Rc<RefCell<Record>>) {
+    let record = Rc::new(RefCell::new(Record::default()));
+    let mut s = Session::new(Box::new(Script(record.clone())), with(permissions));
+    s.wallet = Some(maki_bundle::Wallet { curve: maki_bundle::Curve::Secp256k1, paths: paths.iter().map(|p| path(p)).collect() });
+    (s, record)
+}
+
+const REVIEW: &str = "Sign and spend?\n0.0007 BTC in all\x1eSend 1 of 1\x1f0.0007 BTC\x1fbc1qcr8te4kr609gcawutmrza0j4xv80jy8z306fyu\x1eFee\x1f0.00005 BTC\x1f\x1f24 sat/vB";
+
+#[test]
+fn a_wallet_app_gets_its_own_paths_and_no_others() {
+    use maki_bundle::Permission;
+    use maki_hd::Keys;
+    let keys = maki_hd::seed::SeedKeys::from_seed(&test_seed()).unwrap();
+    let (mut s, _) = wallet_session(&["m/84'/0'", "m/84'/1'"], &[Permission::Wallet]);
+    assert_eq!(s.wallet_fingerprint().unwrap(), keys.fingerprint().unwrap());
+    let p = path("m/84'/0'/0'/0/0");
+    let public = s.wallet_public(&p, WALLET_PUBLIC).unwrap();
+    let theirs = keys.public(&p).unwrap();
+    assert_eq!(public[..33], theirs.key);
+    assert_eq!(public[33..65], theirs.chain_code);
+    assert_eq!(public[65..], theirs.parent_fingerprint);
+    assert_eq!(s.wallet_public(&p, WALLET_UNCOMPRESSED).unwrap(), keys.uncompressed(&p).unwrap());
+    assert_eq!(s.wallet_public(&path("m/84'/1'/0'"), WALLET_PUBLIC).unwrap().len(), 69);
+    // another purpose, another coin, above its paths, or the master key: refused
+    for other in ["m/86'/0'/0'/0/0", "m/44'/60'/0'/0/0", "m/84'", "m"] {
+        assert_eq!(s.wallet_public(&path(other), WALLET_PUBLIC), Err(REFUSED), "{other}");
+    }
+    assert_eq!(s.wallet_public(&p, 9), Err(INVALID));
+    // no permission, no keys, paths or not
+    let (mut s, _) = wallet_session(&["m/84'/0'"], &[Permission::Keys]);
+    assert_eq!(s.wallet_public(&p, WALLET_PUBLIC), Err(REFUSED));
+    assert_eq!(s.wallet_fingerprint(), Err(REFUSED));
+}
+
+#[test]
+fn a_signature_needs_a_yes_to_a_review_on_makis_screen() {
+    use maki_bundle::Permission;
+    let (mut s, record) = wallet_session(&["m/84'/0'", "m/86'/0'"], &[Permission::Wallet]);
+    let (p, digest) = (path("m/84'/0'/0'/0/0"), [7u8; 32]);
+    // nothing asked yet
+    assert_eq!(s.wallet_sign(&p, &digest, WALLET_SIGN_ECDSA), Err(REFUSED));
+    record.borrow_mut().answers.push_back(Answer::Yes);
+    assert_eq!(s.wallet_review(REVIEW, 2, 0), 0);
+    let review = record.borrow().reviews[0].clone();
+    assert_eq!((review.question.as_str(), review.detail.as_str()), ("Sign and spend?", "0.0007 BTC in all"));
+    assert_eq!(review.pages.len(), 2);
+    assert_eq!(
+        review.pages[0],
+        Page { heading: "Send 1 of 1".into(), value: "0.0007 BTC".into(), mono: "bc1qcr8te4kr609gcawutmrza0j4xv80jy8z306fyu".into(), prose: String::new() }
+    );
+    assert_eq!((review.pages[1].mono.as_str(), review.pages[1].prose.as_str()), ("", "24 sat/vB"));
+    assert_eq!(review.timeout_s, REVIEW_TIMEOUT_S);
+    // two signatures, as it said; the third isn't allowed
+    let sig = s.wallet_sign(&p, &digest, WALLET_SIGN_ECDSA).unwrap();
+    assert_eq!(sig.len(), 65);
+    let recovered = k256::ecdsa::VerifyingKey::recover_from_prehash(
+        &digest,
+        &k256::ecdsa::Signature::from_slice(&sig[..64]).unwrap(),
+        k256::ecdsa::RecoveryId::from_byte(sig[64]).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(recovered.to_sec1_bytes()[..], s.wallet_public(&p, WALLET_PUBLIC).unwrap()[..33]);
+    let tp = path("m/86'/0'/0'/0/0");
+    let sig = s.wallet_sign(&tp, &digest, WALLET_SIGN_TAPROOT).unwrap();
+    let output = s.wallet_public(&tp, WALLET_TAPROOT).unwrap();
+    let key = k256::schnorr::VerifyingKey::from_bytes(&output).unwrap();
+    key.verify_raw(&digest, &k256::schnorr::Signature::try_from(&sig[..]).unwrap()).unwrap();
+    assert_eq!(s.wallet_sign(&p, &digest, WALLET_SIGN_ECDSA), Err(REFUSED));
+    // off its paths, even with a yes
+    record.borrow_mut().answers.push_back(Answer::Yes);
+    assert_eq!(s.wallet_review(REVIEW, 1, 0), 0);
+    assert_eq!(s.wallet_sign(&path("m/44'/60'/0'/0/0"), &digest, WALLET_SIGN_ECDSA), Err(REFUSED));
+    // a no, or no answer, allows nothing; and a new review ends what the last one allowed
+    record.borrow_mut().answers.push_back(Answer::No);
+    assert_eq!(s.wallet_review(REVIEW, 5, 0), 1);
+    assert_eq!(s.wallet_sign(&p, &digest, WALLET_SIGN_ECDSA), Err(REFUSED));
+    assert_eq!(s.wallet_review(REVIEW, 5, 0), 2);
+    assert_eq!(s.wallet_sign(&p, &digest, WALLET_SIGN_ECDSA), Err(REFUSED));
+    // a yes lasts two minutes
+    record.borrow_mut().answers.push_back(Answer::Yes);
+    assert_eq!(s.wallet_review(REVIEW, 3, 0), 0);
+    record.borrow_mut().now = 5_000 + ALLOWANCE_MS + 1;
+    assert_eq!(s.wallet_sign(&p, &digest, WALLET_SIGN_ECDSA), Err(REFUSED));
+    // a digest is 32 bytes, and the schemes are three
+    record.borrow_mut().answers.push_back(Answer::Yes);
+    assert_eq!(s.wallet_review(REVIEW, 3, 0), 0);
+    assert_eq!(s.wallet_sign(&p, &[1; 31], WALLET_SIGN_ECDSA), Err(INVALID));
+    assert_eq!(s.wallet_sign(&p, &digest, WALLET_PUBLIC), Err(INVALID));
+}
+
+#[test]
+fn reviews_must_fit_makis_screen() {
+    use maki_bundle::Permission;
+    let (mut s, record) = wallet_session(&["m/84'/0'"], &[Permission::Wallet]);
+    let long = "x".repeat(MAX_PAGE_VALUE + 1);
+    let longer = "x".repeat(MAX_PAGE_TEXT + 1);
+    let heading = "h".repeat(MAX_HEADING + 1);
+    let many: String = (0..=MAX_PAGES).map(|_| "\x1eA\x1fb").collect();
+    for bad in [
+        String::new(),
+        "\nno question".into(),
+        "Sign?\x1eno value".into(),
+        "Sign?\x1ea\x1fb\x1fc\x1fd\x1fe".into(),
+        "Sign?\x1e \x1fno heading".into(),
+        "Sign?\x1ea\x1fbold\nover lines".into(),
+        format!("Sign?\x1ea\x1fb\x1f{longer}"),
+        format!("Sign?\x1ea\x1f{long}"),
+        format!("Sign?\x1e{heading}\x1fv"),
+        format!("Sign?{many}"),
+        "Sign?\ta tab".into(),
+    ] {
+        assert_eq!(s.wallet_review(&bad, 1, 0), INVALID, "{bad:?}");
+    }
+    assert_eq!(s.wallet_review(REVIEW, MAX_SIGNATURES + 1, 0), INVALID);
+    assert_eq!(s.wallet_review(&"x".repeat(MAX_REVIEW + 1), 1, 0), TOO_BIG);
+    assert!(record.borrow().reviews.is_empty(), "none reached the screen");
+    // a value may run over lines, and a timeout is kept within bounds
+    record.borrow_mut().answers.push_back(Answer::Yes);
+    assert_eq!(s.wallet_review("Sign?\x1eData\x1f\x1fline one\nline two\x1fwhat it is", 0, 9999), 0);
+    assert_eq!(record.borrow().reviews[0].timeout_s, MAX_REVIEW_TIMEOUT_S);
+    // a locked maki has no keys to give
+    record.borrow_mut().locked = true;
+    assert_eq!(s.wallet_public(&path("m/84'/0'/0'"), WALLET_PUBLIC), Err(LOCKED));
+}
+
+#[test]
+fn wallet_functions_came_with_host_api_3() {
+    let code = module(
+        r#"(module (import "maki" "wallet_fingerprint" (func (param i32) (result i32))) (memory (export "memory") 1) (func (export "maki_main")))"#,
+    );
+    let manifest = |api: u16| maki_bundle::Manifest {
+        id: "org.example.wallet".into(),
+        name: "Wallet".into(),
+        version: 1,
+        label: "1.0".into(),
+        kind: maki_bundle::Kind::Wasm,
+        api,
+        firmware: String::new(),
+        permissions: vec![(maki_bundle::Permission::Wallet, "to sign".into())],
+        storage_kib: 1,
+        memory_kib: 64,
+        backup: true,
+        description: String::new(),
+        wallet: Some(maki_bundle::Wallet { curve: maki_bundle::Curve::Secp256k1, paths: vec![path("m/84'/0'")] }),
+    };
+    let err = admit(&manifest(2), &code).unwrap_err();
+    assert!(err.contains("wallet_fingerprint, which came with host API 3, and its manifest says 2"), "{err}");
+    admit(&manifest(3), &code).unwrap();
+    assert_eq!(load(&manifest(3), &code).unwrap().wallet, manifest(3).wallet);
 }

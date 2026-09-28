@@ -494,7 +494,7 @@ impl TypedData {
     }
 }
 
-impl Account {
+impl Account<'_> {
     /// Typed data (EIP-712), signed: r, s and v (27 or 28), 65 bytes.
     pub fn sign_typed(&self, typed: &TypedData) -> Result<[u8; 65], Error> {
         let digest = typed.signing_hash()?;

@@ -5255,6 +5255,7 @@ dependencies = [
  "log",
  "maki-app-host-api",
  "maki-bundle",
+ "maki-hd",
  "maki-keys-api",
  "maki-launcher",
  "maki-native",
@@ -5292,7 +5293,6 @@ version = "0.1.0"
 dependencies = [
  "blitstr2",
  "log",
- "maki-btc",
  "maki-fido",
  "maki-icons",
  "maki-keys-api",
@@ -5313,13 +5313,11 @@ version = "0.1.0"
 dependencies = [
  "bech32",
  "bitcoin",
- "hmac 0.12.1",
- "k256",
+ "maki-hd",
  "maki-seed",
  "miniscript",
  "ripemd",
  "sha2 0.10.8",
- "zeroize",
 ]
 
 [[package]]
@@ -5327,6 +5325,7 @@ name = "maki-bundle"
 version = "0.1.0"
 dependencies = [
  "ed25519-dalek-compat",
+ "maki-hd",
  "sha2 0.10.8",
 ]
 
@@ -5337,8 +5336,8 @@ dependencies = [
  "alloy",
  "alloy-dyn-abi",
  "alloy-tx-macros",
- "k256",
- "maki-btc",
+ "bitcoin",
+ "maki-hd",
  "maki-seed",
  "serde_json",
  "sha3 0.10.8",
@@ -5347,6 +5346,21 @@ dependencies = [
 [[package]]
 name = "maki-fido"
 version = "0.1.0"
+
+[[package]]
+name = "maki-hd"
+version = "0.1.0"
+dependencies = [
+ "bitcoin",
+ "hmac 0.12.1",
+ "k256",
+ "maki-hd",
+ "maki-seed",
+ "ripemd",
+ "sha2 0.10.8",
+ "sha3 0.10.8",
+ "zeroize",
+]
 
 [[package]]
 name = "maki-icons"
@@ -5361,9 +5375,8 @@ dependencies = [
  "hmac 0.12.1",
  "log",
  "maki-app-host-api",
- "maki-btc",
- "maki-eth",
  "maki-fido",
+ "maki-hd",
  "maki-keys-api",
  "maki-launcher",
  "maki-proto",
@@ -5448,9 +5461,8 @@ name = "maki-proto"
 version = "0.1.0"
 dependencies = [
  "hmac 0.12.1",
- "maki-btc",
  "maki-bundle",
- "maki-eth",
+ "maki-hd",
  "maki-seed",
  "maki-store",
  "maki-wasm",
@@ -5526,7 +5538,9 @@ dependencies = [
  "k256",
  "log",
  "maki-bundle",
+ "maki-hd",
  "maki-native",
+ "maki-seed",
  "qrcode",
  "sha2 0.10.8",
  "wasmi",

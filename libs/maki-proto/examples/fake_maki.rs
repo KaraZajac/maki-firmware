@@ -2,11 +2,12 @@
 //!
 //!     cargo run -p maki-proto --features fake --example fake_maki -- \
 //!         [ADDR] [--deny | --ask] [--totp SITE=BASE32]... [--clock-verified] [--phrase "WORDS"] \
-//!         [--store-root FILE] [--name NAME]
+//!         [--store-root FILE] [--name NAME] [--app FILE.maki]...
 //!
 //! ADDR defaults to 127.0.0.1:7878. Logins and TOTP secrets live in memory; SAVE_LOGIN adds to them.
-//! The Bitcoin wallet comes from `--phrase`, or else the BIP39 test phrase ("abandon" eleven times,
-//! then "about"), which everyone knows: never send real coins to either.
+//! Its recovery phrase is `--phrase`, or else the BIP39 test phrase ("abandon" eleven times, then
+//! "about"), which everyone knows: never send real coins to either's wallets. Wallet apps (the
+//! store's Bitcoin and Ethereum) get their keys from it, as on maki.
 //! Approvals are automatic unless `--deny` (refuse everything) or `--ask` (ask on this terminal).
 //! It calls itself a maki roll, picked at random as a badge picks its name, unless `--name` says.
 //! Codes need a verified clock, as on the badge: sync through Roughtime first, or start with
@@ -14,8 +15,11 @@
 //! Everything maki-link does on the device happens here too, except the USB hop, the Xous clock and
 //! maki's own screen. State survives reconnects, like a badge that stays plugged in. Installed apps
 //! answer APP_MESSAGE as on maki: each runs (with maki's own host code) without a screen, its
-//! asks answered as above, its keys from the phrase, until it's had nothing to do for a while.
+//! asks and reviews answered as above (a review's pages printed), its keys from the phrase, until
+//! it's had nothing to do for a while.
 //! Native apps install as on maki, but don't run here: they're machine code for maki's processor.
+//! `--app` installs a bundle at start, as if the owner had said yes to it before (with `--deny`, for
+//! a maki whose owner turns down what an app asks).
 //! The maki store's records are checked as maki does, starting from the root the firmware
 //! carries, or the one in `--store-root` (a test store's).
 
@@ -25,11 +29,8 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use hmac::{Hmac, Mac};
-use maki_btc::psbt::Psbt;
-use maki_btc::{display, wallet, Account, Network};
 use maki_proto::device::{
-    reply, AppEntry, AppSpace, Approval, Apps, Ask, Backup, Bitcoin, Device, Ethereum, Handled, Platform, StoreState, TimeState,
-    ACCOUNT_TAPROOT, BACKUP_PIECE, PSBT_PIECE, TX_PIECE,
+    reply, AppEntry, AppSpace, Approval, Apps, Ask, Backup, Device, Handled, Platform, StoreState, TimeState, BACKUP_PIECE,
 };
 use maki_proto::frame::{self, Deframer};
 use maki_proto::site;
@@ -150,6 +151,8 @@ struct FakeApp {
     current: Option<(Vec<u8>, ReplyTo)>,
     store: Arc<Mutex<Store>>,
     start: Instant,
+    /// The wallet's keys, from the phrase, once the app asks for one.
+    keys: Option<maki_hd::seed::SeedKeys>,
 }
 
 impl maki_wasm::Platform for FakeApp {
@@ -197,6 +200,26 @@ impl maki_wasm::Platform for FakeApp {
             Approval::Approved => maki_wasm::Answer::Yes,
             _ => maki_wasm::Answer::No,
         }
+    }
+    /// A review: its pages printed, as maki would show them, and answered by the policy.
+    fn review(&mut self, review: &maki_wasm::Review) -> maki_wasm::Answer {
+        for p in &review.pages {
+            println!("  {} shows [{}] {} {} {}", self.name, p.heading, p.value, p.mono.replace('\n', " "), p.prose.replace('\n', " "));
+        }
+        match approve(self.policy, &format!("{}: {} {}", self.name, review.question, review.detail)) {
+            Approval::Approved => maki_wasm::Answer::Yes,
+            Approval::TimedOut => maki_wasm::Answer::NoAnswer,
+            _ => maki_wasm::Answer::No,
+        }
+    }
+    /// What maki-keys answers the app host, from the phrase: the host has checked the path. No
+    /// randomness in its Schnorr signatures, as in the simulator: the same every time, so tests
+    /// can hold them to the fixtures' (maki adds fresh randomness, as BIP340 advises).
+    fn wallet(&mut self, op: u8, path: &[u32], digest: &[u8]) -> Result<Vec<u8>, i32> {
+        if self.keys.is_none() {
+            self.keys = Some(maki_hd::seed::SeedKeys::from_seed(&self.seed).map_err(|_| maki_wasm::FAILED)?);
+        }
+        maki_hd::seed::answer(self.keys.as_ref().unwrap(), op, path, digest, &[0; 32]).map_err(|_| maki_wasm::FAILED)
     }
     fn app_secret(&mut self, label: &str) -> Option<[u8; 32]> { maki_seed::app_secret(&self.seed, &self.id, &self.developer, label) }
     fn type_text(&mut self, text: &str) -> bool {
@@ -247,7 +270,8 @@ fn app_message(
             running.lock().unwrap().remove(app);
             continue;
         }
-        match answer.recv_timeout(Duration::from_secs(90)) {
+        // as long as the longest review an app may ask for, and a little
+        match answer.recv_timeout(Duration::from_secs(maki_wasm::MAX_REVIEW_TIMEOUT_S as u64 + 30)) {
             Ok(answer) => return answer,
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => return (Approval::TimedOut, Vec::new()),
             Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
@@ -264,7 +288,8 @@ fn start_app(bundle: Vec<u8>, store: Arc<Mutex<Store>>, seed: [u8; 64], policy: 
     let (inbox, messages) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
         let b = maki_bundle::read(&bundle).expect("installed bundles read");
-        let limits = maki_wasm::admit(&b.manifest, b.code).expect("installed apps are admitted");
+        // loaded as maki loads it: the manifest's wallet paths come with it
+        let loaded = maki_wasm::load(&b.manifest, b.code).expect("installed apps are admitted");
         println!("  {} started for a message", b.manifest.name);
         let app = FakeApp {
             id: b.manifest.id.clone(),
@@ -276,130 +301,15 @@ fn start_app(bundle: Vec<u8>, store: Arc<Mutex<Store>>, seed: [u8; 64], policy: 
             current: None,
             store,
             start: Instant::now(),
+            keys: None,
         };
-        let stop = maki_wasm::run(b.code, Box::new(app), limits);
+        let stop = loaded.run(Box::new(app));
         println!("  {} stopped: {stop:?}", b.manifest.name);
     });
     inbox
 }
 
-/// The fake's wallet, and the PSBT coming in and the one it last signed; the same for Ethereum.
-struct Wallet {
-    accounts: [Account; 2],
-    /// taproot's (BIP86), bitcoin's and the test networks'
-    taproot: [Account; 2],
-    incoming: Vec<u8>,
-    signed: Vec<u8>,
-    seed: [u8; 64],
-    eth_incoming: Vec<u8>,
-    eth_signed: Vec<u8>,
-    typed_incoming: Vec<u8>,
-}
-
 const TEST_PHRASE: &str = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
-
-impl Wallet {
-    fn new(phrase: &str) -> Wallet {
-        let words: Vec<&str> = phrase.split_whitespace().collect();
-        maki_seed::to_entropy(&words).expect("--phrase isn't a BIP39 phrase");
-        let seed = maki_seed::seed(&words, "");
-        let account = |n| Account::from_seed(&seed, n).expect("keys");
-        let taproot = |n| Account::new(&seed, n, maki_btc::Kind::Taproot).expect("keys");
-        Wallet {
-            accounts: [account(Network::Bitcoin), account(Network::Testnet)],
-            taproot: [taproot(Network::Bitcoin), taproot(Network::Testnet)],
-            incoming: Vec::new(),
-            signed: Vec::new(),
-            seed,
-            eth_incoming: Vec::new(),
-            eth_signed: Vec::new(),
-            typed_incoming: Vec::new(),
-        }
-    }
-}
-
-/// Everything maki-keys does with a finished PSBT, minus the screen: check it, show it, sign it.
-fn finish_signing(psbt: Vec<u8>, accounts: &[Account], wallet: &Mutex<Wallet>, policy: Policy) -> (u8, Vec<u8>) {
-    let mut psbt = match Psbt::parse(&psbt) {
-        Ok(p) => p,
-        Err(e) => return reply::btc_sign(true, Approval::Refused, 0, &format!("not a PSBT maki can read: {e}")),
-    };
-    let review = match wallet::review(&psbt, accounts) {
-        Ok(r) => r,
-        Err(e) => {
-            println!("  refused: {e}");
-            return reply::btc_sign(true, Approval::Refused, 0, &e.to_string());
-        }
-    };
-    for p in review.pages() {
-        println!("  maki shows: {:12} {:18} {}", p.heading, p.value, p.mono);
-    }
-    let a = approve(policy, &format!("sign the transaction? {}", review.summary()));
-    if a != Approval::Approved {
-        return reply::btc_sign(true, a, 0, "");
-    }
-    // no randomness for taproot's signatures: the fake's come out the same every time, for tests
-    if let Err(e) = wallet::sign(&mut psbt, accounts, &[0; 32]) {
-        return reply::btc_sign(true, Approval::Refused, 0, &e.to_string());
-    }
-    let signed = psbt.serialize();
-    let total = signed.len() as u32;
-    wallet.lock().unwrap().signed = signed;
-    reply::btc_sign(true, Approval::Approved, total, "")
-}
-
-/// Everything maki-keys does with a finished Ethereum transaction, minus the screen.
-fn finish_eth(tx: Vec<u8>, site: &str, account: &maki_eth::Account, wallet: &Mutex<Wallet>, policy: Policy) -> (u8, Vec<u8>) {
-    let tx = match maki_eth::Tx::parse(&tx) {
-        Ok(t) => t,
-        Err(e) => return reply::eth_sign(true, Approval::Refused, 0, &e.to_string()),
-    };
-    let (pages, summary) = match maki_eth::display::review(&tx) {
-        Ok(r) => r,
-        Err(e) => return reply::eth_sign(true, Approval::Refused, 0, &e.to_string()),
-    };
-    for p in pages {
-        println!("  maki shows: {:14} {:22} {}", p.heading, p.value, p.mono.replace('\n', " "));
-    }
-    let a = approve(policy, &format!("{site}: sign and send, {summary}?"));
-    if a != Approval::Approved {
-        return reply::eth_sign(true, a, 0, "");
-    }
-    match tx.sign(account) {
-        Ok(signed) => {
-            let total = signed.len() as u32;
-            wallet.lock().unwrap().eth_signed = signed;
-            reply::eth_sign(true, Approval::Approved, total, "")
-        }
-        Err(e) => reply::eth_sign(true, Approval::Refused, 0, &e.to_string()),
-    }
-}
-
-/// Everything maki-keys does with finished typed data (EIP-712), minus the screen: read it,
-/// show it, sign it.
-fn finish_typed(bytes: Vec<u8>, site: &str, account: &maki_eth::Account, policy: Policy) -> (u8, Vec<u8>) {
-    let refused = |why: String| reply::eth_typed(true, Approval::Refused, &[], &why);
-    let Ok(text) = String::from_utf8(bytes) else { return refused("not typed data maki can read: not UTF-8".into()) };
-    let typed = match maki_eth::TypedData::parse(&text) {
-        Ok(t) => t,
-        Err(e) => return refused(e.to_string()),
-    };
-    let (pages, title, line) = match maki_eth::display::typed_review(&typed) {
-        Ok(r) => r,
-        Err(e) => return refused(e.to_string()),
-    };
-    for p in pages {
-        println!("  maki shows: {:14} {:22} {}", p.heading, p.value, p.mono.replace('\n', " "));
-    }
-    let a = approve(policy, &format!("{site}: {} ({line})", title.to_lowercase()));
-    if a != Approval::Approved {
-        return reply::eth_typed(true, a, &[], "");
-    }
-    match account.sign_typed(&typed) {
-        Ok(signature) => reply::eth_typed(true, Approval::Approved, &signature, ""),
-        Err(e) => refused(e.to_string()),
-    }
-}
 
 /// The fake's backup: its store as lines of text, not encrypted (the badge's is; the desktop
 /// can't tell the difference, which is the point).
@@ -714,10 +624,20 @@ fn main() {
     store.lock().unwrap().store_root = Some(first_root.expect("the first store root checks out"));
     let running = Arc::new(Mutex::new(std::collections::BTreeMap::new()));
     let phrase = args.windows(2).find(|w| w[0] == "--phrase").map(|w| w[1].clone()).unwrap_or(TEST_PHRASE.into());
-    let wallet = Arc::new(Mutex::new(Wallet::new(&phrase)));
+    let seed = {
+        let words: Vec<&str> = phrase.split_whitespace().collect();
+        maki_seed::to_entropy(&words).expect("--phrase isn't a BIP39 phrase");
+        maki_seed::seed(&words, "")
+    };
     for pair in args.windows(2).filter(|w| w[0] == "--totp").map(|w| &w[1]) {
         let (s, secret) = pair.split_once('=').expect("--totp SITE=BASE32");
         store.lock().unwrap().totp.push((s.to_string(), base32(secret).expect("bad base32")));
+    }
+    // apps installed before this start, as if the owner had said yes then: checked as ever
+    for path in args.windows(2).filter(|w| w[0] == "--app").map(|w| &w[1]) {
+        let bundle = std::fs::read(path).unwrap_or_else(|e| panic!("--app {path}: {e}"));
+        let (_, body) = finish_install(bundle, &store, Policy::Approve, None);
+        assert_eq!(body.get(1), Some(&(Approval::Approved as u8)), "--app {path}: maki wouldn't install it");
     }
 
     let listener = TcpListener::bind(&addr).expect("bind");
@@ -857,7 +777,6 @@ fn main() {
                     Handled::Apps(Apps::Message { id: app, message }) => {
                         println!("  0x{:02x}#{} -> app message for {app} ({} bytes)", packet.kind, packet.id, message.len());
                         let (writer, store, running, id) = (writer.clone(), store.clone(), running.clone(), packet.id);
-                        let seed = wallet.lock().unwrap().seed;
                         std::thread::spawn(move || {
                             let (status, answer) = app_message(&app, message, &store, &running, seed, policy);
                             let (kind, body) = reply::app_message(status, &answer);
@@ -885,172 +804,6 @@ fn main() {
                             };
                             writer.lock().unwrap().write_all(&frame::encode(kind, id, &body)).ok();
                         });
-                    }
-                    Handled::Bitcoin(request) => {
-                        println!("  0x{:02x}#{} -> bitcoin", packet.kind, packet.id);
-                        let id = packet.id;
-                        let account = |network: u8, account: u8| {
-                            let w = wallet.lock().unwrap();
-                            let n = network.min(1) as usize;
-                            if account == ACCOUNT_TAPROOT { w.taproot[n].clone() } else { w.accounts[n].clone() }
-                        };
-                        let immediate = match request {
-                            // these wait for the owner: answered from another thread
-                            Bitcoin::Account { network, account: which } => {
-                                let (account, writer) = (account(network, which), writer.clone());
-                                std::thread::spawn(move || {
-                                    let a = approve(policy, "share the bitcoin account with this computer?");
-                                    let (kind, body) = reply::btc_account(a, &account.zpub(), &account.descriptor());
-                                    writer.lock().unwrap().write_all(&frame::encode(kind, id, &body)).ok();
-                                });
-                                None
-                            }
-                            Bitcoin::Address { network, change, index, account: which } => {
-                                let (account, writer) = (account(network, which), writer.clone());
-                                std::thread::spawn(move || {
-                                    let address = account.address(change, index).unwrap_or_default();
-                                    let page = display::address_page(&address, change, index, account.network);
-                                    println!("  maki shows: {:12} {:18} {}", page.heading, page.value, page.mono);
-                                    let a = approve(policy, "does it match the computer's?");
-                                    let (kind, body) = reply::btc_address(a, &address);
-                                    writer.lock().unwrap().write_all(&frame::encode(kind, id, &body)).ok();
-                                });
-                                None
-                            }
-                            Bitcoin::Sign { network, total, offset, data } => {
-                                let mut w = wallet.lock().unwrap();
-                                if offset == 0 {
-                                    w.incoming.clear();
-                                }
-                                if offset as usize != w.incoming.len() {
-                                    w.incoming.clear();
-                                    Some(reply::btc_sign(true, Approval::Unavailable, 0, ""))
-                                } else {
-                                    w.incoming.extend_from_slice(&data);
-                                    if (w.incoming.len() as u32) < total {
-                                        Some(reply::btc_sign(false, Approval::Approved, 0, ""))
-                                    } else {
-                                        let psbt = std::mem::take(&mut w.incoming);
-                                        let n = network.min(1) as usize;
-                                        let accounts = vec![w.accounts[n].clone(), w.taproot[n].clone()];
-                                        drop(w);
-                                        let (writer, wallet) = (writer.clone(), wallet.clone());
-                                        std::thread::spawn(move || {
-                                            let (kind, body) = finish_signing(psbt, &accounts, &wallet, policy);
-                                            writer.lock().unwrap().write_all(&frame::encode(kind, id, &body)).ok();
-                                        });
-                                        None
-                                    }
-                                }
-                            }
-                            Bitcoin::Signed { offset } => {
-                                let w = wallet.lock().unwrap();
-                                if w.signed.is_empty() {
-                                    Some(reply::btc_signed(Approval::Unavailable, 0, offset, &[]))
-                                } else {
-                                    let start = (offset as usize).min(w.signed.len());
-                                    let end = (start + PSBT_PIECE).min(w.signed.len());
-                                    Some(reply::btc_signed(Approval::Approved, w.signed.len() as u32, offset, &w.signed[start..end]))
-                                }
-                            }
-                        };
-                        if let Some((kind, body)) = immediate {
-                            writer.lock().unwrap().write_all(&frame::encode(kind, packet.id, &body)).ok();
-                        }
-                    }
-                    Handled::Ethereum(request) => {
-                        println!("  0x{:02x}#{} -> ethereum", packet.kind, packet.id);
-                        let id = packet.id;
-                        let eth_account = |index: u32| {
-                            let seed = wallet.lock().unwrap().seed;
-                            maki_eth::Account::from_seed(&seed, index).expect("keys")
-                        };
-                        let immediate = match request {
-                            Ethereum::Account { site, index } => {
-                                let (account, writer) = (eth_account(index), writer.clone());
-                                std::thread::spawn(move || {
-                                    let a = approve(policy, &format!("connect {site} to your ethereum account?"));
-                                    let (kind, body) = reply::eth_account(a, &account.address_string());
-                                    writer.lock().unwrap().write_all(&frame::encode(kind, id, &body)).ok();
-                                });
-                                None
-                            }
-                            Ethereum::Message { site, index, message } => {
-                                let (account, writer) = (eth_account(index), writer.clone());
-                                std::thread::spawn(move || {
-                                    for page in maki_eth::display::message_pages(&site, &message) {
-                                        println!("  maki shows: {} {} {}", page.heading, page.value, page.mono.replace('\n', " "));
-                                    }
-                                    let a = approve(policy, &format!("{site}: sign this message?"));
-                                    let signature = account.sign_message(&message).map(|s| s.to_vec()).unwrap_or_default();
-                                    let (kind, body) = reply::eth_message(a, &signature);
-                                    writer.lock().unwrap().write_all(&frame::encode(kind, id, &body)).ok();
-                                });
-                                None
-                            }
-                            Ethereum::Sign { site, index, total, offset, data } => {
-                                let mut w = wallet.lock().unwrap();
-                                if offset == 0 {
-                                    w.eth_incoming.clear();
-                                }
-                                if offset as usize != w.eth_incoming.len() {
-                                    w.eth_incoming.clear();
-                                    Some(reply::eth_sign(true, Approval::Unavailable, 0, ""))
-                                } else {
-                                    w.eth_incoming.extend_from_slice(&data);
-                                    if (w.eth_incoming.len() as u32) < total {
-                                        Some(reply::eth_sign(false, Approval::Approved, 0, ""))
-                                    } else {
-                                        let tx = std::mem::take(&mut w.eth_incoming);
-                                        drop(w);
-                                        let account = eth_account(index);
-                                        let (writer, wallet) = (writer.clone(), wallet.clone());
-                                        std::thread::spawn(move || {
-                                            let (kind, body) = finish_eth(tx, &site, &account, &wallet, policy);
-                                            writer.lock().unwrap().write_all(&frame::encode(kind, id, &body)).ok();
-                                        });
-                                        None
-                                    }
-                                }
-                            }
-                            Ethereum::Typed { site, index, total, offset, data } => {
-                                let mut w = wallet.lock().unwrap();
-                                if offset == 0 {
-                                    w.typed_incoming.clear();
-                                }
-                                if offset as usize != w.typed_incoming.len() {
-                                    w.typed_incoming.clear();
-                                    Some(reply::eth_typed(true, Approval::Unavailable, &[], ""))
-                                } else {
-                                    w.typed_incoming.extend_from_slice(&data);
-                                    if (w.typed_incoming.len() as u32) < total {
-                                        Some(reply::eth_typed(false, Approval::Approved, &[], ""))
-                                    } else {
-                                        let bytes = std::mem::take(&mut w.typed_incoming);
-                                        drop(w);
-                                        let (account, writer) = (eth_account(index), writer.clone());
-                                        std::thread::spawn(move || {
-                                            let (kind, body) = finish_typed(bytes, &site, &account, policy);
-                                            writer.lock().unwrap().write_all(&frame::encode(kind, id, &body)).ok();
-                                        });
-                                        None
-                                    }
-                                }
-                            }
-                            Ethereum::Signed { offset } => {
-                                let w = wallet.lock().unwrap();
-                                if w.eth_signed.is_empty() {
-                                    Some(reply::eth_signed(Approval::Unavailable, 0, offset, &[]))
-                                } else {
-                                    let start = (offset as usize).min(w.eth_signed.len());
-                                    let end = (start + TX_PIECE).min(w.eth_signed.len());
-                                    Some(reply::eth_signed(Approval::Approved, w.eth_signed.len() as u32, offset, &w.eth_signed[start..end]))
-                                }
-                            }
-                        };
-                        if let Some((kind, body)) = immediate {
-                            writer.lock().unwrap().write_all(&frame::encode(kind, packet.id, &body)).ok();
-                        }
                     }
                     // answered from another thread, like the vault on the badge: the link keeps
                     // serving heartbeats while the owner decides

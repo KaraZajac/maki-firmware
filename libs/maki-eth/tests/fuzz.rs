@@ -4,6 +4,13 @@
 use std::panic::{catch_unwind, AssertUnwindSafe};
 
 use maki_eth::{display, json, rlp, Account, Tx, TypedData};
+use maki_hd::seed::{OneKey, SeedKeys};
+
+/// maki's keys for a seed, for as long as the tests run.
+fn keys(seed: &[u8]) -> &'static SeedKeys { Box::leak(Box::new(SeedKeys::from_seed(seed).unwrap())) }
+
+/// One bare private key, as other software makes them, at every path.
+fn one(secret: &[u8; 32]) -> &'static OneKey { Box::leak(Box::new(OneKey::new(secret).unwrap())) }
 
 struct Rng(u64);
 impl Rng {
@@ -67,7 +74,7 @@ fn nothing_a_site_sends_panics_the_account() {
     }
     let words: Vec<&str> =
         "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about".split(' ').collect();
-    let account = Account::from_seed(&maki_seed::seed(&words, ""), 0).unwrap();
+    let account = Account::new(keys(&maki_seed::seed(&words, "")), 0).unwrap();
     let mut rng = Rng(0x2545_f491_4f6c_dd1d);
     let (mut parsed, mut reviewed) = (0, 0);
     for i in 0..30_000 {
@@ -142,7 +149,7 @@ fn no_typed_data_a_site_sends_panics_the_account() {
     for t in TYPED {
         assert!(TypedData::parse(t).is_ok(), "{}", t);
     }
-    let account = Account::from_private_key(&[9u8; 32]).unwrap();
+    let account = Account::new(one(&[9u8; 32]), 0).unwrap();
     let mut rng = Rng(0x9e37_79b9_7f4a_7c15);
     let (mut parsed, mut reviewed) = (0, 0);
     for i in 0..30_000 {

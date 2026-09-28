@@ -4,11 +4,10 @@ use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
 
-use k256::ecdsa::signature::hazmat::{PrehashSigner, PrehashVerifier};
-use k256::ecdsa::{Signature, SigningKey};
+use maki_hd::{Keys, Public, Tweak, HARDENED};
 
 use crate::address::{address, describe, p2tr_script, p2wpkh_script, Network};
-use crate::bip32::{Xpriv, HARDENED};
+use crate::bip32::xpub;
 use crate::hash::{hash160, sha256, sha256d, tagged};
 use crate::psbt::{self, parse_derivation, parse_tap_derivation, Psbt};
 use crate::taproot;
@@ -17,6 +16,8 @@ use crate::tx::{write_varint, Cursor, Tx, TxOut};
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Error {
     Key,
+    /// maki couldn't make a key or a signature: it's locked, or said no.
+    Keys(maki_hd::Error),
     Psbt(&'static str),
     /// This input isn't this wallet's: no derivation of ours, or one that doesn't match.
     NotOurs(usize),
@@ -40,6 +41,7 @@ impl core::fmt::Display for Error {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
             Error::Key => write!(f, "couldn't derive this wallet's keys"),
+            Error::Keys(e) => write!(f, "{}", e),
             Error::Psbt(why) => write!(f, "not a PSBT maki can read: {}", why),
             Error::NotOurs(i) => write!(
                 f,
@@ -85,42 +87,52 @@ impl Kind {
     }
 }
 
-/// Account 0 of BIP84 or BIP86: `m/84'/coin'/0'` or `m/86'/coin'/0'`.
+/// A key of an account's: where it is, and its public key.
 #[derive(Clone)]
-pub struct Account {
+struct Key {
+    path: [u32; 5],
+    public: [u8; 33],
+}
+
+/// Account 0 of BIP84 or BIP86: `m/84'/coin'/0'` or `m/86'/coin'/0'`. Its keys are maki's
+/// (`maki_hd::Keys`): the account asks for public keys and signatures by path.
+#[derive(Clone)]
+pub struct Account<'k> {
     pub network: Network,
     pub kind: Kind,
     pub master_fingerprint: [u8; 4],
-    key: Xpriv,
-    /// the receiving chain (`/0`) and the change chain (`/1`), derived once
-    chains: [Xpriv; 2],
+    keys: &'k dyn Keys,
+    /// the account key, for its xpub
+    public: Public,
 }
 
-impl Account {
+impl<'k> Account<'k> {
     /// The native SegWit account (BIP84).
-    pub fn from_seed(seed: &[u8], network: Network) -> Result<Account, Error> { Account::new(seed, network, Kind::Segwit) }
+    pub fn segwit(keys: &'k dyn Keys, network: Network) -> Result<Account<'k>, Error> { Account::new(keys, network, Kind::Segwit) }
 
-    pub fn new(seed: &[u8], network: Network, kind: Kind) -> Result<Account, Error> {
-        let master = Xpriv::master(seed).map_err(|_| Error::Key)?;
-        let key = master.derive(&[kind.purpose() | HARDENED, network.coin_type() | HARDENED, HARDENED]).map_err(|_| Error::Key)?;
-        let chains = [key.child(0).map_err(|_| Error::Key)?, key.child(1).map_err(|_| Error::Key)?];
-        Ok(Account { network, kind, master_fingerprint: master.fingerprint(), key, chains })
+    pub fn new(keys: &'k dyn Keys, network: Network, kind: Kind) -> Result<Account<'k>, Error> {
+        let path = [kind.purpose() | HARDENED, network.coin_type() | HARDENED, HARDENED];
+        let master_fingerprint = keys.fingerprint().map_err(Error::Keys)?;
+        let public = keys.public(&path).map_err(Error::Keys)?;
+        Ok(Account { network, kind, master_fingerprint, keys, public })
     }
 
     fn path(&self) -> [u32; 3] { [self.kind.purpose() | HARDENED, self.network.coin_type() | HARDENED, HARDENED] }
 
-    fn key_at(&self, change: bool, index: u32) -> Result<Xpriv, Error> {
+    fn key_at(&self, change: bool, index: u32) -> Result<Key, Error> {
         if index >= HARDENED {
             return Err(Error::Key);
         }
-        self.chains[change as usize].child(index).map_err(|_| Error::Key)
+        let [purpose, coin, account] = self.path();
+        let path = [purpose, coin, account, change as u32, index];
+        Ok(Key { path, public: self.keys.public(&path).map_err(Error::Keys)?.key })
     }
 
     /// The output script a key of this account's pays to: P2WPKH, or P2TR with the key tweaked.
-    fn script_of(&self, key: &Xpriv) -> Result<Vec<u8>, Error> {
+    fn script_of(&self, key: &Key) -> Result<Vec<u8>, Error> {
         match self.kind {
-            Kind::Segwit => Ok(p2wpkh_script(&key.public_key())),
-            Kind::Taproot => Ok(p2tr_script(&taproot::output_key(&taproot::x_only(&key.public_key())).ok_or(Error::Key)?)),
+            Kind::Segwit => Ok(p2wpkh_script(&key.public)),
+            Kind::Taproot => Ok(p2tr_script(&self.keys.taproot_output(&key.path).map_err(Error::Keys)?)),
         }
     }
 
@@ -134,8 +146,8 @@ impl Account {
     /// BIP84 wallets want it; taproot has no such form, so an xpub (tpub).
     pub fn zpub(&self) -> String {
         match self.kind {
-            Kind::Segwit => self.key.xpub(self.network.zpub_version()),
-            Kind::Taproot => self.key.xpub(self.network.xpub_version()),
+            Kind::Segwit => self.xpub(self.network.zpub_version()),
+            Kind::Taproot => self.xpub(self.network.xpub_version()),
         }
     }
 
@@ -153,13 +165,16 @@ impl Account {
             fp,
             self.kind.purpose(),
             self.network.coin_type(),
-            self.key.xpub(self.network.xpub_version())
+            self.xpub(self.network.xpub_version())
         );
         format!("{}#{}", body, descriptor_checksum(&body))
     }
 
+    /// The account key, base58check with the given version bytes.
+    fn xpub(&self, version: [u8; 4]) -> String { xpub(version, 3, HARDENED, &self.public) }
+
     /// Whose key a path names: ours, from this account's chains, or not.
-    fn derived(&self, fp: [u8; 4], path: &[u32]) -> Option<Xpriv> {
+    fn derived(&self, fp: [u8; 4], path: &[u32]) -> Option<Key> {
         if fp != self.master_fingerprint || path.len() != 5 || path[..3] != self.path() || path[3] > 1 {
             return None;
         }
@@ -167,18 +182,18 @@ impl Account {
     }
 
     /// A native SegWit derivation (BIP174): ours if its key is the one we'd make.
-    fn ours(&self, derivation: &[u8], public_key: &[u8]) -> Option<Xpriv> {
+    fn ours(&self, derivation: &[u8], public_key: &[u8]) -> Option<Key> {
         if self.kind != Kind::Segwit {
             return None;
         }
         let (fp, path) = parse_derivation(derivation)?;
         let key = self.derived(fp, &path)?;
-        (key.public_key()[..] == *public_key).then_some(key)
+        (key.public[..] == *public_key).then_some(key)
     }
 
     /// A taproot derivation (BIP371), for the key alone (no script leaves): ours if its x-only
     /// key is the one we'd make.
-    fn ours_tap(&self, derivation: &[u8], x_only: &[u8]) -> Option<(Xpriv, u32)> {
+    fn ours_tap(&self, derivation: &[u8], x_only: &[u8]) -> Option<(Key, u32)> {
         if self.kind != Kind::Taproot {
             return None;
         }
@@ -187,7 +202,7 @@ impl Account {
             return None;
         }
         let key = self.derived(fp, &path)?;
-        (taproot::x_only(&key.public_key())[..] == *x_only).then_some((key, path[3]))
+        (taproot::x_only(&key.public)[..] == *x_only).then_some((key, path[3]))
     }
 }
 
@@ -216,9 +231,10 @@ impl Review {
     pub fn fee_rate(&self) -> u64 { self.fee.div_ceil(self.vbytes.max(1)) }
 }
 
-/// An input of ours: its key, the output it spends, and how it's signed.
+/// An input of ours: its key (and which account's), the output it spends, and how it's signed.
 struct Spend {
-    key: Xpriv,
+    key: Key,
+    account: usize,
     spent: TxOut,
     kind: Kind,
     /// taproot: 0 (the default) or 1 (SIGHASH_ALL, written out); native SegWit: always 1
@@ -292,32 +308,32 @@ fn spends(psbt: &Psbt, accounts: &[Account]) -> Result<Vec<Spend>, Error> {
             let (account, key) = pairs
                 .iter()
                 .filter(|p| p.key.first() == Some(&psbt::IN_TAP_BIP32_DERIVATION) && p.key.len() == 33)
-                .find_map(|p| accounts.iter().find_map(|a| a.ours_tap(&p.value, &p.key[1..]).map(|(k, _)| (a, k))))
+                .find_map(|p| accounts.iter().enumerate().find_map(|(n, a)| a.ours_tap(&p.value, &p.key[1..]).map(|(k, _)| (n, k))))
                 .ok_or(Error::NotOurs(i))?;
             if let Some(internal) = psbt.input(i, psbt::IN_TAP_INTERNAL_KEY) {
-                if internal != taproot::x_only(&key.public_key()) {
+                if internal != taproot::x_only(&key.public) {
                     return Err(Error::NotOurs(i));
                 }
             }
-            if account.script_of(&key)? != spent.script_pubkey {
+            if accounts[account].script_of(&key)? != spent.script_pubkey {
                 return Err(Error::NotOurs(i));
             }
-            Spend { key, spent, kind: Kind::Taproot, hash_type }
+            Spend { key, account, spent, kind: Kind::Taproot, hash_type }
         } else {
             // the whole previous transaction: amounts are never taken on the PSBT's word
             let spent = from_prev.ok_or(Error::NoPreviousTx(i))?;
             if sighash.is_some_and(|t| t != [1, 0, 0, 0]) {
                 return Err(Error::Sighash(i));
             }
-            let key = pairs
+            let (account, key) = pairs
                 .iter()
                 .filter(|p| p.key.first() == Some(&psbt::IN_BIP32_DERIVATION) && p.key.len() == 34)
-                .find_map(|p| accounts.iter().find_map(|a| a.ours(&p.value, &p.key[1..])))
+                .find_map(|p| accounts.iter().enumerate().find_map(|(n, a)| a.ours(&p.value, &p.key[1..]).map(|k| (n, k))))
                 .ok_or(Error::NotOurs(i))?;
-            if p2wpkh_script(&key.public_key()) != spent.script_pubkey {
+            if p2wpkh_script(&key.public) != spent.script_pubkey {
                 return Err(Error::NotOurs(i));
             }
-            Spend { key, spent, kind: Kind::Segwit, hash_type: 1 }
+            Spend { key, account, spent, kind: Kind::Segwit, hash_type: 1 }
         };
         out.push(spend);
     }
@@ -450,9 +466,10 @@ fn sighash(tx: &Tx, i: usize, public_key: &[u8; 33], amount: u64) -> [u8; 32] {
     sha256d(&pre)
 }
 
-/// DER, as Bitcoin wants an ECDSA signature: two positive integers, no padding beyond one zero.
-fn der(sig: &Signature) -> Vec<u8> {
-    let (r, s) = sig.split_bytes();
+/// DER, as Bitcoin wants an ECDSA signature (r and s, 32 bytes each): two positive integers, no
+/// padding beyond one zero.
+fn der(sig: &[u8; 64]) -> Vec<u8> {
+    let (r, s) = (&sig[..32], &sig[32..]);
     let int = |b: &[u8]| -> Vec<u8> {
         let b = &b[b.iter().position(|&x| x != 0).unwrap_or(b.len() - 1)..];
         let mut v = Vec::with_capacity(34);
@@ -465,7 +482,7 @@ fn der(sig: &Signature) -> Vec<u8> {
         v.extend_from_slice(b);
         v
     };
-    let (r, s) = (int(&r), int(&s));
+    let (r, s) = (int(r), int(s));
     let mut out = Vec::with_capacity(72);
     out.push(0x30);
     out.push((r.len() + s.len()) as u8);
@@ -474,37 +491,35 @@ fn der(sig: &Signature) -> Vec<u8> {
     out
 }
 
+/// How many signatures `sign` will make: one per input, which the owner is told before saying
+/// yes (maki lets a wallet app make only as many as it said).
+pub fn signatures(psbt: &Psbt, accounts: &[Account]) -> Result<usize, Error> { check(psbt, accounts).map(|(_, s)| s.len()) }
+
 /// Sign every input (all are this wallet's; `review` has checked), and return how many it
 /// signed. A native SegWit input gets a partial signature, deterministic (RFC 6979) and low-S; a
-/// taproot one its key's Schnorr signature (BIP340), with `aux_rand` as BIP340's auxiliary
-/// randomness (fresh random bytes, for signatures that don't depend on the key alone). Each
-/// signature is verified before it's added.
-pub fn sign(psbt: &mut Psbt, accounts: &[Account], aux_rand: &[u8; 32]) -> Result<usize, Error> {
+/// taproot one its key's Schnorr signature (BIP340), tweaked for the output key. The keys make
+/// the signatures, and maki checks each one before it goes out: a signature a fault spoiled can
+/// give the key away.
+pub fn sign(psbt: &mut Psbt, accounts: &[Account]) -> Result<usize, Error> {
     let (_, spends) = check(psbt, accounts)?;
     let spent: Vec<TxOut> = spends.iter().map(|s| s.spent.clone()).collect();
     for (i, s) in spends.iter().enumerate() {
+        let keys = accounts[s.account].keys;
         match s.kind {
             Kind::Segwit => {
-                let public_key = s.key.public_key();
-                let digest = sighash(&psbt.tx, i, &public_key, s.spent.value);
-                let signer = SigningKey::from(s.key.secret());
-                let sig: Signature = signer.sign_prehash(&digest).map_err(|_| Error::Key)?;
-                let sig = sig.normalize_s().unwrap_or(sig);
-                // checked before it goes out: a signature a fault spoiled can give the key away
-                signer.verifying_key().verify_prehash(&digest, &sig).map_err(|_| Error::Key)?;
+                let digest = sighash(&psbt.tx, i, &s.key.public, s.spent.value);
+                let (sig, _) = keys.sign_ecdsa(&s.key.path, &digest).map_err(Error::Keys)?;
                 let mut value = der(&sig);
                 value.push(0x01); // SIGHASH_ALL
                 let mut key = Vec::with_capacity(34);
                 key.push(psbt::IN_PARTIAL_SIG);
-                key.extend_from_slice(&public_key);
+                key.extend_from_slice(&s.key.public);
                 psbt.set_input(i, key, value);
             }
             Kind::Taproot => {
                 let digest = taproot_sighash(&psbt.tx, i, &spent, s.hash_type);
-                let signer = taproot::signing_key(s.key.secret()).ok_or(Error::Key)?;
-                let sig = signer.sign_raw(&digest, aux_rand).map_err(|_| Error::Key)?;
-                signer.verifying_key().verify_raw(&digest, &sig).map_err(|_| Error::Key)?;
-                let mut value = sig.to_bytes().to_vec();
+                let sig = keys.sign_schnorr(&s.key.path, &digest, Tweak::Taproot).map_err(Error::Keys)?;
+                let mut value = sig.to_vec();
                 if s.hash_type == 1 {
                     value.push(0x01);
                 }

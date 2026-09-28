@@ -3,7 +3,8 @@
 //! COBS removes every zero byte from the frame, so a zero always means "end of frame" and a
 //! reader that joins mid-stream resynchronises at the next one. The CRC catches the rest.
 
-pub const PROTOCOL_VERSION: u8 = 2;
+/// 3: Bitcoin's and Ethereum's messages went to wallet apps (ARCHITECTURE.md, "Wallets are apps").
+pub const PROTOCOL_VERSION: u8 = 3;
 /// Largest decoded frame either side will accept.
 pub const MAX_FRAME: usize = 8192;
 

@@ -28,6 +28,7 @@ fn no_bundle_panics_the_reader() {
             memory_kib: 64,
             backup: false,
             description: String::new(),
+            wallet: None,
         },
         b"\0asm\x01\0\0\0",
         Some(&[0u32; ICON_WORDS]),

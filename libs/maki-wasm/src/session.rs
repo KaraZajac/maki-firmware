@@ -24,12 +24,16 @@ pub struct Session {
     started: u64,
     /// A wait returned Exit: waiting again means the app didn't.
     pub exit_sent: bool,
+    /// With the wallet permission: the paths its manifest names, which maki holds it to.
+    pub wallet: Option<maki_bundle::Wallet>,
+    /// The signatures the owner's last yes to a review allows, and until when (millis).
+    allowance: (u32, u64),
 }
 
 impl Session {
     pub fn new(platform: Box<dyn Platform>, limits: Limits) -> Session {
         let started = platform.millis();
-        Session { platform, canvas: Canvas::default(), limits, sizes: None, started, exit_sent: false }
+        Session { platform, canvas: Canvas::default(), limits, sizes: None, started, exit_sent: false, wallet: None, allowance: (0, 0) }
     }
 
     fn sizes(&mut self) -> &mut BTreeMap<String, usize> {
@@ -255,6 +259,71 @@ impl Session {
         Ok(shared)
     }
 
+    /// Whether the wallet permission's paths let the app use `path`.
+    fn wallet_path(&self, path: &[u32]) -> Result<(), i32> {
+        match &self.wallet {
+            Some(w) if path.len() <= maki_hd::MAX_DEPTH && w.allows(path) => Ok(()),
+            _ => Err(REFUSED),
+        }
+    }
+
+    /// The wallet permission: the master key's fingerprint, as descriptors and PSBTs name the
+    /// seed their keys come from.
+    pub fn wallet_fingerprint(&mut self) -> Result<[u8; 4], i32> {
+        self.needs(Permission::Wallet)?;
+        self.platform.wallet(maki_hd::op::FINGERPRINT, &[], &[])?.as_slice().try_into().map_err(|_| FAILED)
+    }
+
+    /// The wallet permission: the public key at `path` (one of its own), in the `WALLET_*`
+    /// form asked for.
+    pub fn wallet_public(&mut self, path: &[u32], form: u8) -> Result<Vec<u8>, i32> {
+        self.needs(Permission::Wallet)?;
+        if !matches!(form, WALLET_PUBLIC | WALLET_UNCOMPRESSED | WALLET_TAPROOT) {
+            return Err(INVALID);
+        }
+        self.wallet_path(path)?;
+        self.platform.wallet(form, path, &[])
+    }
+
+    /// The wallet permission: shows the owner a review on maki's own screen (see `parse_review`
+    /// for its text), then asks. A yes lets the app make `signatures` signatures, within
+    /// `ALLOWANCE_MS`; whatever the last review allowed goes, either way. 0 yes, 1 no, 2 no answer.
+    pub fn wallet_review(&mut self, text: &str, signatures: u32, timeout_s: i32) -> i32 {
+        if let Err(e) = self.needs(Permission::Wallet) {
+            return e;
+        }
+        if text.len() > MAX_REVIEW {
+            return TOO_BIG;
+        }
+        if signatures > MAX_SIGNATURES {
+            return INVALID;
+        }
+        let Some(review) = parse_review(text, timeout_s) else { return INVALID };
+        self.allowance = (0, 0);
+        let answer = self.platform.review(&review);
+        if answer == Answer::Yes {
+            self.allowance = (signatures, self.platform.millis() + ALLOWANCE_MS);
+        }
+        answer.code()
+    }
+
+    /// The wallet permission: a signature with the key at `path` (one of its own) over a 32-byte
+    /// digest, `WALLET_SIGN_*`, if the owner's last yes to a review allows one more.
+    pub fn wallet_sign(&mut self, path: &[u32], digest: &[u8], scheme: u8) -> Result<Vec<u8>, i32> {
+        self.needs(Permission::Wallet)?;
+        if !matches!(scheme, WALLET_SIGN_ECDSA | WALLET_SIGN_SCHNORR | WALLET_SIGN_TAPROOT) || digest.len() != 32 {
+            return Err(INVALID);
+        }
+        self.wallet_path(path)?;
+        let (left, until) = self.allowance;
+        if left == 0 || self.platform.millis() > until {
+            self.allowance = (0, 0);
+            return Err(REFUSED);
+        }
+        self.allowance.0 -= 1;
+        self.platform.wallet(scheme, path, digest)
+    }
+
     /// The keyboard permission: printable ASCII, newlines and tabs.
     pub fn type_text(&mut self, text: &str) -> i32 {
         if let Err(e) = self.needs(Permission::Keyboard) {
@@ -321,6 +390,58 @@ fn parse_ask(text: &str, timeout_s: i32) -> Option<Ask> {
         && ask.yes.len() <= MAX_ANSWER_LABEL
         && ask.no.len() <= MAX_ANSWER_LABEL;
     fits.then_some(ask)
+}
+
+/// A review's text: "question\ndetail\nyes\nno" (the last three optional, as an ask's), then
+/// each page after a record separator (0x1e): its heading, value, fixed-width text and prose,
+/// separated by unit separators (0x1f), the last two optional. None if it doesn't fit maki's
+/// screen or limits.
+fn parse_review(text: &str, timeout_s: i32) -> Option<Review> {
+    let mut records = text.split('\x1e');
+    let head: Vec<&str> = records.next()?.split('\n').collect();
+    if head.len() > 4 || head.iter().any(|p| p.chars().any(|ch| ch.is_control())) {
+        return None;
+    }
+    let part = |i: usize| head.get(i).copied().unwrap_or("").to_string();
+    let mut pages = Vec::new();
+    for record in records {
+        let fields: Vec<&str> = record.split('\x1f').collect();
+        if !(2..=4).contains(&fields.len()) {
+            return None;
+        }
+        let field = |i: usize| fields.get(i).copied().unwrap_or("");
+        let page = Page { heading: field(0).into(), value: field(1).into(), mono: field(2).into(), prose: field(3).into() };
+        // fixed-width text and prose may run over lines; nothing else is a control character
+        let plain = |t: &str| !t.chars().any(|ch| ch.is_control());
+        let lines = |t: &str| !t.chars().any(|ch| ch.is_control() && ch != '\n');
+        if !plain(&page.heading) || !plain(&page.value) || !lines(&page.mono) || !lines(&page.prose) {
+            return None;
+        }
+        if page.heading.trim().is_empty()
+            || page.heading.len() > MAX_HEADING
+            || page.value.len() > MAX_PAGE_VALUE
+            || page.mono.len() > MAX_PAGE_TEXT
+            || page.prose.len() > MAX_PAGE_TEXT
+        {
+            return None;
+        }
+        pages.push(page);
+    }
+    let review = Review {
+        question: part(0),
+        detail: part(1),
+        yes: part(2),
+        no: part(3),
+        pages,
+        timeout_s: if timeout_s <= 0 { REVIEW_TIMEOUT_S } else { (timeout_s as u32).clamp(5, MAX_REVIEW_TIMEOUT_S) },
+    };
+    let fits = !review.question.trim().is_empty()
+        && review.question.len() <= MAX_QUESTION
+        && review.detail.len() <= MAX_DETAIL
+        && review.yes.len() <= MAX_ANSWER_LABEL
+        && review.no.len() <= MAX_ANSWER_LABEL
+        && review.pages.len() <= MAX_PAGES;
+    fits.then_some(review)
 }
 
 /// The app's Ed25519 key for `label`: its secret for that label is the key's seed.

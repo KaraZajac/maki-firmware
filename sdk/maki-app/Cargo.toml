@@ -10,6 +10,11 @@ default = ["panic-handler"]
 # apps that use std turn it off and get the same from `std`.
 panic-handler = []
 std = []
+# wallets' keys (the wallet permission, host API 3): needs an allocator
+wallet = ["dep:maki-hd"]
+
+[dependencies]
+maki-hd = { path = "../../libs/maki-hd", optional = true }
 
 # a native app (`kind = "native"`): maki's functions over its app service
 [target.'cfg(target_os = "xous")'.dependencies]
