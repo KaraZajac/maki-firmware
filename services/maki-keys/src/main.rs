@@ -770,7 +770,7 @@ fn main() -> ! {
                     buffer.replace(req).ok();
                 }
             }
-            Some(KeysOp::EthSign) if state != State::Unlocked => {
+            Some(KeysOp::EthSign | KeysOp::EthTyped) if state != State::Unlocked => {
                 let Some(mem) = msg.body.memory_message_mut() else { continue };
                 let mut buffer = unsafe { Buffer::from_memory_message_mut(mem) };
                 if let Ok(mut req) = buffer.to_original::<Chunk, _>() {
@@ -784,6 +784,7 @@ fn main() -> ! {
             Some(KeysOp::EthMessage) => eth.sign_message(msg, seed.get(&store, state)),
             Some(KeysOp::EthSign) => eth.sign_piece(msg, || seed.get(&store, state)),
             Some(KeysOp::EthSigned) => eth.signed_piece(&mut msg),
+            Some(KeysOp::EthTyped) => eth.typed_piece(msg, || seed.get(&store, state)),
             // nothing of the wallet's before the PIN
             Some(KeysOp::BtcAccount | KeysOp::BtcAddress) if state != State::Unlocked => {
                 let Some(mem) = msg.body.memory_message_mut() else { continue };

@@ -255,6 +255,10 @@ fn ethereum(keys: &maki_keys::Keys, request: Ethereum) -> (u8, Vec<u8>) {
             let m = keys.eth_message(&site, index, &message);
             reply::eth_message(approval(m.result), &m.signature)
         }
+        Ethereum::Typed { site, index, total, offset, data } => {
+            let c = keys.eth_typed_chunk(&site, index, total, offset, data);
+            reply::eth_typed(c.done, approval(c.result), &c.data, &c.reason)
+        }
     }
 }
 
@@ -262,7 +266,9 @@ fn ethereum(keys: &maki_keys::Keys, request: Ethereum) -> (u8, Vec<u8>) {
 fn eth_waits(request: &Ethereum) -> bool {
     match request {
         Ethereum::Account { .. } | Ethereum::Message { .. } => true,
-        Ethereum::Sign { total, offset, data, .. } => *offset as usize + data.len() >= *total as usize,
+        Ethereum::Sign { total, offset, data, .. } | Ethereum::Typed { total, offset, data, .. } => {
+            *offset as usize + data.len() >= *total as usize
+        }
         Ethereum::Signed { .. } => false,
     }
 }
@@ -712,8 +718,9 @@ fn main() -> ! {
 
     // The emulator again: built with MAKI_DEMO_ETH, once maki is unlocked with a phrase, do what
     // the browser extension's Ethereum provider does for a site, "demo.maki": connect, sign a
-    // message, and sign a transaction (0.05 ETH on Ethereum), then check the signatures against
-    // the ones maki's code makes on a computer for the BIP39 test phrase: restore that at setup.
+    // message, sign a transaction (0.05 ETH on Ethereum), and sign typed data (a permit for 1
+    // USDC), then check the signatures against the ones maki's code makes on a computer for the
+    // BIP39 test phrase: restore that at setup.
     if option_env!("MAKI_DEMO_ETH").is_some() {
         std::thread::spawn(|| {
             let unsigned: &[u8] = include_bytes!("../../../libs/maki-eth/tests/fixtures/abandon-tx-unsigned.bin");
@@ -736,6 +743,10 @@ fn main() -> ! {
                 let p = keys.eth_signed_chunk(0);
                 log::warn!("demo eth signed: {} bytes, as expected: {}", p.data.len(), p.data == expected);
             }
+            let typed: &[u8] = include_bytes!("../../../libs/maki-eth/tests/fixtures/abandon-typed.json");
+            let typed_sig: &[u8] = include_bytes!("../../../libs/maki-eth/tests/fixtures/abandon-typed.sig");
+            let t = keys.eth_typed_chunk("demo.maki", 0, typed.len() as u32, 0, typed.to_vec());
+            log::warn!("demo eth typed: result {}, as expected: {} reason '{}'", t.result, t.data == typed_sig, t.reason);
         });
     }
 
@@ -843,6 +854,7 @@ fn main() -> ! {
                             let busy = |request: &Ethereum| match request {
                                 Ethereum::Account { .. } => reply::eth_account(Approval::Unavailable, ""),
                                 Ethereum::Message { .. } => reply::eth_message(Approval::Unavailable, &[]),
+                                Ethereum::Typed { .. } => reply::eth_typed(true, Approval::Unavailable, &[], ""),
                                 _ => reply::eth_sign(true, Approval::Unavailable, 0, ""),
                             };
                             if waiting.fetch_add(1, Ordering::SeqCst) >= MAX_WAITING_ASKS {

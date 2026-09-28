@@ -1,11 +1,11 @@
 //! The Ethereum account's keys, from the recovery phrase: the address shared with sites the
-//! owner connects, messages (EIP-191) and transactions signed once the owner has read them on
-//! screen. What's shown and checked is maki-eth's.
+//! owner connects, messages (EIP-191), typed data (EIP-712) and transactions signed once the
+//! owner has read them on screen. What's shown and checked is maki-eth's.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
-use maki_eth::{display, Account, Tx};
+use maki_eth::{display, Account, Tx, TypedData};
 use maki_keys_api::*;
 use maki_launcher::{Answer, Launcher, Page};
 use xous_ipc::Buffer;
@@ -28,11 +28,29 @@ fn owner_says(ask: impl FnOnce(&Launcher) -> Result<Answer, xous::Error>) -> u32
 
 fn page(p: display::Page) -> Page { Page { heading: p.heading, value: p.value, mono: p.mono, prose: String::new() } }
 
+/// What pieces make up: a transaction, or typed data.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Whole {
+    Tx,
+    Typed,
+}
+
+/// Where a piece leaves what's coming in.
+enum Piece {
+    /// more to come
+    More,
+    /// the last piece: all of it
+    Done(Vec<u8>),
+    /// out of order, or too big: dropped, with what came before
+    Wrong,
+}
+
 pub(crate) struct Eth {
     /// derived at first use while unlocked, by index
     accounts: Vec<Account>,
     incoming: Vec<u8>,
     incoming_total: u32,
+    incoming_kind: Whole,
     signed: Arc<Mutex<Vec<u8>>>,
     busy: Arc<AtomicBool>,
 }
@@ -43,6 +61,7 @@ impl Eth {
             accounts: Vec::new(),
             incoming: Vec::new(),
             incoming_total: 0,
+            incoming_kind: Whole::Tx,
             signed: Arc::new(Mutex::new(Vec::new())),
             busy: Arc::new(AtomicBool::new(false)),
         }
@@ -156,27 +175,17 @@ impl Eth {
         if self.busy.load(Ordering::SeqCst) {
             return reply(req, RESULT_FAILED, String::new());
         }
-        if req.offset == 0 {
-            self.incoming.clear();
-            self.incoming_total = req.total;
-        }
-        let in_order = req.offset as usize == self.incoming.len()
-            && req.total == self.incoming_total
-            && req.total as usize <= MAX_TX
-            && self.incoming.len() + req.data.len() <= req.total as usize;
-        if !in_order {
-            self.incoming.clear();
-            return reply(req, RESULT_FAILED, String::new());
-        }
-        self.incoming.extend_from_slice(&req.data);
-        if self.incoming.len() < self.incoming_total as usize {
-            req.data.clear();
-            req.result = RESULT_OK;
-            req.done = false;
-            buffer.replace(req).ok();
-            return;
-        }
-        let bytes = std::mem::take(&mut self.incoming);
+        let bytes = match self.piece(&req, Whole::Tx, MAX_TX) {
+            Piece::More => {
+                req.data.clear();
+                req.result = RESULT_OK;
+                req.done = false;
+                buffer.replace(req).ok();
+                return;
+            }
+            Piece::Wrong => return reply(req, RESULT_FAILED, String::new()),
+            Piece::Done(bytes) => bytes,
+        };
         let account = match self.account(seed(), req.index) {
             Ok(a) => a,
             Err(result) => return reply(req, result, String::new()),
@@ -218,6 +227,104 @@ impl Eth {
                     req.result = result;
                     req.done = true;
                     req.total = total;
+                    buffer.replace(req).ok();
+                }
+            }
+        });
+    }
+
+    /// A piece of a transaction or of typed data, in order: what it leaves coming in.
+    fn piece(&mut self, req: &Chunk, kind: Whole, max: usize) -> Piece {
+        if req.offset == 0 {
+            self.incoming.clear();
+            self.incoming_total = req.total;
+            self.incoming_kind = kind;
+        }
+        let in_order = req.offset as usize == self.incoming.len()
+            && req.total == self.incoming_total
+            && kind == self.incoming_kind
+            && req.total as usize <= max
+            && self.incoming.len() + req.data.len() <= req.total as usize;
+        if !in_order {
+            self.incoming.clear();
+            return Piece::Wrong;
+        }
+        self.incoming.extend_from_slice(&req.data);
+        if self.incoming.len() < self.incoming_total as usize {
+            return Piece::More;
+        }
+        Piece::Done(std::mem::take(&mut self.incoming))
+    }
+
+    /// `KeysOp::EthTyped`: a piece of typed data (EIP-712). The last one is read, shown, and
+    /// signed if the owner says so; its answer carries the signature.
+    pub(crate) fn typed_piece(&mut self, mut msg: xous::MessageEnvelope, seed: impl FnOnce() -> Option<[u8; 64]>) {
+        let Some(mem) = msg.body.memory_message_mut() else { return };
+        let mut buffer = unsafe { Buffer::from_memory_message_mut(mem) };
+        let Ok(mut req) = buffer.to_original::<Chunk, _>() else { return };
+        let mut reply = |mut req: Chunk, result: u32, reason: String| {
+            req.data.clear();
+            req.result = result;
+            req.done = true;
+            req.reason = reason;
+            buffer.replace(req).ok();
+        };
+        if self.busy.load(Ordering::SeqCst) {
+            return reply(req, RESULT_FAILED, String::new());
+        }
+        let bytes = match self.piece(&req, Whole::Typed, maki_eth::typed::MAX_TYPED) {
+            Piece::More => {
+                req.data.clear();
+                req.result = RESULT_OK;
+                req.done = false;
+                buffer.replace(req).ok();
+                return;
+            }
+            Piece::Wrong => return reply(req, RESULT_FAILED, String::new()),
+            Piece::Done(bytes) => bytes,
+        };
+        let account = match self.account(seed(), req.index) {
+            Ok(a) => a,
+            Err(result) => return reply(req, result, String::new()),
+        };
+        let Ok(text) = String::from_utf8(bytes) else {
+            return reply(req, RESULT_REFUSED, String::from("not typed data maki can read: not UTF-8"));
+        };
+        let typed = match TypedData::parse(&text) {
+            Ok(t) => t,
+            Err(e) => return reply(req, RESULT_REFUSED, e.to_string()),
+        };
+        let (pages, title, line) = match display::typed_review(&typed) {
+            Ok(r) => r,
+            Err(e) => return reply(req, RESULT_REFUSED, e.to_string()),
+        };
+        let site = req.site.clone();
+        log::info!("ethereum typed data from {}: {}, {} pages", site, typed.primary_type, pages.len());
+        drop(buffer);
+        let busy = self.busy.clone();
+        busy.store(true, Ordering::SeqCst);
+        std::thread::spawn(move || {
+            let pages = pages.into_iter().map(page).collect();
+            let mut result = owner_says(|l| l.review(&site, title, line, pages, "sign", "reject", SIGN_TIMEOUT_S));
+            let mut signature = Vec::new();
+            if result == RESULT_OK {
+                match account.sign_typed(&typed) {
+                    Ok(s) => signature = s.to_vec(),
+                    Err(e) => {
+                        log::error!("couldn't sign after review: {}", e);
+                        result = RESULT_FAILED;
+                    }
+                }
+            }
+            log::info!("ethereum typed data for {}: {}", site, result);
+            busy.store(false, Ordering::SeqCst);
+            if let Some(mem) = msg.body.memory_message_mut() {
+                let mut buffer = unsafe { Buffer::from_memory_message_mut(mem) };
+                if let Ok(mut req) = buffer.to_original::<Chunk, _>() {
+                    req.total = signature.len() as u32;
+                    req.data = signature;
+                    req.result = result;
+                    req.done = true;
                     buffer.replace(req).ok();
                 }
             }

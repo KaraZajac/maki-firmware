@@ -90,6 +90,10 @@ pub enum KeysOp {
     /// from the recovery phrase (`maki_seed::app_secret`), for the app host, once there's a
     /// phrase and maki is unlocked.
     AppSecret = 24,
+    /// Memory message (mutable lend) with a `Chunk` (`site`, `index` set): a piece of typed data
+    /// (EIP-712, JSON) to sign. The last piece reads it, shows the owner what it says, and signs
+    /// it if they say so: `data` then holds the 65-byte signature.
+    EthTyped = 25,
 }
 
 /// A question about the Ethereum account, and its answer.
@@ -447,6 +451,12 @@ impl Keys {
     /// answer's `total` is the signed transaction's size, or `reason` says why it was refused.
     pub fn eth_sign_chunk(&self, site: &str, index: u32, total: u32, offset: u32, data: Vec<u8>) -> Chunk {
         self.chunk_call(KeysOp::EthSign, Chunk { offset, total, data, site: site.into(), index, ..Default::default() })
+    }
+
+    /// A piece of typed data (EIP-712) to sign. The last one blocks while the owner decides, and
+    /// comes back with the signature in `data`.
+    pub fn eth_typed_chunk(&self, site: &str, index: u32, total: u32, offset: u32, data: Vec<u8>) -> Chunk {
+        self.chunk_call(KeysOp::EthTyped, Chunk { offset, total, data, site: site.into(), index, ..Default::default() })
     }
 
     /// A piece of the transaction last signed, from `offset`.
