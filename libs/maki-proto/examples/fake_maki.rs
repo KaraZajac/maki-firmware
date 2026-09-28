@@ -28,7 +28,7 @@ use maki_btc::psbt::Psbt;
 use maki_btc::{display, wallet, Account, Network};
 use maki_proto::device::{
     reply, AppEntry, Approval, Apps, Ask, Backup, Bitcoin, Device, Ethereum, Handled, Platform, StoreState, TimeState,
-    BACKUP_PIECE, PSBT_PIECE, TX_PIECE,
+    ACCOUNT_TAPROOT, BACKUP_PIECE, PSBT_PIECE, TX_PIECE,
 };
 use maki_proto::frame::{self, Deframer};
 use maki_proto::site;
@@ -266,6 +266,8 @@ fn start_app(bundle: Vec<u8>, store: Arc<Mutex<Store>>, seed: [u8; 64], policy: 
 /// The fake's wallet, and the PSBT coming in and the one it last signed; the same for Ethereum.
 struct Wallet {
     accounts: [Account; 2],
+    /// taproot's (BIP86), bitcoin's and the test networks'
+    taproot: [Account; 2],
     incoming: Vec<u8>,
     signed: Vec<u8>,
     seed: [u8; 64],
@@ -282,8 +284,10 @@ impl Wallet {
         maki_seed::to_entropy(&words).expect("--phrase isn't a BIP39 phrase");
         let seed = maki_seed::seed(&words, "");
         let account = |n| Account::from_seed(&seed, n).expect("keys");
+        let taproot = |n| Account::new(&seed, n, maki_btc::Kind::Taproot).expect("keys");
         Wallet {
             accounts: [account(Network::Bitcoin), account(Network::Testnet)],
+            taproot: [taproot(Network::Bitcoin), taproot(Network::Testnet)],
             incoming: Vec::new(),
             signed: Vec::new(),
             seed,
@@ -295,12 +299,12 @@ impl Wallet {
 }
 
 /// Everything maki-keys does with a finished PSBT, minus the screen: check it, show it, sign it.
-fn finish_signing(psbt: Vec<u8>, account: &Account, wallet: &Mutex<Wallet>, policy: Policy) -> (u8, Vec<u8>) {
+fn finish_signing(psbt: Vec<u8>, accounts: &[Account], wallet: &Mutex<Wallet>, policy: Policy) -> (u8, Vec<u8>) {
     let mut psbt = match Psbt::parse(&psbt) {
         Ok(p) => p,
         Err(e) => return reply::btc_sign(true, Approval::Refused, 0, &format!("not a PSBT maki can read: {e}")),
     };
-    let review = match wallet::review(&psbt, account) {
+    let review = match wallet::review(&psbt, accounts) {
         Ok(r) => r,
         Err(e) => {
             println!("  refused: {e}");
@@ -314,7 +318,8 @@ fn finish_signing(psbt: Vec<u8>, account: &Account, wallet: &Mutex<Wallet>, poli
     if a != Approval::Approved {
         return reply::btc_sign(true, a, 0, "");
     }
-    if let Err(e) = wallet::sign(&mut psbt, account) {
+    // no randomness for taproot's signatures: the fake's come out the same every time, for tests
+    if let Err(e) = wallet::sign(&mut psbt, accounts, &[0; 32]) {
         return reply::btc_sign(true, Approval::Refused, 0, &e.to_string());
     }
     let signed = psbt.serialize();
@@ -839,11 +844,15 @@ fn main() {
                     Handled::Bitcoin(request) => {
                         println!("  0x{:02x}#{} -> bitcoin", packet.kind, packet.id);
                         let id = packet.id;
-                        let account = |network: u8| wallet.lock().unwrap().accounts[network.min(1) as usize].clone();
+                        let account = |network: u8, account: u8| {
+                            let w = wallet.lock().unwrap();
+                            let n = network.min(1) as usize;
+                            if account == ACCOUNT_TAPROOT { w.taproot[n].clone() } else { w.accounts[n].clone() }
+                        };
                         let immediate = match request {
                             // these wait for the owner: answered from another thread
-                            Bitcoin::Account { network } => {
-                                let (account, writer) = (account(network), writer.clone());
+                            Bitcoin::Account { network, account: which } => {
+                                let (account, writer) = (account(network, which), writer.clone());
                                 std::thread::spawn(move || {
                                     let a = approve(policy, "share the bitcoin account with this computer?");
                                     let (kind, body) = reply::btc_account(a, &account.zpub(), &account.descriptor());
@@ -851,8 +860,8 @@ fn main() {
                                 });
                                 None
                             }
-                            Bitcoin::Address { network, change, index } => {
-                                let (account, writer) = (account(network), writer.clone());
+                            Bitcoin::Address { network, change, index, account: which } => {
+                                let (account, writer) = (account(network, which), writer.clone());
                                 std::thread::spawn(move || {
                                     let address = account.address(change, index).unwrap_or_default();
                                     let page = display::address_page(&address, change, index, account.network);
@@ -877,11 +886,12 @@ fn main() {
                                         Some(reply::btc_sign(false, Approval::Approved, 0, ""))
                                     } else {
                                         let psbt = std::mem::take(&mut w.incoming);
-                                        let account = w.accounts[network.min(1) as usize].clone();
+                                        let n = network.min(1) as usize;
+                                        let accounts = vec![w.accounts[n].clone(), w.taproot[n].clone()];
                                         drop(w);
                                         let (writer, wallet) = (writer.clone(), wallet.clone());
                                         std::thread::spawn(move || {
-                                            let (kind, body) = finish_signing(psbt, &account, &wallet, policy);
+                                            let (kind, body) = finish_signing(psbt, &accounts, &wallet, policy);
                                             writer.lock().unwrap().write_all(&frame::encode(kind, id, &body)).ok();
                                         });
                                         None

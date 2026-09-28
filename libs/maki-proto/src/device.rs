@@ -210,8 +210,8 @@ pub const MAX_TYPED: u32 = 64 * 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Bitcoin {
-    Account { network: u8 },
-    Address { network: u8, change: bool, index: u32 },
+    Account { network: u8, account: u8 },
+    Address { network: u8, change: bool, index: u32, account: u8 },
     Sign { network: u8, total: u32, offset: u32, data: Vec<u8> },
     Signed { offset: u32 },
 }
@@ -220,6 +220,9 @@ pub enum Bitcoin {
 /// addresses and keys).
 pub const NETWORK_BITCOIN: u8 = 0;
 pub const NETWORK_TESTNET: u8 = 1;
+/// `account` in Bitcoin requests: native SegWit (BIP84), or taproot (BIP86).
+pub const ACCOUNT_SEGWIT: u8 = 0;
+pub const ACCOUNT_TAPROOT: u8 = 1;
 /// Pieces of a PSBT are at most this big, either way.
 pub const PSBT_PIECE: usize = 4096;
 /// The biggest PSBT maki takes in.
@@ -643,8 +646,10 @@ impl<P: Platform> Device<P> {
         let parsed = (|| {
             let mut r = Reader::new(body);
             let request = match kind {
-                kind::BTC_ACCOUNT => Bitcoin::Account { network: r.u8()? },
-                kind::BTC_ADDRESS => Bitcoin::Address { network: r.u8()?, change: r.u8()? != 0, index: r.u32()? },
+                kind::BTC_ACCOUNT => Bitcoin::Account { network: r.u8()?, account: r.u8()? },
+                kind::BTC_ADDRESS => {
+                    Bitcoin::Address { network: r.u8()?, change: r.u8()? != 0, index: r.u32()?, account: r.u8()? }
+                }
                 kind::BTC_SIGN => {
                     Bitcoin::Sign { network: r.u8()?, total: r.u32()?, offset: r.u32()?, data: r.bytes16()?.to_vec() }
                 }
@@ -662,10 +667,13 @@ impl<P: Platform> Device<P> {
                 let (k, b) = malformed(t);
                 Handled::Reply(k, b)
             }
-            Ok(Bitcoin::Account { network } | Bitcoin::Address { network, .. } | Bitcoin::Sign { network, .. })
+            Ok(Bitcoin::Account { network, .. } | Bitcoin::Address { network, .. } | Bitcoin::Sign { network, .. })
                 if network > NETWORK_TESTNET =>
             {
                 bad("unknown network")
+            }
+            Ok(Bitcoin::Account { account, .. } | Bitcoin::Address { account, .. }) if account > ACCOUNT_TAPROOT => {
+                bad("unknown account")
             }
             Ok(Bitcoin::Address { index, .. }) if index >= 0x8000_0000 => bad("address index out of range"),
             // the byte after the network

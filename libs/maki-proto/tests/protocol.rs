@@ -427,12 +427,16 @@ fn backup_replies_carry_nothing_unless_approved() {
 fn bitcoin_requests_go_to_the_wallet() {
     let mut d = device();
     assert_eq!(
-        handled(&mut d, kind::BTC_ACCOUNT, Writer::new().u8(NETWORK_TESTNET).finish()),
-        Handled::Bitcoin(Bitcoin::Account { network: NETWORK_TESTNET })
+        handled(&mut d, kind::BTC_ACCOUNT, Writer::new().u8(NETWORK_TESTNET).u8(ACCOUNT_SEGWIT).finish()),
+        Handled::Bitcoin(Bitcoin::Account { network: NETWORK_TESTNET, account: ACCOUNT_SEGWIT })
     );
     assert_eq!(
-        handled(&mut d, kind::BTC_ADDRESS, Writer::new().u8(NETWORK_BITCOIN).u8(1).u32(42).finish()),
-        Handled::Bitcoin(Bitcoin::Address { network: NETWORK_BITCOIN, change: true, index: 42 })
+        handled(&mut d, kind::BTC_ACCOUNT, Writer::new().u8(NETWORK_BITCOIN).u8(ACCOUNT_TAPROOT).finish()),
+        Handled::Bitcoin(Bitcoin::Account { network: NETWORK_BITCOIN, account: ACCOUNT_TAPROOT })
+    );
+    assert_eq!(
+        handled(&mut d, kind::BTC_ADDRESS, Writer::new().u8(NETWORK_BITCOIN).u8(1).u32(42).u8(ACCOUNT_TAPROOT).finish()),
+        Handled::Bitcoin(Bitcoin::Address { network: NETWORK_BITCOIN, change: true, index: 42, account: ACCOUNT_TAPROOT })
     );
     let piece = vec![0x70u8; 64];
     assert_eq!(
@@ -449,9 +453,11 @@ fn bitcoin_requests_go_to_the_wallet() {
 fn bitcoin_requests_out_of_range_are_refused() {
     let mut d = device();
     let bad = [
-        (kind::BTC_ACCOUNT, Writer::new().u8(2).finish()),
-        (kind::BTC_ADDRESS, Writer::new().u8(0).u8(2).u32(0).finish()),
-        (kind::BTC_ADDRESS, Writer::new().u8(0).u8(0).u32(0x8000_0000).finish()),
+        (kind::BTC_ACCOUNT, Writer::new().u8(2).u8(0).finish()),
+        (kind::BTC_ACCOUNT, Writer::new().u8(0).u8(2).finish()),
+        (kind::BTC_ADDRESS, Writer::new().u8(0).u8(2).u32(0).u8(0).finish()),
+        (kind::BTC_ADDRESS, Writer::new().u8(0).u8(0).u32(0x8000_0000).u8(0).finish()),
+        (kind::BTC_ADDRESS, Writer::new().u8(0).u8(0).u32(0).u8(2).finish()),
         (kind::BTC_SIGN, Writer::new().u8(0).u32(0).u32(0).bytes16(&[]).finish()),
         (kind::BTC_SIGN, Writer::new().u8(0).u32(MAX_PSBT + 1).u32(0).bytes16(&[1]).finish()),
         (kind::BTC_SIGN, Writer::new().u8(0).u32(100).u32(90).bytes16(&[0; 20]).finish()),
@@ -461,7 +467,10 @@ fn bitcoin_requests_out_of_range_are_refused() {
         let reply = ask(&mut d, k, body.clone());
         assert_eq!(error_code(&reply), ErrorCode::BadArgument as u8, "0x{k:02x} {body:?}");
     }
-    let reply = ask(&mut d, kind::BTC_ACCOUNT, Writer::new().u8(0).u8(0).finish());
+    let reply = ask(&mut d, kind::BTC_ACCOUNT, Writer::new().u8(0).u8(0).u8(0).finish());
+    assert_eq!(error_code(&reply), ErrorCode::Malformed as u8);
+    // the account byte is needed
+    let reply = ask(&mut d, kind::BTC_ACCOUNT, Writer::new().u8(0).finish());
     assert_eq!(error_code(&reply), ErrorCode::Malformed as u8);
 }
 

@@ -58,8 +58,8 @@ bytes. Bodies must be consumed exactly: trailing bytes are an error.
 | `0x12` SAVE_LOGIN | `site:str8` `username:str8` `password:str8` | `approval:u8` |
 | `0x20` BACKUP_GET | `offset:u32` | `status:u8` `total:u32` `offset:u32` `piece:bytes16` |
 | `0x21` BACKUP_PUT | `total:u32` `offset:u32` `piece:bytes16` | `done:u8` `approval:u8` `logins:u16` `codes:u16` `passkeys:u16` |
-| `0x30` BTC_ACCOUNT | `network:u8` | `approval:u8` `zpub:str8` `descriptor:str8` |
-| `0x31` BTC_ADDRESS | `network:u8` `change:u8` `index:u32` | `approval:u8` `address:str8` |
+| `0x30` BTC_ACCOUNT | `network:u8` `account:u8` | `approval:u8` `zpub:str8` `descriptor:str8` |
+| `0x31` BTC_ADDRESS | `network:u8` `change:u8` `index:u32` `account:u8` | `approval:u8` `address:str8` |
 | `0x32` BTC_SIGN | `network:u8` `total:u32` `offset:u32` `piece:bytes16` | `done:u8` `approval:u8` `signed:u32` `reason:str8` |
 | `0x33` BTC_SIGNED | `offset:u32` | `status:u8` `total:u32` `offset:u32` `piece:bytes16` |
 | `0x40` ETH_ACCOUNT | `site:str8` `index:u32` | `approval:u8` `address:str8` |
@@ -171,38 +171,46 @@ the phrase too, so the phrase and a backup are all a new maki needs.
 
 ## Bitcoin
 
-maki keeps one Bitcoin account, the standard native SegWit one (BIP84, `m/84'/0'/0'`, or
-`m/84'/1'/0'` on the test networks), derived from its recovery phrase, so the same phrase works in
-Sparrow, Electrum and the rest. Wallet software keeps track of coins and builds transactions;
-maki only ever shows and signs.
+maki keeps two Bitcoin accounts, the standard ones, derived from its recovery phrase, so the
+same phrase works in Sparrow, Electrum and the rest: native SegWit (`account` 0: BIP84,
+`m/84'/0'/0'`, or `m/84'/1'/0'` on the test networks) and taproot (`account` 1: BIP86,
+`m/86'/0'/0'` or `m/86'/1'/0'`, spent with the key alone). Wallet software keeps track of coins
+and builds transactions; maki only ever shows and signs.
 
-- **BTC_ACCOUNT** hands out the account's public key, once the owner agrees on maki ("Share
-  account? view only"): `zpub` (`vpub` on the test networks) and an output descriptor with the
-  master key's fingerprint and both chains, e.g.
+- **BTC_ACCOUNT** hands out an account's public key, once the owner agrees on maki ("Share
+  account? view only"): for native SegWit, `zpub` (`vpub` on the test networks) and an output
+  descriptor with the master key's fingerprint and both chains, e.g.
   `wpkh([73c5da0a/84h/0h/0h]xpub…/<0;1>/*)#qf45pmyh`, which Sparrow and Bitcoin Core import
-  as a watch-only wallet that knows maki signs for it. It reveals every address, so it is asked
-  for, but it can't spend.
-- **BTC_ADDRESS** puts an address on maki's screen, the whole of it, for the owner to compare
+  as a watch-only wallet that knows maki signs for it; for taproot, the xpub (tpub), which has
+  no form of its own, and `tr([73c5da0a/86h/0h/0h]xpub…/<0;1>/*)#…`. It reveals every address,
+  so it is asked for, but it can't spend.
+- **BTC_ADDRESS** puts an address of either account on maki's screen, the whole of it, for the owner to compare
   with what the computer shows: `approval` is 0 if they said it matches and 1 if it doesn't
   (then the computer's copy isn't to be trusted). `address` is maki's, either way.
-- **BTC_SIGN** sends a PSBT (BIP174, version 0) in pieces of up to 4096 bytes, in order, with
+- **BTC_SIGN** sends a PSBT (BIP174, version 0; BIP371's fields for taproot) spending coins of
+  either account or both, in pieces of up to 4096 bytes, in order, with
   the same `total` each time (at most 512 KiB). A piece before the last is answered `done` = 0
   at once. The last is answered once the owner decides: `done` = 1, `approval` 0 with the
   signed PSBT's size in `signed`, 1 rejected, 3 timed out, or 9 refused with `reason`.
 - **BTC_SIGNED** hands the signed PSBT out in pieces: everything that came in, plus a partial
-  signature for each input. Finalizing and broadcasting are the wallet software's.
+  signature for each native SegWit input and a key signature (BIP340 Schnorr, `tap_key_sig`)
+  for each taproot one. Finalizing and broadcasting are the wallet software's.
 
 What maki checks before it asks, refusing (`9`, with the reason) rather than asking about a
 transaction it can't vouch for:
 
-- **Every input is this wallet's**: its BIP32 derivation names this maki's fingerprint and a
-  path on the account's receiving or change chain, the key derived there is the one named, and
-  the coin it spends pays to that key.
-- **Every input comes with the whole transaction it spends** (`non_witness_utxo`), which must
-  hash to the input's outpoint. Amounts are taken from there, never from the computer's word
-  alone: with SegWit, the computer could otherwise lie about one input's amount per signing
-  and have the difference paid out as fee (the 2020 fee attack).
-- **Only SIGHASH_ALL** is signed, and no taproot inputs yet.
+- **Every input is this wallet's**: its BIP32 derivation (BIP371's for taproot) names this
+  maki's fingerprint and a path on an account's receiving or change chain, the key derived there
+  is the one named, and the coin it spends pays to that key (for taproot, the key tweaked as
+  BIP86 has it, with no scripts: maki signs taproot key spends only, and refuses script paths).
+- **Every native SegWit input comes with the whole transaction it spends**
+  (`non_witness_utxo`), which must hash to the input's outpoint. Amounts are taken from there,
+  never from the computer's word alone: with SegWit, the computer could otherwise lie about one
+  input's amount per signing and have the difference paid out as fee (the 2020 fee attack). A
+  taproot signature covers every input's amount and script, so a taproot input's
+  `witness_utxo` is enough: a false amount makes a signature that fails.
+- **Only SIGHASH_ALL** is signed (for taproot, its default, which is the same, or ALL written
+  out).
 - **The fee is what the inputs hold minus what the outputs pay**, never negative, and no
   amount is beyond 21 million bitcoin.
 - At most 64 outputs, each of which the owner sees.
@@ -211,7 +219,8 @@ The owner then goes through the transaction with left and right, the centre movi
 payment with its amount and full address, the change coming back (an output counts as change
 only if it derives from this wallet's change chain; anything else is shown as a payment), and
 the fee with its rate (called out when over a tenth of what's sent). Last come "sign" and
-"reject". Signatures are deterministic (RFC 6979) and low-S.
+"reject". ECDSA signatures are deterministic (RFC 6979) and low-S; taproot's take fresh
+randomness from maki's TRNG, as BIP340 recommends.
 
 ## Ethereum
 
