@@ -47,6 +47,8 @@ fn time_ms(time_conn: xous::CID, op: bao1x_hal_service::api::TimeOp) -> Option<u
         return None;
     }
     match xous::send_message(time_conn, xous::Message::new_blocking_scalar(op.to_usize().unwrap(), 0, 0, 0, 0)) {
+        // the time server answers UTC low word first, and local time high word first
+        Ok(xous::Result::Scalar2(a, b)) if matches!(op, TimeOp::GetLocalTimeMs) => Some(((a as u64) << 32) | b as u64),
         Ok(xous::Result::Scalar2(lo, hi)) => Some(((hi as u64) << 32) | lo as u64),
         _ => None,
     }

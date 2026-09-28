@@ -15,8 +15,10 @@
 #[allow(dead_code)]
 mod api;
 mod ask;
+mod clock_face;
 mod menu;
 mod pin;
+mod saver;
 mod setup;
 mod splash;
 use maki_ui as ui;
@@ -45,10 +47,23 @@ struct PaceState {
     wanted: bool,
     /// the pace the tick thread last went to wait at
     waiting: bool,
+    /// ticktimer milliseconds when the screen should rest (the clock takes it), if it should
+    rest_at: Option<u64>,
 }
 
-static PACE: Pace =
-    Pace { state: std::sync::Mutex::new(PaceState { wanted: false, waiting: false }), wake: std::sync::Condvar::new() };
+static PACE: Pace = Pace {
+    state: std::sync::Mutex::new(PaceState { wanted: false, waiting: false, rest_at: None }),
+    wake: std::sync::Condvar::new(),
+};
+
+/// When the screen should rest, if it should: the tick thread wakes the main loop then.
+fn set_rest_at(at: Option<u64>) {
+    let mut state = PACE.state.lock().unwrap();
+    if state.rest_at != at {
+        state.rest_at = at;
+        PACE.wake.notify_all();
+    }
+}
 
 /// The pace the main loop wants. It notifies the tick thread until the thread waits at that
 /// pace, not just once: a notify can be lost while the thread is on its way into its wait (Xous's
@@ -68,11 +83,12 @@ fn repace() { PACE.wake.notify_all(); }
 #[cfg(feature = "board-baosec")]
 fn until_next_minute(time_conn: xous::CID) -> std::time::Duration {
     use bao1x_hal_service::api::TimeOp;
+    // (the time server answers local time high word first, unlike UTC)
     let ms = match xous::send_message(
         time_conn,
         xous::Message::new_blocking_scalar(TimeOp::GetLocalTimeMs.to_usize().unwrap(), 0, 0, 0, 0),
     ) {
-        Ok(xous::Result::Scalar2(lo, hi)) => ((hi as u64) << 32) | lo as u64,
+        Ok(xous::Result::Scalar2(hi, lo)) => ((hi as u64) << 32) | lo as u64,
         _ => 0,
     };
     std::time::Duration::from_millis(60_000 - ms % 60_000 + 200)
@@ -117,11 +133,10 @@ fn app_menu_items(app: &App) -> Vec<String> {
     buf.to_original::<AppMenu, _>().map(|m| m.items).unwrap_or_default()
 }
 
-/// Local wall-clock time as `HH:MM`, or `--:--` until something has set it. The module has no
-/// battery, so the clock starts unset on every boot. A trailing `?` marks a time that nothing
-/// has verified (the desktop app's own clock, or the vault's QR code).
+/// Local wall-clock time, hours and minutes, or None until something has set it. The module has
+/// no battery, so the clock starts unset on every boot, until maki desktop sets it.
 #[cfg(feature = "board-baosec")]
-fn clock_text(time_conn: xous::CID, verified: bool) -> String {
+fn local_time(time_conn: xous::CID) -> Option<(u32, u32)> {
     use bao1x_hal_service::api::TimeOp;
     let is_set = matches!(
         xous::send_message(
@@ -131,23 +146,33 @@ fn clock_text(time_conn: xous::CID, verified: bool) -> String {
         Ok(xous::Result::Scalar2(_, 1))
     );
     if !is_set {
-        return String::from("--:--");
+        return None;
     }
     match xous::send_message(
         time_conn,
         xous::Message::new_blocking_scalar(TimeOp::GetLocalTimeMs.to_usize().unwrap(), 0, 0, 0, 0),
     ) {
-        Ok(xous::Result::Scalar2(lo, hi)) => {
-            let ms = ((hi as u64) << 32) | lo as u64;
-            let secs = (ms / 1000) % 86_400;
-            format!("{:02}:{:02}{}", secs / 3600, (secs % 3600) / 60, if verified { "" } else { "?" })
+        // high word first, unlike UTC
+        Ok(xous::Result::Scalar2(hi, lo)) => {
+            let secs = ((((hi as u64) << 32) | lo as u64) / 1000 % 86_400) as u32;
+            Some((secs / 3600, secs % 3600 / 60))
         }
-        _ => String::from("--:--"),
+        _ => None,
     }
 }
 
 #[cfg(not(feature = "board-baosec"))]
-fn clock_text(_time_conn: xous::CID, _verified: bool) -> String { String::from("--:--") }
+fn local_time(_time_conn: xous::CID) -> Option<(u32, u32)> { None }
+
+/// Local time as the bar shows it, `HH:MM`, or `--:--` until something has set it. A trailing
+/// `?` marks a time that nothing has verified (the desktop app's own clock, or the vault's QR
+/// code).
+fn clock_text(time_conn: xous::CID, verified: bool) -> String {
+    match local_time(time_conn) {
+        Some((h, m)) => format!("{h:02}:{m:02}{}", if verified { "" } else { "?" }),
+        None => String::from("--:--"),
+    }
+}
 
 /// Whose menu is open.
 enum MenuFor {
@@ -201,6 +226,8 @@ enum View {
     WordEntry(WordEntry),
     /// an app is in front and draws for itself
     App(usize),
+    /// the screen resting: a clock over what was there, which any key brings back
+    Saver(Box<View>),
 }
 
 /// maki's own menu.
@@ -230,6 +257,9 @@ struct System {
     restoring: bool,
     /// the phrase being shown and checked, at setup
     phrase: Option<Vec<String>>,
+    tt: ticktimer_server::Ticktimer,
+    /// when a key was last pressed (ticktimer milliseconds): a minute after, the screen rests
+    last_key_ms: u64,
 }
 
 impl System {
@@ -437,6 +467,7 @@ impl System {
         }
         match &self.view {
             View::Splash | View::App(_) => {}
+            View::Saver(_) => self.draw_saver(),
             View::Home => self.draw_home(),
             View::Menu(menu, _) => menu.draw(&self.screen, &self.clock, self.linked),
             View::Info { title, lines, actions, selected } => {
@@ -469,6 +500,7 @@ impl System {
         {
             return;
         }
+        self.wake();
         if let View::App(i) = self.view {
             log::info!("pausing '{}' for an ask", self.apps[i].name);
             // first its QR scan, if it has one going: the ask would be hidden under it, and the
@@ -504,8 +536,50 @@ impl System {
     fn go_home(&mut self) {
         self.asks_open = self.unlocked;
         self.view = View::Home;
-        self.clock = clock_text(self.time_conn, self.time_verified);
+        self.set_clock();
         self.redraw();
+    }
+
+    /// The clock as it is now, for the bar; whether it changed.
+    fn set_clock(&mut self) -> bool {
+        let now = clock_text(self.time_conn, self.time_verified);
+        if now == self.clock {
+            return false;
+        }
+        self.screen.clock.replace(now.clone());
+        self.clock = now;
+        true
+    }
+
+    /// Whether the screen may rest here: maki's own screens that wait on the owner, not an app
+    /// (it has the screen to itself), not an ask, and not setup (a phrase being written down or
+    /// typed in).
+    fn may_rest(&self) -> bool {
+        saver::RESTS
+            && self.ready
+            && !self.asking.active()
+            && self.asking.queue.is_empty()
+            && matches!(self.view, View::Home | View::Menu(_, MenuFor::Maki) | View::Info { .. } | View::Pin(_, PinFor::Enter))
+    }
+
+    fn rest(&mut self) {
+        log::info!("resting: the clock");
+        let was = std::mem::replace(&mut self.view, View::Splash);
+        self.view = View::Saver(Box::new(was));
+        self.redraw();
+    }
+
+    /// Back from resting to what was there, if the screen was resting; whether it was.
+    fn wake(&mut self) -> bool {
+        let View::Saver(_) = self.view else { return false };
+        let View::Saver(was) = std::mem::replace(&mut self.view, View::Splash) else { return false };
+        self.view = *was;
+        true
+    }
+
+    fn draw_saver(&self) {
+        self.screen.gfx.bitmap(&saver::frame(local_time(self.time_conn)), None, None).ok();
+        self.screen.gfx.flush().ok();
     }
 
     fn open_app_menu(&mut self, i: usize) {
@@ -557,7 +631,7 @@ impl System {
 
     fn key(&mut self, key: Key) {
         match &mut self.view {
-            View::Splash | View::App(_) => {}
+            View::Splash | View::App(_) | View::Saver(_) => {}
             View::Home => match key {
                 Key::Left | Key::Right if !self.apps.is_empty() => {
                     let n = self.apps.len();
@@ -568,7 +642,8 @@ impl System {
                 Key::Confirm if self.selected < self.apps.len() => self.open_app(self.selected),
                 Key::Menu => {
                     let items = MAKI_MENU.iter().map(|s| s.to_string()).collect();
-                    self.view = View::Menu(Menu::new("maki", items), MenuFor::Maki);
+                    let name = self.screen.name.borrow().clone();
+                    self.view = View::Menu(Menu::new(&name, items), MenuFor::Maki);
                     self.redraw();
                 }
                 _ => {}
@@ -684,13 +759,14 @@ impl System {
                 }
             }
             Some(&"About") => {
-                let version = format!("firmware {}", env!("CARGO_PKG_VERSION"));
+                let version = format!("maki firmware {}", env!("CARGO_PKG_VERSION"));
                 let lines = [
                     version.as_str(),
                     if self.linked { "desktop linked" } else { "desktop not linked" },
                     if self.time_verified { "clock verified" } else { "clock not verified" },
                 ];
-                self.info("maki", &lines, "close", Next::Home);
+                let name = self.screen.name.borrow().clone();
+                self.info(&name, &lines, "close", Next::Home);
             }
             _ => self.go_home(),
         }
@@ -737,16 +813,26 @@ fn main() -> ! {
     // when something changed. A small stack: it only ticks.
     std::thread::Builder::new()
         .stack_size(32 * 1024)
-        .spawn(move || loop {
-            // (the clock is read without the lock held: the main loop takes it for every message)
-            let fast = PACE.state.lock().unwrap().wanted;
-            let wait = if fast { std::time::Duration::from_secs(1) } else { until_next_minute(time_conn) };
-            let mut state = PACE.state.lock().unwrap();
-            if state.wanted == fast {
-                state.waiting = fast;
-                drop(PACE.wake.wait_timeout(state, wait).unwrap());
+        .spawn(move || {
+            let tt = ticktimer_server::Ticktimer::new().unwrap();
+            loop {
+                // (the clock is read without the lock held: the main loop takes it for every message)
+                let (fast, rest_at) = {
+                    let state = PACE.state.lock().unwrap();
+                    (state.wanted, state.rest_at)
+                };
+                let mut wait = if fast { std::time::Duration::from_secs(1) } else { until_next_minute(time_conn) };
+                if let Some(at) = rest_at {
+                    wait = wait.min(std::time::Duration::from_millis(at.saturating_sub(tt.elapsed_ms()) + 50));
+                }
+                let mut state = PACE.state.lock().unwrap();
+                if state.wanted == fast && state.rest_at == rest_at {
+                    state.waiting = fast;
+                    drop(PACE.wake.wait_timeout(state, wait).unwrap());
+                }
+                xous::send_message(conn, xous::Message::new_scalar(LauncherOp::Tick.to_usize().unwrap(), 0, 0, 0, 0))
+                    .ok();
             }
-            xous::send_message(conn, xous::Message::new_scalar(LauncherOp::Tick.to_usize().unwrap(), 0, 0, 0, 0)).ok();
         })
         .unwrap();
 
@@ -767,10 +853,13 @@ fn main() -> ! {
         asks_open: false,
         restoring: false,
         phrase: None,
+        tt: ticktimer_server::Ticktimer::new().unwrap(),
+        last_key_ms: 0,
     };
 
     loop {
         set_pace(sys.asking.active() || !sys.asking.queue.is_empty());
+        set_rest_at(sys.may_rest().then_some(sys.last_key_ms + saver::AFTER_MS));
         let msg = xous::receive_message(sid).unwrap();
         match FromPrimitive::from_usize(msg.body.id()) {
             Some(LauncherOp::Register) => {
@@ -865,8 +954,14 @@ fn main() -> ! {
             }
             Some(LauncherOp::Ready) => {
                 sys.ready = true;
-                sys.clock = clock_text(time_conn, sys.time_verified);
+                sys.set_clock();
                 sys.keys = Keys::new(&xns).ok();
+                if let Some(keys) = &sys.keys {
+                    let name = keys.device_name();
+                    log::info!("this maki is {name}");
+                    sys.screen.name.replace(name);
+                }
+                sys.last_key_ms = sys.tt.elapsed_ms();
                 // the screen's role: only the launcher may enter the PIN or see the phrase
                 if !sys.keys.as_ref().map(|k| k.claim()).unwrap_or(false) {
                     log::error!("another process claimed maki-keys' screen role first");
@@ -880,10 +975,11 @@ fn main() -> ! {
                         sys.after_ask();
                     }
                 } else if sys.ready {
-                    let now = clock_text(time_conn, sys.time_verified);
-                    if now != sys.clock {
-                        sys.clock = now;
+                    if sys.set_clock() {
                         sys.redraw();
+                    }
+                    if sys.may_rest() && sys.tt.elapsed_ms() >= sys.last_key_ms + saver::AFTER_MS {
+                        sys.rest();
                     }
                     // an ask held back while a PIN was being entered
                     sys.start_asking();
@@ -910,6 +1006,12 @@ fn main() -> ! {
                     .filter_map(|&k| char::from_u32(k as u32))
                     .filter(|&c| c != '\u{0}')
                     .collect();
+                sys.last_key_ms = sys.tt.elapsed_ms();
+                // the screen was resting: the press brings back what was there, and that's all
+                if !chars.is_empty() && sys.wake() {
+                    sys.redraw();
+                    continue;
+                }
                 for c in chars {
                     let key = Key::from_char(c);
                     log::debug!("key {:?} ({:?})", c, key);
@@ -953,7 +1055,7 @@ fn main() -> ! {
             }
             Some(LauncherOp::TimeState) => xous::msg_scalar_unpack!(msg, state, _, _, _, {
                 sys.time_verified = state == 2;
-                sys.clock = clock_text(time_conn, sys.time_verified);
+                sys.set_clock();
                 sys.redraw();
                 repace();
             }),

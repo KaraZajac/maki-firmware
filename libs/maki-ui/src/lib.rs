@@ -10,6 +10,7 @@
 //! and an action bar at the bottom saying what the centre does (`action_bar`), with arrows when
 //! left and right have somewhere to go.
 
+use std::cell::RefCell;
 use std::fmt::Write;
 
 use blitstr2::GlyphStyle;
@@ -24,9 +25,8 @@ pub const H: isize = HEIGHT as isize;
 pub const LINE: isize = 16;
 /// A line of small text: the button labels.
 pub const SMALL_LINE: isize = 12;
-/// Width of the right-hand slot of the status bar (the clock, or an ask's countdown).
+/// Width of the right-hand slot of the status bar (the clock, or the last seconds of an ask).
 const CLOCK_WIDTH: isize = 40;
-const NAME: &str = "maki";
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Key {
@@ -56,12 +56,17 @@ pub struct Screen {
     pub gfx: Gfx,
     /// height of the status bar
     pub bar: isize,
+    /// This maki's name (a maki roll it picked: `maki_proto::names`), on the bar of maki's own
+    /// screens. "maki" until it's known.
+    pub name: RefCell<String>,
+    /// The clock as the bar shows it: `HH:MM`, or `--:--` until something sets it.
+    pub clock: RefCell<String>,
 }
 
 impl Screen {
     pub fn new(xns: &xous_names::XousNames) -> Self {
         let bar = ux_api::widgets::ScrollableList::default().row_height() as isize;
-        Screen { gfx: Gfx::new(xns).unwrap(), bar }
+        Screen { gfx: Gfx::new(xns).unwrap(), bar, name: RefCell::new("maki".into()), clock: RefCell::new("--:--".into()) }
     }
 
     /// Start a frame: whatever was queued goes out, then a blank screen.
@@ -99,9 +104,25 @@ impl Screen {
 
     fn light() -> DrawStyle { DrawStyle::new(PixelColor::Light, PixelColor::Light, 1) }
 
-    /// The bar across the top: the name on the left, `right` (the clock, or a countdown) on the
-    /// right, and a dot between while the desktop app is linked.
-    pub fn status_bar(&self, right: &str, linked: bool) { self.titled_bar(NAME, right, linked) }
+    /// The bar across the top: this maki's name on the left, `right` (the clock) on the right,
+    /// and a dot between while the desktop app is linked.
+    pub fn status_bar(&self, right: &str, linked: bool) {
+        let name = self.name.borrow().clone();
+        self.titled_bar(&name, right, linked)
+    }
+
+    /// How long an ask has left, drawn over the rule under the bar: the rule shrinks from the
+    /// right as the time goes, and what's left of it is drawn thicker.
+    pub fn time_left(&self, left_ms: u64, total_ms: u64) {
+        let dark = DrawStyle::new(PixelColor::Dark, PixelColor::Dark, 1);
+        let x = if total_ms == 0 { 0 } else { (W as u64 * left_ms.min(total_ms) / total_ms) as isize };
+        if x < W {
+            self.gfx.draw_line(Line::new_with_style(Point::new(x, self.bar + 1), Point::new(W, self.bar + 1), dark)).ok();
+        }
+        if x > 0 {
+            self.gfx.draw_line(Line::new_with_style(Point::new(0, self.bar + 2), Point::new(x, self.bar + 2), Self::light())).ok();
+        }
+    }
 
     /// The bar across the top with a title in place of the name: the heading of a page.
     pub fn titled_bar(&self, title: &str, right: &str, linked: bool) { self.bar_from(0, title, right, linked) }

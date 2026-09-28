@@ -22,6 +22,8 @@ const SITE_LINES: usize = 3;
 /// ignored: one already on its way, meant for what was on screen before, mustn't answer it,
 /// nor one pressed while something else was still being drawn over it.
 const SETTLE_MS: u64 = 700;
+/// The seconds an ask counts down on the bar, in place of the clock, before it gives up.
+const LAST_SECONDS: u32 = 10;
 
 /// A line of a page: fixed-width, small prose, or the space between paragraphs.
 enum Row {
@@ -174,11 +176,17 @@ impl Prompt {
 
     fn draw(&self, screen: &Screen, now_ms: u64, linked: bool) {
         screen.begin();
-        let countdown = format!("{}s", self.remaining_s(now_ms));
+        // the clock, as everywhere, until the last seconds, which the bar counts down; the
+        // rule under the bar shows the time left all along
+        let left_s = self.remaining_s(now_ms);
+        let countdown = if left_s <= LAST_SECONDS { format!("{left_s}s") } else { screen.clock.borrow().clone() };
+        let left_ms = self.deadline_ms.saturating_sub(now_ms);
+        let total_ms = self.req.timeout_s.max(1) as u64 * 1000;
         let mut y = screen.bar + 4;
 
         if let Stop::Page { heading, value, rows } = &self.stops[self.selected] {
             screen.titled_bar(heading, &countdown, linked);
+            screen.time_left(left_ms, total_ms);
             if !value.is_empty() {
                 screen.text(y, LINE, GlyphStyle::Bold, false, false, value);
                 y += LINE + 2;
@@ -199,6 +207,7 @@ impl Prompt {
         if self.req.app != 0 {
             // an app's question: under its own bar, as over the app, with no site in it
             screen.app_bar(&self.req.subject, &countdown, self.req.app == ASK_APP_SIDELOADED);
+            screen.time_left(left_ms, total_ms);
             screen.text(y, LINE * 2, GlyphStyle::Bold, false, false, &self.req.question);
             y += LINE * 2 + 4;
             screen.text(y, LINE * 3, GlyphStyle::Regular, false, false, &self.req.detail);
@@ -212,6 +221,7 @@ impl Prompt {
         }
 
         screen.status_bar(&countdown, linked);
+        screen.time_left(left_ms, total_ms);
         let n = self.req.choices.len();
         let site_lines = if n > 0 { SITE_LINES - 1 } else { SITE_LINES };
         let site = maki_proto::site::lines(&self.req.subject, SITE_WIDTH, site_lines).join("\n");
