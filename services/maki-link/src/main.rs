@@ -569,6 +569,23 @@ fn main() -> ! {
         });
     }
 
+    // The newest examples: built with MAKI_DEMO_EXAMPLES, maki-link installs the SDK's Status (a
+    // sign in big letters it draws itself, with the link permission) and Passphrase (words from
+    // the EFF's list, with the keyboard permission); each asks, with a page for its permission.
+    if option_env!("MAKI_DEMO_EXAMPLES").is_some() {
+        std::thread::spawn(|| {
+            let host = demo_host();
+            let bundles: [(&str, &[u8]); 2] = [
+                ("status", include_bytes!("../../../libs/maki-wasm/tests/fixtures/status.maki")),
+                ("passphrase", include_bytes!("../../../libs/maki-wasm/tests/fixtures/passphrase.maki")),
+            ];
+            for (name, bytes) in bundles {
+                let r = demo_install(&host, bytes);
+                log::warn!("demo examples install {name}: result {} '{}'", r.result, r.reason);
+            }
+        });
+    }
+
     // A native app: built with MAKI_DEMO_NATIVE, maki-link installs the SDK's Hello Native (the
     // Hello example built for maki's processor). Opened, it runs in a process of its own, loaded
     // by the stub and confined before its code runs, and talks to maki's app service.

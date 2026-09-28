@@ -436,3 +436,48 @@ fn status_shows_what_the_computer_says_and_says_what_it_shows() {
     let last = r.frames.last().unwrap();
     assert!(lit(last) > (WIDTH * HEIGHT) as usize / 2, "light: more lit than not");
 }
+
+#[test]
+fn nostr_shows_its_key_and_signs_events_as_nip01_hashes_them() {
+    use k256::schnorr::{Signature, VerifyingKey};
+    use sha2::{Digest, Sha256};
+    let site = b"example.com";
+    let mut key_msg = vec![1u8, site.len() as u8];
+    key_msg.extend_from_slice(site);
+    let (tags, content) = (r#"[["t","maki"]]"#, "gm \"maki\"\n");
+    let mut sign_msg = vec![2u8, site.len() as u8];
+    sign_msg.extend_from_slice(site);
+    sign_msg.extend_from_slice(&1_790_000_000u64.to_be_bytes());
+    sign_msg.extend_from_slice(&1u32.to_be_bytes());
+    sign_msg.extend_from_slice(&(tags.len() as u32).to_be_bytes());
+    sign_msg.extend_from_slice(tags.as_bytes());
+    sign_msg.extend_from_slice(&(content.len() as u32).to_be_bytes());
+    sign_msg.extend_from_slice(content.as_bytes());
+    let record = Rc::new(RefCell::new(Record {
+        events: [Event::Message, Event::Message, Event::Message].into_iter().collect(),
+        inbox: [key_msg.clone(), sign_msg, key_msg].into_iter().collect(),
+        // the first site asks to see the key: yes; then to sign: yes
+        answers: [Answer::Yes, Answer::Yes].into_iter().collect(),
+        ..Default::default()
+    }));
+    let bytes = std::fs::read(format!("{}/tests/fixtures/nostr.maki", env!("CARGO_MANIFEST_DIR"))).unwrap();
+    let bundle = maki_bundle::read(&bytes).unwrap();
+    assert_eq!(bundle.manifest.api, 2);
+    let limits = admit(&bundle.manifest, bundle.code).unwrap();
+    assert_eq!(run(bundle.code, Box::new(Script(record.clone())), limits), Stop::Finished);
+    let r = record.borrow();
+    // asked once to see the key (the site is remembered), once to sign
+    assert_eq!(r.asks.len(), 2, "{:?}", r.asks);
+    assert_eq!(r.asks[0].question, "Let it see your Nostr key?");
+    assert_eq!(r.asks[1].question, "Sign a Nostr note?");
+    assert!(r.asks[1].detail.starts_with("example.com: gm \"maki\""), "{}", r.asks[1].detail);
+    let [key, signed, again] = [&r.replies[0], &r.replies[1], &r.replies[2]];
+    assert_eq!((key[0], key.len(), signed[0], signed.len()), (0, 33, 0, 97));
+    assert_eq!(key, again);
+    // the id: NIP-01's serialization, hashed, from the fields sent; the signature, BIP340's
+    let pubkey: String = key[1..].iter().map(|b| format!("{b:02x}")).collect();
+    let serialized = format!(r#"[0,"{pubkey}",1790000000,1,{tags},"gm \"maki\"\n"]"#);
+    assert_eq!(&signed[1..33], Sha256::digest(serialized.as_bytes()).as_slice());
+    let vk = VerifyingKey::from_bytes(&key[1..]).unwrap();
+    vk.verify_raw(&signed[1..33], &Signature::try_from(&signed[33..97]).unwrap()).unwrap();
+}

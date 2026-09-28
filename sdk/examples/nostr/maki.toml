@@ -1,0 +1,14 @@
+id = "com.leviathan.maki.nostr"
+name = "Nostr"
+version = 1
+label = "1.0"
+api = 2
+storage = 2
+memory = 128
+backup = true
+description = "Your Nostr key, from maki's recovery phrase. Sites use it through the maki extension (NIP-07): maki asks before a site sees it, and shows each note before it signs. Open it for your npub as a QR code."
+
+[permissions]
+keys = "For your Nostr key: maki's, from your recovery phrase, the same on a restored maki."
+link = "So sites can ask for your key and signatures through the maki extension and maki desktop."
+ask = "To ask you before a site sees your key, and before each thing it signs."

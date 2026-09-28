@@ -462,6 +462,19 @@ fn main() -> ! {
     log_server::init_wait().unwrap();
     log::set_max_level(log::LevelFilter::Info);
     log::info!("maki app host PID is {}", xous::process::id());
+    // Xous starts a process with 512 KiB of heap at most. Apps' memory is the app host's heap:
+    // an app's (up to MAX_MEMORY_KIB), one being checked to install beside it, and their
+    // compiled code don't fit in that. The swapper pages it like any other, and it's only taken
+    // as it's used.
+    const HEAP: usize = 3 * 1024 * 1024;
+    let heap = xous::Limits::HeapMaximum as usize;
+    match xous::rsyscall(xous::SysCall::AdjustProcessLimit(heap, 0, HEAP)) {
+        Ok(xous::Result::Scalar2(1, now)) => match xous::rsyscall(xous::SysCall::AdjustProcessLimit(heap, now, HEAP)) {
+            Ok(xous::Result::Scalar2(1, set)) => log::info!("heap up to {} KiB (from {})", set / 1024, now / 1024),
+            other => log::warn!("the heap stays as it was: {other:?}"),
+        },
+        other => log::warn!("the heap stays as it was: {other:?}"),
+    }
 
     let xns = xous_names::XousNames::new().unwrap();
     let sid = xns.register_name(SERVER_NAME_APP_HOST, None).expect("can't register server");

@@ -329,6 +329,20 @@ fn lent(session: &mut Session, id: usize, request: &[u8], last_log: &mut String)
             },
             None => (maki_wasm::INVALID, vec![]),
         },
+        service::KEY_SCHNORR_PUBLIC => match text() {
+            Some(label) => match session.key_schnorr_public(label) {
+                Ok(k) => (0, k.to_vec()),
+                Err(code) => (code, vec![]),
+            },
+            None => (maki_wasm::INVALID, vec![]),
+        },
+        service::KEY_SCHNORR_SIGN => match split() {
+            Some((label, message)) => match session.key_schnorr_sign(label, message) {
+                Ok(sig) => (0, sig.to_vec()),
+                Err(code) => (code, vec![]),
+            },
+            None => (maki_wasm::INVALID, vec![]),
+        },
         service::TYPE_TEXT => match text() {
             Some(t) => (session.type_text(t), vec![]),
             None => (maki_wasm::INVALID, vec![]),

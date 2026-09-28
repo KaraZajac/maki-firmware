@@ -1,0 +1,13 @@
+[package]
+name = "nostr"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+maki-app = { path = "../../maki-app" }
+# an event's id: SHA-256 (maki holds the key and signs, BIP340, with keys::schnorr_sign)
+sha2 = { version = "0.10", default-features = false }

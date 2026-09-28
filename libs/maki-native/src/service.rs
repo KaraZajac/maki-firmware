@@ -49,6 +49,10 @@ pub const TYPE_TEXT: usize = 23;
 pub const LINK_READ: usize = 24;
 pub const LINK_REPLY: usize = 25;
 pub const SCAN_QR: usize = 26;
+/// BIP340 keys (host API 2's `key_schnorr_public` and `key_schnorr_sign`): a native app built
+/// against an older maki gets INVALID for them, as for anything it doesn't know.
+pub const KEY_SCHNORR_PUBLIC: usize = 27;
+pub const KEY_SCHNORR_SIGN: usize = 28;
 // a plain scalar
 pub const EXIT: usize = 30;
 /// maki's own, from the app host to itself: look at what's waiting (the owner left the app, or

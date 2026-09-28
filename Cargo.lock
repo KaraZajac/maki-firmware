@@ -5495,6 +5495,7 @@ version = "0.1.0"
 dependencies = [
  "blitstr2",
  "ed25519-dalek-compat",
+ "k256",
  "log",
  "maki-bundle",
  "maki-native",

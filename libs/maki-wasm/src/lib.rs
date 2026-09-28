@@ -21,7 +21,10 @@ pub use session::{Session, REFUSED};
 use wasmi::{Caller, Config, Engine, Error, Extern, Linker, Memory, Module, Store, StoreLimits, StoreLimitsBuilder};
 
 /// The functions this host offers apps.
-pub const API_VERSION: u16 = 1;
+pub const API_VERSION: u16 = 2;
+
+/// Functions that came after host API 1, and with which: an app calling one says that API or later.
+pub const SINCE: &[(&str, u16)] = &[("key_schnorr_public", 2), ("key_schnorr_sign", 2)];
 
 /// What maki's functions return for failures they report (rather than stopping the app).
 pub const NOT_FOUND: i32 = -1;
@@ -67,6 +70,8 @@ pub const GATED: &[(&str, Permission)] = &[
     ("key_secret", Permission::Keys),
     ("key_public", Permission::Keys),
     ("key_sign", Permission::Keys),
+    ("key_schnorr_public", Permission::Keys),
+    ("key_schnorr_sign", Permission::Keys),
     ("type_text", Permission::Keyboard),
     ("link_read", Permission::Link),
     ("link_reply", Permission::Link),
@@ -297,6 +302,14 @@ pub fn load(manifest: &Manifest, code: &[u8]) -> Result<Loaded, String> {
     }
     let limits = limits(manifest)?;
     let loaded = compile(code, limits)?;
+    // what it calls: nothing newer than the API its manifest says, so an older maki can say why
+    for import in loaded.module.imports() {
+        if let Some((name, since)) = SINCE.iter().find(|(n, _)| *n == import.name()) {
+            if *since > manifest.api {
+                return Err(format!("it calls {name}, which came with host API {since}, and its manifest says {}", manifest.api));
+            }
+        }
+    }
     instantiate(&loaded, Box::new(Nothing))?;
     Ok(loaded)
 }
@@ -596,6 +609,31 @@ fn link(linker: &mut Linker<State>) -> Result<(), Error> {
             let message = read(&c, mptr, mlen, MAX_SIGN, "key_sign")?;
             match c.data_mut().session.key_sign(&label, &message) {
                 Ok(sig) => write(&mut c, out, &sig, "key_sign").map(|_| 0),
+                Err(code) => Ok(code),
+            }
+        },
+    )?;
+    linker.func_wrap(
+        M,
+        "key_schnorr_public",
+        |mut c: Caller<'_, State>, lptr: i32, llen: i32, out: i32| -> Result<i32, Error> {
+            permitted(&c, Permission::Keys, "key_schnorr_public")?;
+            let label = read_str(&c, lptr, llen, MAX_LABEL, "key_schnorr_public")?;
+            match c.data_mut().session.key_schnorr_public(&label) {
+                Ok(key) => write(&mut c, out, &key, "key_schnorr_public").map(|_| 0),
+                Err(code) => Ok(code),
+            }
+        },
+    )?;
+    linker.func_wrap(
+        M,
+        "key_schnorr_sign",
+        |mut c: Caller<'_, State>, lptr: i32, llen: i32, mptr: i32, out: i32| -> Result<i32, Error> {
+            permitted(&c, Permission::Keys, "key_schnorr_sign")?;
+            let label = read_str(&c, lptr, llen, MAX_LABEL, "key_schnorr_sign")?;
+            let message = read(&c, mptr, 32, 32, "key_schnorr_sign")?;
+            match c.data_mut().session.key_schnorr_sign(&label, &message) {
+                Ok(sig) => write(&mut c, out, &sig, "key_schnorr_sign").map(|_| 0),
                 Err(code) => Ok(code),
             }
         },

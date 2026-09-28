@@ -553,6 +553,8 @@ fn gated_functions_need_their_permission() {
         ("key_secret", "(param i32 i32 i32) (result i32)"),
         ("key_public", "(param i32 i32 i32) (result i32)"),
         ("key_sign", "(param i32 i32 i32 i32 i32) (result i32)"),
+        ("key_schnorr_public", "(param i32 i32 i32) (result i32)"),
+        ("key_schnorr_sign", "(param i32 i32 i32 i32) (result i32)"),
         ("type_text", "(param i32 i32) (result i32)"),
         ("link_read", "(param i32 i32) (result i32)"),
         ("link_reply", "(param i32 i32) (result i32)"),
@@ -783,4 +785,30 @@ fn a_session_refuses_text_too_long_before_splitting_it() {
     // within the bounds, as before
     assert_eq!(session.menu(&["Go"; MAX_MENU_ITEMS].join("\n")), 0);
     assert_eq!(record.borrow().menu.len(), MAX_MENU_ITEMS);
+}
+
+#[test]
+fn an_app_calling_what_came_later_says_so_in_its_manifest() {
+    let wat = r#"(module (import "maki" "key_schnorr_sign" (func (param i32 i32 i32 i32) (result i32)))
+        (memory (export "memory") 1) (func (export "maki_main")))"#;
+    let code = module(wat);
+    let manifest = |api: u16| maki_bundle::Manifest {
+        id: "org.example.later".into(),
+        name: "Later".into(),
+        version: 1,
+        label: "1.0".into(),
+        kind: maki_bundle::Kind::Wasm,
+        api,
+        firmware: String::new(),
+        permissions: vec![(maki_bundle::Permission::Keys, "for a key".into())],
+        storage_kib: 1,
+        memory_kib: 64,
+        backup: true,
+        description: String::new(),
+    };
+    let err = admit(&manifest(1), &code).unwrap_err();
+    assert!(err.contains("key_schnorr_sign, which came with host API 2, and its manifest says 1"), "{err}");
+    admit(&manifest(2), &code).unwrap();
+    // and an older maki says it needs a newer one
+    assert!(admit(&manifest(API_VERSION + 1), &code).unwrap_err().contains("needs a newer maki"));
 }

@@ -198,6 +198,31 @@ impl Session {
         Ok(key.sign(message).to_bytes())
     }
 
+    /// The BIP340 (Schnorr, secp256k1) key made from the app's secret for a label: its x-only
+    /// public half, as Nostr and Taproot write keys.
+    pub fn key_schnorr_public(&mut self, label: &str) -> Result<[u8; 32], i32> {
+        self.needs(Permission::Keys)?;
+        if !Self::label_ok(label) {
+            return Err(INVALID);
+        }
+        let key = schnorr_key(self.platform.as_mut(), label).ok_or(FAILED)?;
+        Ok(key.verifying_key().to_bytes().into())
+    }
+
+    /// A BIP340 signature by that key, which maki holds, of a 32-byte message (a hash: a Nostr
+    /// event's id, a Taproot sighash), with fresh randomness from maki's TRNG.
+    pub fn key_schnorr_sign(&mut self, label: &str, message: &[u8]) -> Result<[u8; 64], i32> {
+        self.needs(Permission::Keys)?;
+        if !Self::label_ok(label) {
+            return Err(INVALID);
+        }
+        let message: &[u8; 32] = message.try_into().map_err(|_| INVALID)?;
+        let key = schnorr_key(self.platform.as_mut(), label).ok_or(FAILED)?;
+        let mut aux = [0u8; 32];
+        self.platform.random(&mut aux);
+        key.sign_prehash_with_aux_rand(message, &aux).map(|s| s.to_bytes()).map_err(|_| FAILED)
+    }
+
     /// The keyboard permission: printable ASCII, newlines and tabs.
     pub fn type_text(&mut self, text: &str) -> i32 {
         if let Err(e) = self.needs(Permission::Keyboard) {
@@ -267,6 +292,22 @@ fn parse_ask(text: &str, timeout_s: i32) -> Option<Ask> {
 }
 
 /// The app's Ed25519 key for `label`: its secret for that label is the key's seed.
+/**
+ * The BIP340 key for a label: from the app's secret for it, tagged (as BIP340 tags its hashes) so
+ * the same bytes aren't both an Ed25519 seed and a secp256k1 key. None in the 2^-128 case that
+ * it's no key at all.
+ */
+fn schnorr_key(platform: &mut dyn Platform, label: &str) -> Option<k256::schnorr::SigningKey> {
+    use sha2::{Digest, Sha256};
+    let mut secret = platform.app_secret(label)?;
+    let tag = Sha256::digest(b"maki/bip340");
+    let mut scalar: [u8; 32] = Sha256::new().chain_update(tag).chain_update(tag).chain_update(secret).finalize().into();
+    let key = k256::schnorr::SigningKey::from_bytes(&scalar).ok();
+    zeroize::Zeroize::zeroize(&mut secret);
+    zeroize::Zeroize::zeroize(&mut scalar);
+    key
+}
+
 fn signing_key(platform: &mut dyn Platform, label: &str) -> Option<ed25519_dalek::SigningKey> {
     let mut secret = platform.app_secret(label)?;
     let key = ed25519_dalek::SigningKey::from_bytes(&secret);

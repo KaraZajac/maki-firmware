@@ -76,6 +76,8 @@ mod sys {
         pub fn key_secret(lptr: *const u8, llen: usize, out: *mut u8) -> i32;
         pub fn key_public(lptr: *const u8, llen: usize, out: *mut u8) -> i32;
         pub fn key_sign(lptr: *const u8, llen: usize, mptr: *const u8, mlen: usize, out: *mut u8) -> i32;
+        pub fn key_schnorr_public(lptr: *const u8, llen: usize, out: *mut u8) -> i32;
+        pub fn key_schnorr_sign(lptr: *const u8, llen: usize, mptr: *const u8, out: *mut u8) -> i32;
         pub fn type_text(ptr: *const u8, len: usize) -> i32;
         pub fn link_read(ptr: *mut u8, cap: usize) -> i32;
         pub fn link_reply(ptr: *const u8, len: usize) -> i32;
@@ -367,6 +369,24 @@ pub mod keys {
     pub fn sign(label: &str, message: &[u8]) -> Result<[u8; 64], Error> {
         let mut out = [0u8; 64];
         let code = unsafe { sys::key_sign(label.as_ptr(), label.len(), message.as_ptr(), message.len(), out.as_mut_ptr()) };
+        result(code)?;
+        Ok(out)
+    }
+
+    /// The BIP340 (Schnorr, secp256k1) public key for `label`, x-only, as Nostr and Taproot write
+    /// keys. maki holds the private key (from the same secret, tagged apart from the Ed25519 one)
+    /// and signs with it (`schnorr_sign`). Host API 2: say `api = 2` in maki.toml.
+    pub fn schnorr_public_key(label: &str) -> Result<[u8; 32], Error> {
+        let mut out = [0u8; 32];
+        result(unsafe { sys::key_schnorr_public(label.as_ptr(), label.len(), out.as_mut_ptr()) })?;
+        Ok(out)
+    }
+
+    /// A BIP340 signature, with the key for `label`, of a 32-byte message: a hash (a Nostr event's
+    /// id, say). maki adds fresh randomness from its TRNG, as BIP340 suggests. Host API 2.
+    pub fn schnorr_sign(label: &str, message: &[u8; 32]) -> Result<[u8; 64], Error> {
+        let mut out = [0u8; 64];
+        let code = unsafe { sys::key_schnorr_sign(label.as_ptr(), label.len(), message.as_ptr(), out.as_mut_ptr()) };
         result(code)?;
         Ok(out)
     }

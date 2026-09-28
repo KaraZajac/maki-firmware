@@ -222,6 +222,23 @@ pub unsafe fn key_sign(lptr: *const u8, llen: usize, mptr: *const u8, mlen: usiz
     }
     status
 }
+pub unsafe fn key_schnorr_public(lptr: *const u8, llen: usize, out: *mut u8) -> i32 {
+    key(service::KEY_SCHNORR_PUBLIC, lptr, llen, out)
+}
+pub unsafe fn key_schnorr_sign(lptr: *const u8, llen: usize, mptr: *const u8, out: *mut u8) -> i32 {
+    if llen > 255 {
+        return INVALID;
+    }
+    let mut payload = Vec::with_capacity(1 + llen + 32);
+    payload.push(llen as u8);
+    payload.extend_from_slice(slice(lptr, llen));
+    payload.extend_from_slice(slice(mptr, 32));
+    let (status, got) = request(service::KEY_SCHNORR_SIGN, &payload, 64);
+    if status == 0 && got.len() == 64 {
+        slice_mut(out, 64).copy_from_slice(&got);
+    }
+    status
+}
 pub unsafe fn type_text(ptr: *const u8, len: usize) -> i32 { request(service::TYPE_TEXT, slice(ptr, len), 0).0 }
 pub unsafe fn link_read(ptr: *mut u8, cap: usize) -> i32 {
     let (status, got, whole) = exchange(service::LINK_READ, &[], cap.max(4096));

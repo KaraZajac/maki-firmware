@@ -6,13 +6,16 @@ you can install"). Anyone can build one and sideload it through maki desktop; ma
 owner what it is, where it's from and what it may do before installing it, and a sideloaded
 app carries a mark in maki's top bar for as long as it's installed.
 
-This directory has the Rust crate apps are written with (`maki-app`), eleven examples, and the
+This directory has the Rust crate apps are written with (`maki-app`), twelve examples, and the
 `maki` tool that packs, signs, checks and simulates them. The examples:
 
 - **Hello**, **Dice** and **Tally**: a screen, the buttons, storage and randomness.
 - **Signer** and **Sensors**, which use permissions: asking the owner, keys of their own, the
   camera and the accelerometer.
 - **SSH**: maki's SSH key, which answers maki desktop's SSH agent (the link permission).
+- **Nostr**: your Nostr key, which sites use through the maki extension's `window.nostr`
+  (NIP-07): maki asks before a site sees it and shows each event before signing it with the key
+  it holds (host API 2's Schnorr keys). Opened, it shows the npub as a QR code.
 - **Passphrase**: diceware passphrases from maki's random number generator and the EFF's long
   word list, typed into the computer on request (the keyboard permission).
 - **Snake**: the game, with three buttons, timed with `wait`.
@@ -129,7 +132,12 @@ function whose permission it didn't ask for):
   bytes): `keys::secret(label)` (32 bytes), or the Ed25519 key made from it, which maki holds and
   signs with, `keys::public_key(label)` and `keys::sign(label, message)`. Different for every
   app, developer key and label; the same on any maki restored from the phrase; none while maki
-  is locked. An update keeps them only if it's signed with the same developer key.
+  is locked. An update keeps them only if it's signed with the same developer key. Host API 2
+  adds a BIP340 (Schnorr, secp256k1) key for each label too, as Nostr and Taproot use:
+  `keys::schnorr_public_key(label)` (x-only) and `keys::schnorr_sign(label, &hash)`, which signs a
+  32-byte hash with fresh randomness from maki's TRNG; its secret is tagged apart from the
+  Ed25519 one. An app that calls them says `api = 2` in its `maki.toml`, and maki's install
+  check holds it to that.
 - **`keyboard`**: `keyboard::type_text(text)` types printable ASCII, newlines and tabs (1024
   bytes at a time) into the computer as a USB keyboard, while the app is in front, with "typing"
   in maki's bar. The owner is warned at install: it could type commands.

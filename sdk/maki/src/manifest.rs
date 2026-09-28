@@ -64,6 +64,23 @@ pub fn load(path: &Path) -> Result<Project, String> {
         permissions.push((p, reason.clone()));
     }
     permissions.sort_by_key(|(p, _)| *p);
+    // what maki would refuse, said here, in the words of maki.toml
+    let long = |what: String, text: &str, max: usize| {
+        if text.len() > max {
+            Err(format!("{}: {what} is {} bytes; {max} at most", path.display(), text.len()))
+        } else if text.chars().any(|c| c.is_control()) {
+            Err(format!("{}: {what} has a control character (a line break, say) in it", path.display()))
+        } else {
+            Ok(())
+        }
+    };
+    long("id".into(), &t.id, maki_bundle::MAX_ID)?;
+    long("name".into(), &t.name, maki_bundle::MAX_NAME)?;
+    long("label".into(), &t.label, maki_bundle::MAX_LABEL)?;
+    long("description".into(), &t.description, maki_bundle::MAX_DESCRIPTION)?;
+    for (p, reason) in &permissions {
+        long(format!("the reason for {}", p.name()), reason, maki_bundle::MAX_REASON)?;
+    }
     let manifest = Manifest {
         id: t.id,
         name: t.name,
