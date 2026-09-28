@@ -70,10 +70,9 @@ pub fn save_png(screen: &Screen, path: &std::path::Path, scale: usize) -> Result
     writer.write_image_data(&data).map_err(|e| e.to_string())
 }
 
-fn clock() -> String {
-    let secs = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
-    format!("{:02}:{:02}", secs / 3600 % 24, secs / 60 % 60)
-}
+fn clock(secs: u64) -> String { format!("{:02}:{:02}", secs / 3600 % 24, secs / 60 % 60) }
+
+fn now() -> u64 { SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0) }
 
 /// One scripted step.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -162,6 +161,11 @@ struct Shared {
     frame: usize,
     storage: BTreeMap<String, Vec<u8>>,
     started: Instant,
+    /// The time when it started, in seconds since 1970.
+    started_unix: u64,
+    /// Scripted runs keep time of their own, so they come out the same each time: the time
+    /// that `timeout` presses let pass, each the whole of the wait it ends.
+    slept: Duration,
     logs: Vec<String>,
     interactive: bool,
     /// the test phrase's seed, worked out the first time an app asks for a key
@@ -191,7 +195,12 @@ fn save_storage(path: &std::path::Path, storage: &BTreeMap<String, Vec<u8>>) {
 }
 
 impl Shared {
-    fn screen(&self) -> Screen { compose(&bar(&self.manifest.name, self.options.sideloaded, &clock()), &self.last) }
+    fn screen(&self) -> Screen { compose(&bar(&self.manifest.name, self.options.sideloaded, &clock(self.unix())), &self.last) }
+
+    /// How long it has run: on the wall clock in the terminal, the script's own time otherwise.
+    fn elapsed(&self) -> Duration { if self.interactive { self.started.elapsed() } else { self.slept } }
+
+    fn unix(&self) -> u64 { self.started_unix + self.elapsed().as_secs() }
 
     fn draw_terminal(&self, footer: &str) {
         let s = self.screen();
@@ -233,6 +242,8 @@ impl Sim {
             frame: 0,
             storage,
             started: Instant::now(),
+            started_unix: now(),
+            slept: Duration::ZERO,
             logs: Vec::new(),
             interactive,
             seed: None,
@@ -404,6 +415,10 @@ impl Platform for Sim {
         }
         loop {
             return match s.script.pop_front() {
+                Some(Press::Event(Event::Timeout)) => {
+                    s.slept += timeout.unwrap_or_default();
+                    Event::Timeout
+                }
                 Some(Press::Event(e)) => e,
                 Some(Press::Menu(pick)) => {
                     let event = Self::menu_event(&mut s, pick);
@@ -455,11 +470,11 @@ impl Platform for Sim {
 
     fn set_menu(&mut self, items: &[String]) { self.0.borrow_mut().menu = items.to_vec() }
 
-    fn millis(&self) -> u64 { self.0.borrow().started.elapsed().as_millis() as u64 }
+    fn millis(&self) -> u64 { self.0.borrow().elapsed().as_millis() as u64 }
 
     fn unix_time(&self) -> Option<(u64, bool)> {
-        let t = SystemTime::now().duration_since(UNIX_EPOCH).ok()?.as_secs();
-        Some((t, self.0.borrow().options.verified))
+        let s = self.0.borrow();
+        Some((s.unix(), s.options.verified))
     }
 
     fn random(&mut self, buf: &mut [u8]) { getrandom::fill(buf).expect("no randomness") }

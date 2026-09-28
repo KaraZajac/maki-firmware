@@ -228,8 +228,43 @@ fn bundles(dir: &Path, out: &mut Vec<PathBuf>) -> Result<(), String> {
     Ok(())
 }
 
+/// What the store says about an app beside its bundles, in `apps/ID/app.toml`: where its source
+/// is, which the store built it from before stamping it (`maki reproduce`), and its category.
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct About {
+    category: Option<String>,
+    source: Option<Source>,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Source {
+    /// A Git repository, https.
+    repo: String,
+    /// The commit built, in full.
+    commit: String,
+    /// The app's directory in it, if it isn't the top.
+    #[serde(default)]
+    path: String,
+}
+
+fn about(dir: &Path, id: &str) -> Result<Option<About>, String> {
+    let path = dir.join("apps").join(id).join("app.toml");
+    let Ok(text) = std::fs::read_to_string(&path) else { return Ok(None) };
+    let about: About = toml::from_str(&text).map_err(|e| format!("{}: {e}", path.display()))?;
+    if let Some(s) = &about.source {
+        let hex = s.commit.len() == 40 && s.commit.bytes().all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase());
+        if !s.repo.starts_with("https://") || !hex || s.path.starts_with('/') || s.path.split('/').any(|p| p == "..") {
+            return Err(format!("{}: a source is an https repository, a whole commit ID and a path in it", path.display()));
+        }
+    }
+    Ok(Some(about))
+}
+
 /// The store's index: its newest stamped bundle of each app under `dir`/apps, every stamp
-/// checked against the store's newest root, signed by the catalogue key that root names.
+/// checked against the store's newest root, signed by the catalogue key that root names. With
+/// each, what its `app.toml` says, if it has one.
 pub fn index(dir: &Path, catalogue: &Key, version: Option<u32>, expires_days: u64) -> Result<(), String> {
     let root = latest_root(dir)?;
     if catalogue.verifying_key().to_bytes() != root.catalogue {
@@ -253,9 +288,11 @@ pub fn index(dir: &Path, catalogue: &Key, version: Option<u32>, expires_days: u6
             continue;
         }
         let icon = b.icon.map(|i| base64(&i.iter().flat_map(|w| w.to_le_bytes()).collect::<Vec<_>>()));
-        let entry = serde_json::json!({
+        let about = about(dir, &m.id)?;
+        let mut entry = serde_json::json!({
             "id": m.id,
             "name": m.name,
+            "kind": if m.kind == maki_bundle::Kind::Native { "native" } else { "wasm" },
             "version": m.version,
             "label": m.label,
             "description": m.description,
@@ -269,6 +306,14 @@ pub fn index(dir: &Path, catalogue: &Key, version: Option<u32>, expires_days: u6
             "path": shown,
             "icon": icon,
         });
+        if let Some(about) = about {
+            if let Some(category) = about.category {
+                entry["category"] = category.into();
+            }
+            if let Some(s) = about.source {
+                entry["source"] = serde_json::json!({ "repo": s.repo, "commit": s.commit, "path": s.path });
+            }
+        }
         newest.insert(m.id.clone(), (m.version, entry));
     }
     let index_path = dir.join("index.json");

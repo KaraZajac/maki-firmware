@@ -52,8 +52,10 @@ maki: make apps for maki
       centre, m for the menu (left and right together), q to leave; y or n answers an ask,
       and a scan takes what you type. With --press, the presses in order, then Exit (yes or
       no answers an ask, msg:TEXT sends a message, qr:TEXT is the next scan, tilt:X;Y;Z moves
-      the accelerometer); --shot saves the last frame, --frames every frame. Apps' keys come
-      from the BIP39 test phrase, never anything real.
+      the accelerometer); --shot saves the last frame, --frames every frame. A scripted run
+      keeps time of its own: only a timeout lets time pass, the whole of the wait it ends, so
+      timeout*60 in an app that waits a second is a minute. Apps' keys come from the BIP39
+      test phrase, never anything real.
 
   The developer key is --key, else $MAKI_KEY, else ~/.config/maki/developer.key.";
 
@@ -682,8 +684,9 @@ signs stamps and revocation lists.
       Stamps the bundle into the store in DIR (apps/ID/VERSION.maki) and signs a new index.
   maki store index DIR --catalogue FILE [--version N] [--expires-days 30]
       Signs the index of the store in DIR: the newest stamped bundle of each app, every stamp
-      checked against the newest root in roots/. maki desktop shows it, and won't use it once
-      it has expired.
+      checked against the newest root in roots/, with what apps/ID/app.toml says of it (its
+      category, and the source it was built from). maki desktop shows it, and won't use it
+      once it has expired.
 
   A store is a directory of files to publish anywhere maki desktop can fetch them:
   roots/1.bin, roots/2.bin, ... (each root signed to replace the one before), revocations.bin,
