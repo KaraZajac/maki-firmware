@@ -5,6 +5,7 @@ edition = "2021"
 description = "maki's boot PIN, and the secrets it guards"
 
 [dependencies]
+maki-proto = { path = "../../libs/maki-proto" }
 log = "0.4.14"
 num-derive = { version = "0.4.2", default-features = false }
 num-traits = { version = "0.2.14", default-features = false }

@@ -406,7 +406,11 @@ fn main() -> ! {
         time_conn: xous::connect(xous::SID::from_bytes(bao1x_hal_service::api::TIME_SERVER_PUBLIC).unwrap())
             .unwrap(),
     };
-    let mut device = Device::new(badge, "maki", env!("CARGO_PKG_VERSION").into());
+    // this maki's own name, which HELLO gives the computer (maki-keys answers once the PDDB is
+    // mounted: the first time, it picks one)
+    let name = maki_keys::Keys::new(&xns).map(|k| k.device_name()).unwrap_or_else(|_| "maki".into());
+    log::info!("this maki is {name}");
+    let mut device = Device::new(badge, name, env!("CARGO_PKG_VERSION").into());
 
     // "linked" means a valid frame arrived recently. The main loop raises it on contact; the
     // watcher lowers it when the host goes quiet, so both ends agree without extra messages.
@@ -627,6 +631,24 @@ fn main() -> ! {
                 r.answer.first() == Some(&14)
             );
         });
+    }
+
+    // The clock: built with MAKI_DEMO_CLOCK, maki-link sets maki's clock at boot to a fixed
+    // evening, as maki desktop would (Sunday 27 September 2026, 22:38 at UTC-4), and calls it
+    // verified: the bar's clock and the screensaver have a time to show.
+    if option_env!("MAKI_DEMO_CLOCK").is_some() {
+        let mut badge = Badge {
+            tt: ticktimer_server::Ticktimer::new().unwrap(),
+            launcher: maki_launcher::Launcher::new(&xns).expect("couldn't connect to the launcher"),
+            time_state: time_state.clone(),
+            #[cfg(feature = "board-baosec")]
+            time_conn: xous::connect(xous::SID::from_bytes(bao1x_hal_service::api::TIME_SERVER_PUBLIC).unwrap())
+                .unwrap(),
+        };
+        const DEMO_UTC_MS: u64 = 1_790_563_080_000;
+        badge.set_time(DEMO_UTC_MS, -4 * 3600);
+        badge.time_state_changed(TimeState::Verified);
+        log::warn!("demo clock: set to 22:38 and called verified");
     }
 
     // The maki store: built with MAKI_DEMO_STORE, maki-link does what maki desktop does with

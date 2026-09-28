@@ -496,7 +496,7 @@ struct Challenge {
 
 pub struct Device<P: Platform> {
     platform: P,
-    name: &'static str,
+    name: String,
     version: String,
     challenge: Option<Challenge>,
     state: TimeState,
@@ -512,8 +512,9 @@ fn error(code: ErrorCode, detail: &str) -> Reply {
 fn malformed(_: Truncated) -> Reply { error(ErrorCode::Malformed, "malformed message") }
 
 impl<P: Platform> Device<P> {
-    pub fn new(platform: P, name: &'static str, version: String) -> Self {
-        Device { platform, name, version, challenge: None, state: TimeState::Unset, tz_offset_s: 0 }
+    /// `name` is this maki's own (`names`), which HELLO gives the computer.
+    pub fn new(platform: P, name: impl Into<String>, version: String) -> Self {
+        Device { platform, name: name.into(), version, challenge: None, state: TimeState::Unset, tz_offset_s: 0 }
     }
 
     pub fn state(&self) -> TimeState { self.state }
@@ -788,7 +789,7 @@ impl<P: Platform> Device<P> {
 
     fn hello(&mut self, body: &[u8]) -> Result<Reply, Truncated> {
         Reader::new(body).end()?;
-        let reply = Writer::new().u8(crate::frame::PROTOCOL_VERSION).str8(self.name).str8(&self.version).finish();
+        let reply = Writer::new().u8(crate::frame::PROTOCOL_VERSION).str8(&self.name).str8(&self.version).finish();
         Ok((kind::HELLO | kind::REPLY, reply))
     }
 

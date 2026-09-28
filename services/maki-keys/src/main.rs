@@ -29,6 +29,9 @@ const KEY_LOCK: &str = "lock";
 /// and either PIN still opens maki (whichever does becomes the only record).
 const KEY_LOCK_NEXT: &str = "lock.next";
 const KEY_TRIES: &str = "tries";
+/// This maki's name (`maki_proto::names`): picked the first time it starts, kept through wipes,
+/// which forget only the lock.
+const KEY_NAME: &str = "name";
 /// In the secret basis: the recovery phrase's entropy.
 const SEED_DICT: &str = "maki.seed";
 const KEY_ENTROPY: &str = "entropy";
@@ -425,6 +428,21 @@ impl Store {
 
     fn set_tries(&self, n: u32) -> std::io::Result<()> { self.write(KEY_TRIES, &n.to_le_bytes()) }
 
+    /// This maki's name: the one it picked, or a new pick the first time.
+    fn name(&self) -> String {
+        if let Some(name) = self.read(KEY_NAME).and_then(|b| String::from_utf8(b).ok()) {
+            if maki_proto::names::valid(&name) {
+                return name;
+            }
+        }
+        let name = maki_proto::names::pick(random::<1>()[0]).to_string();
+        match self.write(KEY_NAME, name.as_bytes()) {
+            Ok(()) => log::info!("this maki is {name}"),
+            Err(e) => log::error!("couldn't keep its name: {e:?}"),
+        }
+        name
+    }
+
     /// Destroy the wrapped key: the secret basis can't be opened again by anyone who asks
     /// this firmware. (Its pages stay allocated; the PDDB can only delete a basis that's open.)
     fn wipe(&self) {
@@ -556,6 +574,8 @@ fn main() -> ! {
     let sid = xns.register_name(SERVER_NAME_KEYS, None).expect("can't register server");
     let store = Store { pddb: Pddb::new() };
     store.pddb.is_mounted_blocking();
+    // this maki's name, once it's been read (or picked)
+    let mut name_known: Option<String> = None;
 
     let mut state = if store.lock().is_some() { State::Locked } else { State::Unset };
     log::info!("starting {:?}", state);
@@ -596,6 +616,17 @@ fn main() -> ! {
             tries_known = None;
         }
         match op {
+            Some(KeysOp::DeviceName) => {
+                let name = name_known.get_or_insert_with(|| store.name());
+                let bytes = &name.as_bytes()[..name.len().min(maki_proto::names::MAX_NAME)];
+                let mut words = [0usize; 4];
+                for (w, chunk) in words.iter_mut().zip(bytes.chunks(4)) {
+                    let mut b = [0u8; 4];
+                    b[..chunk.len()].copy_from_slice(chunk);
+                    *w = u32::from_le_bytes(b) as usize;
+                }
+                xous::return_scalar5(msg.sender, bytes.len(), words[0], words[1], words[2], words[3]).ok();
+            }
             Some(KeysOp::Status) => {
                 // wrong PINs count while unlocked too: changing the PIN checks the current one
                 let tries_left = if state == State::Unset {

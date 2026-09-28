@@ -94,6 +94,10 @@ pub enum KeysOp {
     /// (EIP-712, JSON) to sign. The last piece reads it, shows the owner what it says, and signs
     /// it if they say so: `data` then holds the 65-byte signature.
     EthTyped = 25,
+    /// Blocking scalar: this maki's name, a maki roll it picked the first time it started
+    /// (`maki_proto::names`), which it keeps through wipes. Returns its length and its bytes in
+    /// four words, little-endian.
+    DeviceName = 26,
 }
 
 /// A question about the Ethereum account, and its answer.
@@ -304,6 +308,21 @@ impl Keys {
 
     /// Whether a recovery phrase has been made (or restored). Known only while unlocked.
     pub fn has_phrase(&self) -> bool { self.status_raw().1 & HAS_PHRASE != 0 }
+
+    /// This maki's name: a maki roll, picked the first time it started.
+    pub fn device_name(&self) -> String {
+        let named = xous::send_message(
+            self.conn,
+            xous::Message::new_blocking_scalar(KeysOp::DeviceName.to_usize().unwrap(), 0, 0, 0, 0),
+        );
+        match named {
+            Ok(xous::Result::Scalar5(len, a, b, c, d)) => {
+                let bytes: Vec<u8> = [a, b, c, d].iter().flat_map(|w| (*w as u32).to_le_bytes()).collect();
+                String::from_utf8_lossy(&bytes[..len.min(bytes.len())]).into_owned()
+            }
+            _ => String::from("maki"),
+        }
+    }
 
     /// Take the screen's role (the launcher, at boot). See `KeysOp::Claim`.
     pub fn claim(&self) -> bool {

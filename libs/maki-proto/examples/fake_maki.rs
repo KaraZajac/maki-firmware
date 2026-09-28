@@ -2,12 +2,13 @@
 //!
 //!     cargo run -p maki-proto --features fake --example fake_maki -- \
 //!         [ADDR] [--deny | --ask] [--totp SITE=BASE32]... [--clock-verified] [--phrase "WORDS"] \
-//!         [--store-root FILE]
+//!         [--store-root FILE] [--name NAME]
 //!
 //! ADDR defaults to 127.0.0.1:7878. Logins and TOTP secrets live in memory; SAVE_LOGIN adds to them.
 //! The Bitcoin wallet comes from `--phrase`, or else the BIP39 test phrase ("abandon" eleven times,
 //! then "about"), which everyone knows: never send real coins to either.
 //! Approvals are automatic unless `--deny` (refuse everything) or `--ask` (ask on this terminal).
+//! It calls itself a maki roll, picked at random as a badge picks its name, unless `--name` says.
 //! Codes need a verified clock, as on the badge: sync through Roughtime first, or start with
 //! `--clock-verified` to take this computer's clock as verified (tests, offline work).
 //! Everything maki-link does on the device happens here too, except the USB hop, the Xous clock and
@@ -722,7 +723,14 @@ fn main() {
     let listener = TcpListener::bind(&addr).expect("bind");
     // print the bound address, so a caller that asked for port 0 learns the real one
     println!("fake maki listening on {}", listener.local_addr().unwrap());
-    let mut device = Device::new(Host { start: Instant::now(), clock: None }, "maki", "0.2.0-fake".into());
+    // a maki roll, as a badge picks one the first time it starts (`--name` to choose)
+    let name = args.iter().position(|a| a == "--name").and_then(|i| args.get(i + 1)).cloned().unwrap_or_else(|| {
+        // any byte will do for a name: the clock's
+        let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.subsec_nanos()).unwrap_or(0);
+        maki_proto::names::pick((nanos >> 10) as u8).to_string()
+    });
+    println!("this maki is {name}");
+    let mut device = Device::new(Host { start: Instant::now(), clock: None }, name, "0.2.0-fake".into());
     if args.iter().any(|a| a == "--clock-verified") {
         device.handle(&frame::Packet {
             kind: maki_proto::kind::TIME_UNVERIFIED,

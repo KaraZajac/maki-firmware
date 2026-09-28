@@ -5341,6 +5341,7 @@ dependencies = [
  "maki-fido",
  "maki-keys-api",
  "maki-launcher",
+ "maki-proto",
  "maki-seed",
  "num-derive 0.4.2",
  "num-traits",

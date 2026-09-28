@@ -6,6 +6,7 @@
 
 pub mod device;
 pub mod frame;
+pub mod names;
 pub mod site;
 pub mod wire;
 
