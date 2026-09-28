@@ -271,6 +271,7 @@ struct Wallet {
     seed: [u8; 64],
     eth_incoming: Vec<u8>,
     eth_signed: Vec<u8>,
+    typed_incoming: Vec<u8>,
 }
 
 const TEST_PHRASE: &str = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
@@ -288,6 +289,7 @@ impl Wallet {
             seed,
             eth_incoming: Vec::new(),
             eth_signed: Vec::new(),
+            typed_incoming: Vec::new(),
         }
     }
 }
@@ -345,6 +347,32 @@ fn finish_eth(tx: Vec<u8>, site: &str, account: &maki_eth::Account, wallet: &Mut
             reply::eth_sign(true, Approval::Approved, total, "")
         }
         Err(e) => reply::eth_sign(true, Approval::Refused, 0, &e.to_string()),
+    }
+}
+
+/// Everything maki-keys does with finished typed data (EIP-712), minus the screen: read it,
+/// show it, sign it.
+fn finish_typed(bytes: Vec<u8>, site: &str, account: &maki_eth::Account, policy: Policy) -> (u8, Vec<u8>) {
+    let refused = |why: String| reply::eth_typed(true, Approval::Refused, &[], &why);
+    let Ok(text) = String::from_utf8(bytes) else { return refused("not typed data maki can read: not UTF-8".into()) };
+    let typed = match maki_eth::TypedData::parse(&text) {
+        Ok(t) => t,
+        Err(e) => return refused(e.to_string()),
+    };
+    let (pages, title, line) = match maki_eth::display::typed_review(&typed) {
+        Ok(r) => r,
+        Err(e) => return refused(e.to_string()),
+    };
+    for p in pages {
+        println!("  maki shows: {:14} {:22} {}", p.heading, p.value, p.mono.replace('\n', " "));
+    }
+    let a = approve(policy, &format!("{site}: {} ({line})", title.to_lowercase()));
+    if a != Approval::Approved {
+        return reply::eth_typed(true, a, &[], "");
+    }
+    match account.sign_typed(&typed) {
+        Ok(signature) => reply::eth_typed(true, Approval::Approved, &signature, ""),
+        Err(e) => refused(e.to_string()),
     }
 }
 
@@ -924,6 +952,30 @@ fn main() {
                                         let (writer, wallet) = (writer.clone(), wallet.clone());
                                         std::thread::spawn(move || {
                                             let (kind, body) = finish_eth(tx, &site, &account, &wallet, policy);
+                                            writer.lock().unwrap().write_all(&frame::encode(kind, id, &body)).ok();
+                                        });
+                                        None
+                                    }
+                                }
+                            }
+                            Ethereum::Typed { site, index, total, offset, data } => {
+                                let mut w = wallet.lock().unwrap();
+                                if offset == 0 {
+                                    w.typed_incoming.clear();
+                                }
+                                if offset as usize != w.typed_incoming.len() {
+                                    w.typed_incoming.clear();
+                                    Some(reply::eth_typed(true, Approval::Unavailable, &[], ""))
+                                } else {
+                                    w.typed_incoming.extend_from_slice(&data);
+                                    if (w.typed_incoming.len() as u32) < total {
+                                        Some(reply::eth_typed(false, Approval::Approved, &[], ""))
+                                    } else {
+                                        let bytes = std::mem::take(&mut w.typed_incoming);
+                                        drop(w);
+                                        let (account, writer) = (eth_account(index), writer.clone());
+                                        std::thread::spawn(move || {
+                                            let (kind, body) = finish_typed(bytes, &site, &account, policy);
                                             writer.lock().unwrap().write_all(&frame::encode(kind, id, &body)).ok();
                                         });
                                         None

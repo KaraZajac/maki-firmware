@@ -40,6 +40,9 @@ pub mod kind {
     pub const ETH_SIGNED: u8 = 0x42;
     /// A message to sign (EIP-191 personal_sign), answered once the owner decides.
     pub const ETH_SIGN_MESSAGE: u8 = 0x43;
+    /// A piece of typed data to sign (EIP-712 `eth_signTypedData_v4`, JSON); the last is
+    /// answered, with the signature, once the owner decides.
+    pub const ETH_SIGN_TYPED: u8 = 0x44;
     /// The apps installed on maki, one per request.
     pub const APP_LIST: u8 = 0x50;
     /// A piece of a `.maki` bundle to install; the last is answered once the owner decides.

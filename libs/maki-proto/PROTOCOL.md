@@ -66,6 +66,7 @@ bytes. Bodies must be consumed exactly: trailing bytes are an error.
 | `0x41` ETH_SIGN_TX | `site:str8` `index:u32` `total:u32` `offset:u32` `piece:bytes16` | `done:u8` `approval:u8` `signed:u32` `reason:str8` |
 | `0x42` ETH_SIGNED | `offset:u32` | `status:u8` `total:u32` `offset:u32` `piece:bytes16` |
 | `0x43` ETH_SIGN_MESSAGE | `site:str8` `index:u32` `message:bytes16` | `approval:u8` `signature:bytes16` |
+| `0x44` ETH_SIGN_TYPED | `site:str8` `index:u32` `total:u32` `offset:u32` `piece:bytes16` | `done:u8` `approval:u8` `signature:bytes16` `reason:str8` |
 | `0x50` APP_LIST | `index:u32` | `status:u8` `count:u32` `present:u8`, then if present: `id:str8` `name:str8` `version:u32` `label:str8` `developer:bytes16` `from_store:u8` `backup:u8` `used:u32` `icon:bytes16` |
 | `0x51` APP_INSTALL | `total:u32` `offset:u32` `piece:bytes16` | `done:u8` `approval:u8` `reason:str8` |
 | `0x52` APP_REMOVE | `id:str8` | `approval:u8` |
@@ -227,6 +228,17 @@ Requests come from sites, through the browser extension's EIP-1193 provider, and
   (EIP-4361) that names another site than the one asking gets a "Wrong site!" page first: that's
   how a phishing site uses a real site's sign-in. The signature is r, s, v (65
   bytes, v 27 or 28). The prefix EIP-191 adds means a message can never pass for a transaction.
+- **ETH_SIGN_TYPED** signs typed data (EIP-712, as `eth_signTypedData_v4` takes it: the JSON
+  with `types`, `primaryType`, `domain` and `message`), sent in pieces of up to 4096 bytes, in
+  order, with the same `total` each time (at most 64 KiB of UTF-8). maki reads the JSON itself,
+  strictly, and hashes it from the values it shows: the network and the app the domain names,
+  then a permit (EIP-2612, or Uniswap's Permit2, known by its types' exact shape) as who may
+  spend how much of which token until when, or anything else field by field, every signed field
+  among them. It refuses typed data whose `types` has no `EIP712Domain` of EIP-712's own fields,
+  with a type that refers to itself, with a value its type doesn't declare or missing one it
+  does, or that takes more than 48 pages to show. The last piece is answered once the owner
+  decides: approved with the signature (r, s, v: 65 bytes, v 27 or 28), 1 rejected, 3 timed out,
+  or 9 refused with `reason`.
 - **ETH_SIGN_TX** sends an unsigned transaction in pieces of up to 4096 bytes, in order, with the
   same `total` each time (at most 128 KiB): EIP-1559 (`0x02 || rlp([...])`) or legacy EIP-155
   (`rlp([nonce, gas price, gas, to, value, data, chain ID, 0, 0])`). The last piece is answered
@@ -248,8 +260,9 @@ What maki checks and shows:
   ERC-20 `approve` (the spender, and "any amount" for an unlimited approval) and ERC-721/1155
   `setApprovalForAll` (the operator gets every item). Any other call is shown as a contract
   call maki can't read, with its function selector and length.
-- Typed data (EIP-712) isn't signed yet: maki couldn't show what it means. `eth_sign` never will
-  be: it signs anything, a transaction included.
+- Typed data (EIP-712) is shown as **ETH_SIGN_TYPED** says, from maki's own reading of it:
+  the hash signed is of exactly the values shown. `eth_sign` never will be signed: it signs
+  anything, a transaction included.
 
 ## Apps
 

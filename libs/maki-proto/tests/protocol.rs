@@ -517,6 +517,11 @@ fn ethereum_requests_go_to_the_account() {
         handled(&mut d, kind::ETH_SIGN_MESSAGE, Writer::new().str8("example.com").u32(0).bytes16(b"hi").finish()),
         Handled::Ethereum(Ethereum::Message { site: "example.com".into(), index: 0, message: b"hi".to_vec() })
     );
+    let piece = b"{\"types\":".to_vec();
+    assert_eq!(
+        handled(&mut d, kind::ETH_SIGN_TYPED, Writer::new().str8("app.uniswap.org").u32(0).u32(900).u32(0).bytes16(&piece).finish()),
+        Handled::Ethereum(Ethereum::Typed { site: "app.uniswap.org".into(), index: 0, total: 900, offset: 0, data: piece })
+    );
 }
 
 #[test]
@@ -529,6 +534,10 @@ fn ethereum_requests_out_of_range_are_refused() {
         (kind::ETH_SIGN_TX, Writer::new().str8("example.com").u32(0).u32(MAX_TX + 1).u32(0).bytes16(&[1]).finish()),
         (kind::ETH_SIGN_TX, Writer::new().str8("example.com").u32(0).u32(10).u32(5).bytes16(&[0; 6]).finish()),
         (kind::ETH_SIGN_MESSAGE, Writer::new().str8("example.com").u32(0).bytes16(&vec![0; MAX_MESSAGE + 1]).finish()),
+        (kind::ETH_SIGN_TYPED, Writer::new().str8("example.com").u32(0).u32(0).u32(0).bytes16(&[]).finish()),
+        (kind::ETH_SIGN_TYPED, Writer::new().str8("example.com").u32(0).u32(MAX_TYPED + 1).u32(0).bytes16(&[1]).finish()),
+        (kind::ETH_SIGN_TYPED, Writer::new().str8("example.com").u32(0).u32(10).u32(5).bytes16(&[0; 6]).finish()),
+        (kind::ETH_SIGN_TYPED, Writer::new().str8("Example.com").u32(0).u32(10).u32(0).bytes16(&[0; 6]).finish()),
     ];
     for (k, body) in bad {
         let reply = ask(&mut d, k, body);
@@ -548,6 +557,16 @@ fn ethereum_replies_carry_only_what_the_answer_allows() {
     let (_, body) = reply::eth_message(Approval::Approved, &[1; 65]);
     let mut r = Reader::new(&body);
     assert_eq!((r.u8().unwrap(), r.bytes16().unwrap().len()), (0, 65));
+    let (k, body) = reply::eth_typed(true, Approval::Approved, &[2; 65], "ignored");
+    assert_eq!(k, kind::ETH_SIGN_TYPED | kind::REPLY);
+    let mut r = Reader::new(&body);
+    assert_eq!(
+        (r.u8().unwrap(), r.u8().unwrap(), r.bytes16().unwrap().len(), r.str8().unwrap()),
+        (1, Approval::Approved as u8, 65, "")
+    );
+    let (_, body) = reply::eth_typed(true, Approval::Denied, &[2; 65], "");
+    let mut r = Reader::new(&body);
+    assert_eq!((r.u8().unwrap(), r.u8().unwrap(), r.bytes16().unwrap()), (1, Approval::Denied as u8, &[][..]));
     let (_, body) = reply::eth_sign(true, Approval::Refused, 99, "maki doesn't sign blob transactions");
     let mut r = Reader::new(&body);
     assert_eq!(

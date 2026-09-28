@@ -195,6 +195,8 @@ pub enum Ethereum {
     Sign { site: String, index: u32, total: u32, offset: u32, data: Vec<u8> },
     Signed { offset: u32 },
     Message { site: String, index: u32, message: Vec<u8> },
+    /// A piece of typed data (EIP-712, as JSON) to sign.
+    Typed { site: String, index: u32, total: u32, offset: u32, data: Vec<u8> },
 }
 
 /// Pieces of an Ethereum transaction are at most this big, either way.
@@ -203,6 +205,8 @@ pub const TX_PIECE: usize = 4096;
 pub const MAX_TX: u32 = 128 * 1024;
 /// The longest message maki signs, in one piece.
 pub const MAX_MESSAGE: usize = 4096;
+/// The most typed data maki takes in, in pieces of `TX_PIECE` (`maki_eth::typed::MAX_TYPED`).
+pub const MAX_TYPED: u32 = 64 * 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Bitcoin {
@@ -328,6 +332,14 @@ pub mod reply {
     pub fn eth_signed(status: Approval, total: u32, offset: u32, data: &[u8]) -> (u8, Vec<u8>) {
         let data = if status == Approval::Approved { data } else { &[] };
         (kind::ETH_SIGNED | kind::REPLY, Writer::new().u8(status as u8).u32(total).u32(offset).bytes16(data).finish())
+    }
+
+    /// A piece of typed data taken in (`done` false), or the outcome (`done` true): approved with
+    /// the signature (r, s, v: 65 bytes), or refused with the reason.
+    pub fn eth_typed(done: bool, approval: Approval, signature: &[u8], reason: &str) -> (u8, Vec<u8>) {
+        let s = if approval == Approval::Approved { signature } else { &[] };
+        let reason = if approval == Approval::Refused { reason } else { "" };
+        (kind::ETH_SIGN_TYPED | kind::REPLY, Writer::new().u8(done as u8).u8(approval as u8).bytes16(s).str8(reason).finish())
     }
 
     /// A message's signature: r, s, v (65 bytes), when approved.
@@ -502,7 +514,7 @@ impl<P: Platform> Device<P> {
             kind::BTC_ACCOUNT | kind::BTC_ADDRESS | kind::BTC_SIGN | kind::BTC_SIGNED => {
                 return Self::bitcoin(packet.kind, body)
             }
-            kind::ETH_ACCOUNT | kind::ETH_SIGN_TX | kind::ETH_SIGNED | kind::ETH_SIGN_MESSAGE => {
+            kind::ETH_ACCOUNT | kind::ETH_SIGN_TX | kind::ETH_SIGNED | kind::ETH_SIGN_MESSAGE | kind::ETH_SIGN_TYPED => {
                 return Self::ethereum(packet.kind, body)
             }
             kind::APP_LIST | kind::APP_INSTALL | kind::APP_REMOVE | kind::APP_MESSAGE | kind::STORE_UPDATE => {
@@ -685,6 +697,13 @@ impl<P: Platform> Device<P> {
                 kind::ETH_SIGN_MESSAGE => {
                     Ethereum::Message { site: r.str8()?.into(), index: r.u32()?, message: r.bytes16()?.to_vec() }
                 }
+                kind::ETH_SIGN_TYPED => Ethereum::Typed {
+                    site: r.str8()?.into(),
+                    index: r.u32()?,
+                    total: r.u32()?,
+                    offset: r.u32()?,
+                    data: r.bytes16()?.to_vec(),
+                },
                 _ => Ethereum::Signed { offset: r.u32()? },
             };
             r.end()?;
@@ -699,16 +718,18 @@ impl<P: Platform> Device<P> {
                 let (k, b) = malformed(t);
                 Handled::Reply(k, b)
             }
-            Ok(Ethereum::Account { ref site, .. } | Ethereum::Sign { ref site, .. } | Ethereum::Message { ref site, .. })
-                if !crate::site::valid(site) =>
-            {
-                bad("site must be a lowercase ASCII hostname")
-            }
-            Ok(Ethereum::Account { index, .. } | Ethereum::Sign { index, .. } | Ethereum::Message { index, .. })
-                if index >= 0x8000_0000 =>
-            {
-                bad("account index out of range")
-            }
+            Ok(
+                Ethereum::Account { ref site, .. }
+                | Ethereum::Sign { ref site, .. }
+                | Ethereum::Message { ref site, .. }
+                | Ethereum::Typed { ref site, .. },
+            ) if !crate::site::valid(site) => bad("site must be a lowercase ASCII hostname"),
+            Ok(
+                Ethereum::Account { index, .. }
+                | Ethereum::Sign { index, .. }
+                | Ethereum::Message { index, .. }
+                | Ethereum::Typed { index, .. },
+            ) if index >= 0x8000_0000 => bad("account index out of range"),
             Ok(Ethereum::Sign { total, offset, ref data, .. })
                 if total == 0
                     || total > MAX_TX
@@ -718,6 +739,14 @@ impl<P: Platform> Device<P> {
                 bad("transaction piece out of range")
             }
             Ok(Ethereum::Message { ref message, .. }) if message.len() > MAX_MESSAGE => bad("message too long"),
+            Ok(Ethereum::Typed { total, offset, ref data, .. })
+                if total == 0
+                    || total > MAX_TYPED
+                    || data.len() > TX_PIECE
+                    || offset as u64 + data.len() as u64 > total as u64 =>
+            {
+                bad("typed data piece out of range")
+            }
             Ok(request) => Handled::Ethereum(request),
         }
     }
