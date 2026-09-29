@@ -1,0 +1,13 @@
+id = "com.leviathan.maki.marble"
+name = "Marble"
+version = 1
+label = "1.0"
+api = 1
+storage = 1
+memory = 64
+backup = true
+description = "Roll a marble through a maze by tilting maki, into the hole at the far corner. Every maze is new; keeps how many you've solved and your fastest."
+icon = "icon.pbm"
+
+[permissions]
+motion = "To roll the marble as you tilt maki."

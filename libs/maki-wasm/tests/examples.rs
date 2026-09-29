@@ -429,6 +429,39 @@ fn scanner_shows_what_it_read_and_types_it_checking_first_what_presses_keys() {
     assert!(r.typed.is_empty());
 }
 
+#[test]
+fn marble_rolls_the_way_maki_tilts_and_pauses() {
+    use maki_bundle::Permission;
+    let bytes = std::fs::read(format!("{}/tests/fixtures/marble.maki", env!("CARGO_MANIFEST_DIR"))).unwrap();
+    let bundle = maki_bundle::read(&bytes).unwrap();
+    let asked: Vec<Permission> = bundle.manifest.permissions.iter().map(|(p, _)| *p).collect();
+    assert_eq!(asked, [Permission::Motion]);
+    let limits = admit(&bundle.manifest, bundle.code).unwrap();
+    let run_with = |motion: Option<[i16; 3]>, events: &[Event]| {
+        let record = Rc::new(RefCell::new(Record { events: events.iter().copied().collect(), motion, ..Default::default() }));
+        assert_eq!(run(bundle.code, Box::new(Script(record.clone())), limits), Stop::Finished);
+        Rc::try_unwrap(record).ok().unwrap().into_inner()
+    };
+    let steps = |n: usize| -> Vec<Event> { std::iter::once(Event::Centre).chain(std::iter::repeat(Event::Timeout).take(n)).collect() };
+    // level, the marble stays at the start; tilted, it rolls
+    let flat = run_with(Some([0, 0, 1000]), &steps(20));
+    assert_eq!(flat.frames.len(), 22);
+    assert_eq!(flat.frames[1], flat.frames[21]);
+    let tilted = run_with(Some([600, -600, 500]), &steps(20));
+    assert_eq!(tilted.frames[1], flat.frames[1]);
+    assert_ne!(tilted.frames[1], tilted.frames[21]);
+    // the centre pauses, and the time stands still while it is
+    let mut events = steps(5);
+    events.extend([Event::Centre, Event::Timeout, Event::Centre]);
+    let paused = run_with(Some([600, -600, 500]), &events);
+    assert_ne!(paused.frames[7], paused.frames[6]);
+    assert_eq!(paused.frames[8], paused.frames[7]);
+    // no accelerometer: the title says so
+    let none = run_with(None, &[]);
+    assert_ne!(none.frames[0], flat.frames[0]);
+    assert!(none.storage.is_empty());
+}
+
 fn words_list() -> Vec<String> {
     std::fs::read_to_string(format!("{}/../../sdk/examples/passphrase/src/words.txt", env!("CARGO_MANIFEST_DIR")))
         .unwrap()
