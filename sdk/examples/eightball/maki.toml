@@ -1,0 +1,13 @@
+id = "com.leviathan.maki.eightball"
+name = "Magic 8-Ball"
+version = 1
+label = "1.0"
+api = 1
+storage = 0
+memory = 64
+backup = false
+description = "Ask a question, shake maki, and the answer floats up: one of the classic twenty, picked by maki's random number generator. No accelerometer? Press a button."
+icon = "icon.pbm"
+
+[permissions]
+motion = "To know when you shake maki."

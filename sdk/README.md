@@ -6,7 +6,7 @@ you can install"). Anyone can build one and sideload it through maki desktop; ma
 owner what it is, where it's from and what it may do before installing it, and a sideloaded
 app carries a mark in maki's top bar for as long as it's installed.
 
-This directory has the Rust crate apps are written with (`maki-app`), twenty-five examples, and the
+This directory has the Rust crate apps are written with (`maki-app`), twenty-six examples, and the
 `maki` tool that packs, signs, checks and simulates them. The examples:
 
 - **Hello**, **Dice** and **Tally**: a screen, the buttons, storage and randomness.
@@ -44,6 +44,9 @@ This directory has the Rust crate apps are written with (`maki-app`), twenty-fiv
   permission), into the hole at the far corner.
 - **Breakout**: the bricks and the ball, off a paddle that follows maki's tilt, or left and right
   without an accelerometer.
+- **Magic 8-Ball**: ask a question and shake maki (the motion permission, read every 40 ms), and
+  one of the classic twenty answers floats up in its triangle; a bump isn't a shake, and a button
+  press does too.
 - **Status**: a sign readable across the room, in big letters it draws itself with `blit`, which
   software on the computer can set (the link permission).
 - **Bitcoin** and **Ethereum**: maki's wallets, in the maki store (host API 3's wallet

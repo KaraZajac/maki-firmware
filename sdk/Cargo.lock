@@ -418,6 +418,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "eightball"
+version = "0.1.0"
+dependencies = [
+ "maki-app",
+]
+
+[[package]]
 name = "elliptic-curve"
 version = "0.13.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"

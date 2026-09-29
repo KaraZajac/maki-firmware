@@ -26,6 +26,8 @@ struct Record {
     /// codes the camera reads after `qr`, one a scan
     qrs: VecDeque<String>,
     motion: Option<[i16; 3]>,
+    /// readings the accelerometer gives before `motion`, one a read
+    motions: VecDeque<[i16; 3]>,
     /// maki is locked: no wallet keys
     locked: bool,
     /// what wallet apps put on maki's review screen
@@ -85,7 +87,10 @@ impl Platform for Script {
         let mut r = self.0.borrow_mut();
         r.qr.take().or_else(|| r.qrs.pop_front())
     }
-    fn motion(&mut self) -> Option<[i16; 3]> { self.0.borrow().motion }
+    fn motion(&mut self) -> Option<[i16; 3]> {
+        let mut r = self.0.borrow_mut();
+        r.motions.pop_front().or(r.motion)
+    }
     fn reply(&mut self, reply: &[u8]) -> bool {
         let mut r = self.0.borrow_mut();
         if r.current.take().is_none() {
@@ -495,6 +500,57 @@ fn breakout_serves_from_a_paddle_that_follows_the_tilt() {
     // without an accelerometer, left and right move it
     let pressed = run_with(None, &[Event::Centre, Event::Left, Event::Left]);
     assert_ne!(pressed.frames[1], pressed.frames[3]);
+}
+
+#[test]
+fn the_eight_ball_answers_a_shake_or_a_press_but_not_a_bump() {
+    use maki_bundle::Permission;
+    let bytes = std::fs::read(format!("{}/tests/fixtures/eightball.maki", env!("CARGO_MANIFEST_DIR"))).unwrap();
+    let bundle = maki_bundle::read(&bytes).unwrap();
+    let asked: Vec<Permission> = bundle.manifest.permissions.iter().map(|(p, _)| *p).collect();
+    assert_eq!(asked, [Permission::Motion]);
+    let limits = admit(&bundle.manifest, bundle.code).unwrap();
+    let run_with = |motion: Option<[i16; 3]>, motions: &[[i16; 3]], events: &[Event]| {
+        let record = Rc::new(RefCell::new(Record {
+            events: events.iter().copied().collect(),
+            motion,
+            motions: motions.iter().copied().collect(),
+            ..Default::default()
+        }));
+        assert_eq!(run(bundle.code, Box::new(Script(record.clone())), limits), Stop::Finished);
+        Rc::try_unwrap(record).ok().unwrap().into_inner()
+    };
+    let (level, shaken) = ([0, 0, 1000], [1800, 200, 900]);
+    let timeouts = |n: usize| vec![Event::Timeout; n];
+    // a press: the triangle rises in three frames, and the answer's in it
+    let pressed = run_with(Some(level), &[], &[vec![Event::Centre], timeouts(3)].concat());
+    assert_eq!(pressed.frames.len(), 5);
+    let answer = &pressed.frames[4];
+    assert!(lit(&pressed.frames[1]) < lit(&pressed.frames[2]) && lit(&pressed.frames[2]) < lit(&pressed.frames[3]));
+    assert!(answer.get(64, 10) && answer.get(10, 105) && answer.get(117, 105) && !answer.get(10, 10));
+    assert!((68..94).any(|y| (40..88).any(|x| !answer.get(x, y))));
+    // a shake (read at the start, then shaken for four readings and still for seven): the same
+    // answer, from the same random numbers
+    let mut motions = vec![level];
+    motions.extend([shaken; 4]);
+    motions.extend([level; 7]);
+    let shook = run_with(Some(level), &motions, &timeouts(14));
+    assert_eq!(shook.frames.len(), 5);
+    assert_eq!(&shook.frames[4], answer);
+    // a bump, one reading, is no shake
+    let bumped = run_with(Some(level), &[level, shaken], &timeouts(14));
+    assert_eq!(bumped.frames.len(), 1);
+    // hidden, a press asks nothing; shown again, the answer's back
+    let hidden = run_with(Some(level), &[], &[Event::Hidden, Event::Centre, Event::Shown]);
+    assert_eq!(hidden.frames.len(), 2);
+    assert_eq!(hidden.frames[0], hidden.frames[1]);
+    let back = run_with(Some(level), &[], &[vec![Event::Centre], timeouts(3), vec![Event::Hidden, Event::Shown]].concat());
+    assert_eq!(back.frames.len(), 6);
+    assert_eq!(&back.frames[5], answer);
+    // without an accelerometer, it says to press, and a press answers
+    let none = run_with(None, &[], &[vec![Event::Left], timeouts(3)].concat());
+    assert_ne!(none.frames[0], pressed.frames[0]);
+    assert_eq!(&none.frames[4], answer);
 }
 
 #[test]
