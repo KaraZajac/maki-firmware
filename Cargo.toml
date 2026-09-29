@@ -197,6 +197,8 @@ exclude = [
 # in test builds, or the tests take minutes. Release builds are optimised anyway.
 [profile.dev.package.curve25519-dalek-bao1x]
 opt-level = 3
+[profile.dev.package.curve25519-dalek]
+opt-level = 3
 [profile.dev.package.ed25519-dalek-compat]
 opt-level = 3
 [profile.dev.package.sha2]

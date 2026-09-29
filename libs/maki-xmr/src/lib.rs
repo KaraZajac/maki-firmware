@@ -19,6 +19,8 @@ mod english;
 mod keys;
 #[cfg(feature = "keys")]
 pub mod words;
+#[cfg(feature = "keys")]
+pub mod sign;
 
 #[cfg(feature = "keys")]
 pub use keys::Keys;

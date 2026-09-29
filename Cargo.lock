@@ -4314,7 +4314,7 @@ dependencies = [
  "atomic-polyfill",
  "hash32 0.2.1",
  "rustc_version 0.4.0",
- "spin",
+ "spin 0.9.8",
  "stable_deref_trait",
 ]
 
@@ -5574,10 +5574,14 @@ dependencies = [
 name = "maki-xmr"
 version = "0.1.0"
 dependencies = [
+ "crypto-bigint 0.5.5",
  "curve25519-dalek-bao1x",
  "maki-xmr",
  "monero",
+ "monero-clsag",
+ "monero-ed25519",
  "sha3 0.10.8",
+ "subtle",
  "zeroize",
 ]
 
@@ -5733,6 +5737,49 @@ dependencies = [
  "sealed",
  "thiserror 2.0.21",
  "tiny-keccak",
+]
+
+[[package]]
+name = "monero-clsag"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b0d6a6518cf95bd14563223726e24efffb3199b024b4fa1a3db73287d66e57c4"
+dependencies = [
+ "curve25519-dalek",
+ "group 0.13.0",
+ "monero-ed25519",
+ "monero-io",
+ "rand_chacha 0.3.1",
+ "rand_core 0.6.4",
+ "std-shims",
+ "subtle",
+ "thiserror 2.0.21",
+ "zeroize",
+]
+
+[[package]]
+name = "monero-ed25519"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e03a310abc9a9ffa4984a27297dede91d6282260424216a64c734250617ebd90"
+dependencies = [
+ "crypto-bigint 0.5.5",
+ "curve25519-dalek",
+ "monero-io",
+ "rand_core 0.6.4",
+ "sha3 0.10.8",
+ "std-shims",
+ "subtle",
+ "zeroize",
+]
+
+[[package]]
+name = "monero-io"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "aa9f1a95e908282938246cd0206ee37dcbb8b8317b38c32f6760f7483eff8adb"
+dependencies = [
+ "std-shims",
 ]
 
 [[package]]
@@ -7320,7 +7367,7 @@ dependencies = [
  "libc",
  "log",
  "rkyv 0.4.3",
- "spin",
+ "spin 0.9.8",
  "untrusted 0.9.0",
  "windows-sys 0.52.0",
  "xous",
@@ -8349,6 +8396,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "spin"
+version = "0.10.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "023a211cb3138dbc438680b32560ad89f699977624c9f8dbb95a47d5b4c07dd3"
+
+[[package]]
 name = "spinning_top"
 version = "0.2.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -8485,6 +8538,17 @@ dependencies = [
  "xous-api-ticktimer",
  "xous-ipc 0.10.10 (registry+https://github.com/rust-lang/crates.io-index)",
  "xous-semver",
+]
+
+[[package]]
+name = "std-shims"
+version = "0.1.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "227c4f8561598188d0df96dbe749824576174bba278b5b6bb2eacff1066067d0"
+dependencies = [
+ "hashbrown 0.16.0",
+ "rustversion",
+ "spin 0.10.1",
 ]
 
 [[package]]
@@ -9837,7 +9901,7 @@ version = "2.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "78693fcdd618e0fc34af59c6b8efa9ac5d58c68df940beff4bedddb6acfe7c27"
 dependencies = [
- "spin",
+ "spin 0.9.8",
  "wasmi_collections",
  "wasmi_core",
  "wasmi_ir",

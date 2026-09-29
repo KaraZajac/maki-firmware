@@ -8,10 +8,7 @@ use curve25519_dalek::edwards::EdwardsPoint;
 use curve25519_dalek::scalar::Scalar;
 use zeroize::Zeroize;
 
-use crate::keccak;
-
-/// Monero's hash to a scalar: Keccak-256, reduced.
-fn hash_to_scalar(data: &[u8]) -> Scalar { Scalar::from_bytes_mod_order(keccak(data)) }
+use crate::sign::{self, hash_to_scalar};
 
 /// An account's secret keys. Kept by maki-keys alone; gone from memory when dropped.
 pub struct Keys {
@@ -48,17 +45,69 @@ impl Keys {
         if (major, minor) == (0, 0) {
             return self.public();
         }
+        let mut m = self.subaddress_scalar(major, minor);
+        let spend = point(&self.spend) + point(&m);
+        m.zeroize();
+        let view = self.view * spend;
+        (spend.compress().to_bytes(), view.compress().to_bytes())
+    }
+
+    /// What a subaddress's spend key adds to the account's: Hs("SubAddr" ‖ view key ‖ major ‖
+    /// minor).
+    fn subaddress_scalar(&self, major: u32, minor: u32) -> Scalar {
         let mut data = [0u8; 8 + 32 + 8];
         data[..8].copy_from_slice(b"SubAddr\0");
         data[8..40].copy_from_slice(self.view.as_bytes());
         data[40..44].copy_from_slice(&major.to_le_bytes());
         data[44..].copy_from_slice(&minor.to_le_bytes());
-        let mut m = hash_to_scalar(&data);
+        let m = hash_to_scalar(&data);
         data.zeroize();
-        let spend = point(&self.spend) + point(&m);
-        m.zeroize();
-        let view = self.view * spend;
-        (spend.compress().to_bytes(), view.compress().to_bytes())
+        m
+    }
+
+    /// The one-time secret of an output of this account's: output `index` of a transaction whose
+    /// public key is `tx_key` (or, in a transaction paying more than one subaddress, the output's
+    /// own additional key), paid to subaddress `minor` of account `major` (0 and 0: the account's
+    /// own address). The output's key is this times G, if it is the account's; its key image is
+    /// `sign::key_image` of it.
+    pub fn output_secret(&self, tx_key: &EdwardsPoint, index: u64, major: u32, minor: u32) -> Scalar {
+        let mut shared = sign::derivation(&self.view, tx_key);
+        let mut secret = sign::output_scalar(&shared, index) + self.spend;
+        shared.zeroize();
+        if (major, minor) != (0, 0) {
+            let mut m = self.subaddress_scalar(major, minor);
+            secret += m;
+            m.zeroize();
+        }
+        secret
+    }
+
+    /// Whether output `index` of a transaction with public key `tx_key` pays this account, by
+    /// its view tag and then its key; the subaddress it pays is the caller's to say.
+    pub fn owns(&self, tx_key: &EdwardsPoint, index: u64, view_tag: u8, key: &EdwardsPoint, major: u32, minor: u32) -> bool {
+        let mut shared = sign::derivation(&self.view, tx_key);
+        let tagged = sign::view_tag(&shared, index) == view_tag;
+        shared.zeroize();
+        if !tagged {
+            return false;
+        }
+        let mut secret = self.output_secret(tx_key, index, major, minor);
+        let ours = point(&secret) == *key;
+        secret.zeroize();
+        ours
+    }
+
+    /// An output of this account's, as maki reads it to spend: the amount its commitment hides
+    /// and the commitment's mask, from the amount the transaction carries (encrypted), if that
+    /// opens `commitment`.
+    pub fn open_output(&self, tx_key: &EdwardsPoint, index: u64, encrypted_amount: &[u8; 8], commitment: &EdwardsPoint) -> Option<(u64, Scalar)> {
+        let mut shared = sign::derivation(&self.view, tx_key);
+        let mut scalar = sign::output_scalar(&shared, index);
+        shared.zeroize();
+        let amount = u64::from_le_bytes(sign::encrypt_amount(u64::from_le_bytes(*encrypted_amount), &scalar));
+        let mask = sign::commitment_mask(&scalar);
+        scalar.zeroize();
+        (sign::commit(&mask, amount) == *commitment).then_some((amount, mask))
     }
 
     /// The spend key's 25 words: the backup Monero wallets restore from.
