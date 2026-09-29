@@ -386,6 +386,49 @@ fn sensors_levels_and_scans() {
     assert_eq!(none.frames.len(), 2);
 }
 
+#[test]
+fn scanner_shows_what_it_read_and_types_it_checking_first_what_presses_keys() {
+    use maki_bundle::Permission;
+    let bytes = std::fs::read(format!("{}/tests/fixtures/scanner.maki", env!("CARGO_MANIFEST_DIR"))).unwrap();
+    let bundle = maki_bundle::read(&bytes).unwrap();
+    let asked: Vec<Permission> = bundle.manifest.permissions.iter().map(|(p, _)| *p).collect();
+    assert_eq!(asked, [Permission::Keyboard, Permission::Camera]);
+    let limits = admit(&bundle.manifest, bundle.code).unwrap();
+    let run_with = |qr: Option<&str>, events: &[Event]| {
+        let record = Rc::new(RefCell::new(Record {
+            events: events.iter().copied().collect(),
+            qr: qr.map(String::from),
+            ..Default::default()
+        }));
+        assert_eq!(run(bundle.code, Box::new(Script(record.clone())), limits), Stop::Finished);
+        Rc::try_unwrap(record).ok().unwrap().into_inner()
+    };
+    // read, then typed as it is
+    let link = "https://github.com/KaraZajac/maki";
+    let r = run_with(Some(link), &[Event::Centre, Event::Menu(0)]);
+    assert_eq!(r.menu, ["Type it"]);
+    assert_eq!(r.typed, [link]);
+    // what presses Enter or Tab waits for the centre: left goes back without typing
+    let lines = "echo hello\r\nrm -rf ~\tnow\n";
+    let r = run_with(Some(lines), &[Event::Centre, Event::Menu(0), Event::Left]);
+    assert!(r.typed.is_empty());
+    let r = run_with(Some(lines), &[Event::Centre, Event::Menu(0), Event::Centre]);
+    assert_eq!(r.typed, ["echo hello\nrm -rf ~\tnow\n"]);
+    // the check is its own screen
+    assert_ne!(r.frames[2], r.frames[1]);
+    // long text in pieces a keyboard takes at once, and pages to read it by
+    let long: String = (0..2100).map(|i| (b'a' + (i % 26) as u8) as char).chain(" end".chars()).collect();
+    let r = run_with(Some(&long), &[Event::Centre, Event::Right, Event::Right, Event::Menu(0)]);
+    assert_eq!(r.typed.iter().map(|t| t.len()).collect::<Vec<_>>(), [1024, 1024, 56]);
+    assert_eq!(r.typed.concat(), long);
+    assert_ne!(r.frames[2], r.frames[1]);
+    // what no keyboard types isn't typed at all, and a cancelled scan leaves nothing to type
+    let r = run_with(Some("café"), &[Event::Centre, Event::Menu(0)]);
+    assert!(r.typed.is_empty());
+    let r = run_with(None, &[Event::Centre, Event::Menu(0)]);
+    assert!(r.typed.is_empty());
+}
+
 fn words_list() -> Vec<String> {
     std::fs::read_to_string(format!("{}/../../sdk/examples/passphrase/src/words.txt", env!("CARGO_MANIFEST_DIR")))
         .unwrap()

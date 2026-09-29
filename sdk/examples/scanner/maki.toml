@@ -1,0 +1,14 @@
+id = "com.leviathan.maki.scanner"
+name = "Scanner"
+version = 1
+label = "1.0"
+api = 1
+storage = 0
+memory = 64
+backup = false
+description = "Reads a QR code and shows what it says, a page at a time. Type it types the text into your computer, and says first if that would press Enter or Tab. Nothing it reads is kept."
+icon = "icon.pbm"
+
+[permissions]
+camera = "To read QR codes when you press the centre."
+keyboard = "To type what a code says into your computer when you pick Type it."
