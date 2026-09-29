@@ -1754,3 +1754,87 @@ fn monero_signs_what_its_owner_saw() {
     assert_eq!((r.replies[0][0], texts(&r.replies[0])), (5, vec!["not a request maki can read".to_string()]));
     assert!(r.reviews.is_empty());
 }
+
+const SOL_FIXTURES: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../maki-sol/tests/fixtures");
+
+/// A transaction web3.js made (`maki-sol/tests/fixtures/make.mjs`): its message, and web3.js's
+/// signature for the test phrase's first Solana account.
+fn sol_fixture(name: &str) -> (Vec<u8>, Vec<u8>) {
+    let text = std::fs::read_to_string(format!("{SOL_FIXTURES}/transactions.json")).unwrap();
+    let json: serde_json::Value = serde_json::from_str(&text).unwrap();
+    let f = json.as_array().unwrap().iter().find(|f| f["name"] == name).unwrap();
+    let unhex = |s: &str| (0..s.len()).step_by(2).map(|i| u8::from_str_radix(&s[i..i + 2], 16).unwrap()).collect::<Vec<u8>>();
+    (unhex(f["message"].as_str().unwrap()), f["signature"].as_str().map(unhex).unwrap_or_default())
+}
+
+#[test]
+fn solana_shows_and_connects_phantoms_account() {
+    use ed25519_dalek::{Signature, Verifier, VerifyingKey};
+    // Phantom's and Solflare's first account for the phrase
+    const ME: &str = "HAgk14JpMQLgt6rVgv7cBQFJWFto5Dqxi472uT3DKpqk";
+    let r = run_wallet_with("solana", vec![Event::Right, Event::Left, Event::Centre, Event::Exit], vec![], vec![], false);
+    assert_eq!(read_qr(&r.frames[0]).as_deref(), Some(ME));
+    assert_eq!(read_qr(&r.frames[1]).as_deref(), Some("Hh8QwFUA6MtVu1qAoq12ucvFHNwCcVTV7hpWjeY1Hztb"), "account #1");
+    assert!(read_qr(&r.frames[3]).is_none(), "as text");
+    let r = run_wallet("solana", vec![eth_head(b'A', 0, "app.example"), eth_head(b'A', 0, "app.example")], vec![Answer::Yes, Answer::No], false);
+    assert_eq!(r.replies[0].len(), 33);
+    assert_eq!(maki_sol::address(&r.replies[0][1..].try_into().unwrap()), ME);
+    assert_eq!((r.reviews[0].question.as_str(), r.reviews[0].pages[0].mono.as_str()), ("Connect wallet?", "app.example"));
+    assert_eq!(r.replies[1], [1]);
+    let r = run_wallet("solana", vec![eth_head(b'A', 0, "app.example")], vec![Answer::Yes], true);
+    assert_eq!(r.replies[0], [3], "locked");
+    let r = run_wallet("solana", vec![eth_head(b'A', 0, "App.Example")], vec![Answer::Yes], false);
+    assert_eq!(r.replies[0], [4]);
+    // a message: a sign-in, read and signed
+    let sign_in = format!("app.example wants you to sign in with your Solana account:\n{ME}\n\nNonce: 1");
+    let r = run_wallet("solana", vec![[eth_head(b'M', 0, "app.example"), sign_in.clone().into_bytes()].concat()], vec![Answer::Yes], false);
+    assert_eq!(r.reviews[0].question, "Sign message?");
+    assert_eq!(r.reviews[0].pages[1].mono, sign_in);
+    let key = VerifyingKey::from_bytes(&maki_sol::base58::decode_key(ME).unwrap()).unwrap();
+    key.verify(sign_in.as_bytes(), &Signature::from_bytes(r.replies[0][1..].try_into().unwrap())).unwrap();
+}
+
+#[test]
+fn solana_signs_what_the_owner_read_as_web3js_signs_it() {
+    let (usdc, signature) = sol_fixture("usdc");
+    let r = run_wallet("solana", vec![[eth_head(b'T', 0, "jup.ag"), usdc.clone()].concat()], vec![Answer::Yes], false);
+    assert_eq!(r.replies[0], [&[0u8][..], &signature].concat());
+    let review = &r.reviews[0];
+    assert_eq!((review.question.as_str(), review.detail.as_str()), ("Sign and send", "sends 5.25 USDC; fee up to 0.00000506 SOL"));
+    let pages: Vec<(&str, &str, &str)> = review.pages.iter().map(|p| (p.heading.as_str(), p.value.as_str(), p.mono.as_str())).collect();
+    assert_eq!(
+        pages,
+        [
+            ("Asked by", "", "jup.ag"),
+            ("New token account", "USDC", "AKnL4NNf3DGWZJS6cPknBuEGnVsV4A4m5tgebLHaRSZ9"),
+            ("Send", "5.25 USDC", "AKnL4NNf3DGWZJS6cPknBuEGnVsV4A4m5tgebLHaRSZ9"),
+            ("Max fee", "0.00000506 SOL", "")
+        ]
+    );
+    // a no, a transaction this account doesn't sign, a transaction as a message, not a transaction
+    let (not_mine, _) = sol_fixture("not-mine");
+    let r = run_wallet(
+        "solana",
+        vec![
+            [eth_head(b'T', 0, "jup.ag"), usdc.clone()].concat(),
+            [eth_head(b'T', 0, "jup.ag"), not_mine].concat(),
+            [eth_head(b'M', 0, "jup.ag"), usdc.clone()].concat(),
+            [eth_head(b'T', 0, "jup.ag"), vec![1, 2, 3]].concat(),
+        ],
+        vec![Answer::No],
+        false,
+    );
+    assert_eq!(r.replies[0], [1]);
+    assert_eq!((r.replies[1][0], texts(&r.replies[1])), (5, vec!["this account doesn't sign it".to_string()]));
+    assert_eq!((r.replies[2][0], texts(&r.replies[2])), (5, vec!["that's a transaction, not a message: maki won't sign it as one".to_string()]));
+    assert_eq!(r.replies[3][0], 5);
+    assert_eq!(r.reviews.len(), 1, "only the first was shown");
+    // every fixture this account signs, signed as web3.js signs it
+    let text = std::fs::read_to_string(format!("{SOL_FIXTURES}/transactions.json")).unwrap();
+    let json: serde_json::Value = serde_json::from_str(&text).unwrap();
+    for f in json.as_array().unwrap().iter().filter(|f| f["signature"].is_string()) {
+        let (message, signature) = sol_fixture(f["name"].as_str().unwrap());
+        let r = run_wallet("solana", vec![[eth_head(b'T', 0, "jup.ag"), message].concat()], vec![Answer::Yes], false);
+        assert_eq!(r.replies[0], [&[0u8][..], &signature].concat(), "{}", f["name"]);
+    }
+}

@@ -221,13 +221,13 @@ the owner before installing or removing anything: whoever sends these can't do e
 
 maki's wallets are apps from the maki store (ARCHITECTURE.md, "Wallets are apps"), which a maki
 has only if its owner adds them: **Bitcoin** (`com.leviathan.maki.bitcoin`), **Ethereum**
-(`com.leviathan.maki.ethereum`) and **Monero** (`com.leviathan.maki.monero`), the SDK's examples
-`bitcoin`, `ethereum` and `monero`. maki keeps the
-keys, from its recovery phrase, and gives an app only the accounts its manifest names (the wallet
-permission, which the owner sees when installing it); the app reads what it's asked to sign with
-maki's wallet code (`maki-btc`, `maki-eth`), shows it on maki's review screen, and maki signs
-only after the owner says yes there. The computer talks to them with APP_MESSAGE; an APP_MESSAGE
-`status` of 2 means the app isn't installed.
+(`com.leviathan.maki.ethereum`), **Monero** (`com.leviathan.maki.monero`) and **Solana**
+(`com.leviathan.maki.solana`), the SDK's examples `bitcoin`, `ethereum`, `monero` and `solana`.
+maki keeps the keys, from its recovery phrase, and gives an app only the accounts its manifest
+names (the wallet permission, which the owner sees when installing it); the app reads what it's
+asked to sign with maki's wallet code (`maki-btc`, `maki-eth`, `maki-xmr`, `maki-sol`), shows it
+on maki's review screen, and maki signs only after the owner says yes there. The computer talks
+to them with APP_MESSAGE; an APP_MESSAGE `status` of 2 means the app isn't installed.
 
 Each message starts with a letter saying what it is; each answer with a status, then its fields.
 `str16` is a `u16` length then UTF-8; `site` is the site asking, a `str8` holding a plain
@@ -391,3 +391,30 @@ pay (maki desktop's own wallet, or a view-only wallet's file: the Monero GUI's, 
   payment), each output's kind (a payment's index, 0xfe change, 0xff nothing) and the change's
   key images (`maki_xmr::spend::Signed`). maki refuses (5, with why) to spend an output that
   isn't the wallet's or an amount its commitment on the chain doesn't hide.
+
+**Solana** keeps the account Phantom and Solflare make from the same phrase: the Ed25519 key at
+`m/44'/501'/index'/0'` by SLIP-10, its address that key in base58. A transaction is small enough
+(1232 bytes, signatures and all) to go whole in one message, and a signature comes back whole.
+
+| Message | Answer |
+|---|---|
+| `A` `index:u32` `site` | `status` `key:32` |
+| `T` `index:u32` `site` `message` | `status` `signature:64`, or `why:str16` |
+| `M` `index:u32` `site` `message` | `status` `signature:64`, or `why:str16` |
+
+- **`A`** asks the owner to let the site connect, showing it; on a yes, the account's key.
+- **`T`** is a transaction's message (legacy or version 0), what its signatures sign, read as
+  Solana's runtime reads it and refused (5, with why) where the runtime would refuse it, or when
+  the account isn't one of its signers. The app shows the site, then each instruction: SOL sent,
+  and to whom; a token sent (`transferChecked`: the amount in the token's own units, its name if
+  the app knows its mint, else the mint), to its recipient's own address when the transaction
+  proves the token account is theirs (an associated token account it opens); a new account and
+  what it costs; approvals and handing control over, flagged; a memo; a durable nonce, which
+  keeps the transaction valid until it's used; any other program as one the app can't read,
+  saying whether it's given the account's signature; an address from a lookup table as one the
+  app can't see. Then who else signs, and the most the fee can be (a signature's 5,000 lamports,
+  and the compute units asked for at their price), or that another pays it. The answer is the
+  signature for the account's place in the transaction.
+- **`M`** is a message (signMessage, Sign In With Solana): shown as text if it's text, else hex,
+  after a warning when it's a sign-in for another site or another account; a transaction passed
+  as a message is refused.

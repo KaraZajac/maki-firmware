@@ -60,5 +60,8 @@ ur = "0.4"
 # MetaMask's QR-code requests (ERC-4527), and what maki's Ethereum code signs for them
 minicbor = { version = "0.19", features = ["alloc"] }
 maki-eth = { path = "../maki-eth" }
+# Solana: the Solana example's addresses, and web3.js's transactions (JSON) for it to sign
+maki-sol = { path = "../maki-sol" }
+serde_json = "1"
 # the OpenPGP example's fingerprint
 sha1_smol = "1"

@@ -6,7 +6,7 @@ you can install"). Anyone can build one and sideload it through maki desktop; ma
 owner what it is, where it's from and what it may do before installing it, and a sideloaded
 app carries a mark in maki's top bar for as long as it's installed.
 
-This directory has the Rust crate apps are written with (`maki-app`), twenty-four examples, and the
+This directory has the Rust crate apps are written with (`maki-app`), twenty-five examples, and the
 `maki` tool that packs, signs, checks and simulates them. The examples:
 
 - **Hello**, **Dice** and **Tally**: a screen, the buttons, storage and randomness.
@@ -61,6 +61,12 @@ This directory has the Rust crate apps are written with (`maki-app`), twenty-fou
   in any Monero wallet, which maki shows its owner itself; the view key, for maki desktop or the
   Monero GUI to watch the wallet, once the owner says so; and spending, each payment, the change
   and the fee on maki's review screen, then the transaction made and signed by maki.
+- **Solana**: the Solana account Phantom and Solflare make from the same phrase (host API 6's
+  Ed25519 wallets): its address as a QR code, for sites through the maki extension (a wallet as
+  the Wallet Standard has them) and maki desktop's wallet. It reads each transaction with maki's
+  code (`maki-sol`), as Solana's runtime does: SOL and tokens sent, spelled out, a token's
+  recipient as their own address when the transaction proves the token account is theirs, the most
+  the fee can be, and anything else flagged, with whether it's given the account's signature.
 - **Hello Native**, Hello built as a native app, and **Pomodoro**, a native focus timer whose
   pie empties like a clock while you work and fills back up while you rest.
 
@@ -227,7 +233,12 @@ function whose permission it didn't ask for):
   output's key image and its proof, and `wallet::monero_sign(path, &request)`, where the request
   (`maki_xmr::request`) says what to spend and pay: maki makes the whole transaction itself (the
   outputs, the range proof, a signature for each input, as many as the yes allowed) and hands it
-  back, or says why not. The wallet examples show how: they need `std` (for their allocator), so
+  back, or says why not. Host API 6 adds Ed25519 wallets, as Solana's are: `curve = "ed25519"`
+  under `[wallet]` (paths such as `m/44'/501'`), then `wallet::ed25519_public(path)`, the key by
+  SLIP-10 (every step of the path hardened), and `wallet::sign_ed25519(path, &message)`, a
+  signature over the whole message (up to 16 KiB; Ed25519 hashes what it signs itself), one of
+  what a yes allows. An Ed25519 wallet has those keys alone, and a secp256k1 wallet none of them.
+  The wallet examples show how: they need `std` (for their allocator), so
   their `Cargo.toml` asks for `maki-app` with `default-features = false, features = ["std",
   "wallet"]`.
 

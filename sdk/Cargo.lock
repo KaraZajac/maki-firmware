@@ -772,6 +772,7 @@ dependencies = [
 name = "maki-hd"
 version = "0.1.0"
 dependencies = [
+ "ed25519-dalek-compat",
  "hmac",
  "k256",
  "maki-xmr",
@@ -793,6 +794,14 @@ dependencies = [
  "pbkdf2",
  "sha2",
  "zeroize",
+]
+
+[[package]]
+name = "maki-sol"
+version = "0.1.0"
+dependencies = [
+ "curve25519-dalek-bao1x",
+ "sha2",
 ]
 
 [[package]]
@@ -1497,6 +1506,14 @@ name = "snake"
 version = "0.1.0"
 dependencies = [
  "maki-app",
+]
+
+[[package]]
+name = "solana"
+version = "0.1.0"
+dependencies = [
+ "maki-app",
+ "maki-sol",
 ]
 
 [[package]]
