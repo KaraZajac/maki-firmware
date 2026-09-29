@@ -9,7 +9,7 @@ use alloc::vec::Vec;
 
 use curve25519_dalek::edwards::EdwardsPoint;
 use curve25519_dalek::scalar::Scalar;
-use curve25519_dalek::traits::{MultiscalarMul, VartimeMultiscalarMul};
+use curve25519_dalek::traits::VartimeMultiscalarMul;
 use zeroize::Zeroize;
 
 use crate::keccak;
@@ -69,9 +69,11 @@ fn weighted_inner_product(a: &[Scalar], b: &[Scalar], y: &[Scalar]) -> Scalar {
     a.iter().zip(b).zip(y).map(|((a, b), y)| a * b * y).sum()
 }
 
+/// Σ scalars·points, in variable time, as Monero's own prover works them out (`multiexp`): what
+/// it hides (amounts, masks and their blinding) is the asker's to know anyway.
 fn msm(scalars: Vec<Scalar>, points: &[EdwardsPoint]) -> EdwardsPoint {
     let mut scalars = scalars;
-    let p = EdwardsPoint::multiscalar_mul(scalars.iter(), points.iter());
+    let p = EdwardsPoint::vartime_multiscalar_mul(scalars.iter(), points.iter());
     scalars.zeroize();
     p
 }
