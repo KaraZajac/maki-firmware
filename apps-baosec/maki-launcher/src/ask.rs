@@ -105,11 +105,12 @@ fn mono_lines(text: &str) -> Vec<String> {
 }
 
 impl Stop {
-    /// The stops of an ask with `pages` and `choices`, in order.
-    fn of(pages: &[Page], choices: usize, screen: &Screen) -> Vec<Stop> {
+    /// The stops of an ask with `pages` and `choices`, in order. An app's pages (`app`) have their
+    /// heading on a line of its own, under the app's bar; maki's own have it in the bar.
+    fn of(pages: &[Page], choices: usize, screen: &Screen, app: bool) -> Vec<Stop> {
         let mut stops = Vec::new();
         // the space for text between the heading (or the value) and the bottom line
-        let top = screen.bar + 4;
+        let top = screen.bar + 4 + if app { SMALL_LINE + 2 } else { 0 };
         let bottom = H - SMALL_LINE - 2;
         for page in pages {
             let mut rows: Vec<Row> = mono_lines(&page.mono).into_iter().map(Row::Mono).collect();
@@ -285,7 +286,7 @@ impl Asking {
             if let Some((msg, req)) = self.queue.pop_front() {
                 let now = self.tt.elapsed_ms();
                 let choices = req.choices();
-                let stops = Stop::of(&req.pages(), choices.len(), screen);
+                let stops = Stop::of(&req.pages(), choices.len(), screen, req.app != 0);
                 log::info!("showing the ask from {} ({} stops)", req.subject, stops.len());
                 let mut prompt = Prompt {
                     msg,
