@@ -58,8 +58,8 @@ const FIELD_STORAGE: u8 = 9;
 const FIELD_MEMORY: u8 = 10;
 const FIELD_BACKUP: u8 = 11;
 const FIELD_DESCRIPTION: u8 = 12;
-/// The wallet permission's paths: the curve (1, secp256k1), how many, then each as its depth and
-/// that many little-endian u32s (a hardened one with the top bit set).
+/// The wallet permission's paths: the curve (1, secp256k1; 2, Ed25519), how many, then each as its
+/// depth and that many little-endian u32s (a hardened one with the top bit set).
 const FIELD_WALLET: u8 = 13;
 
 /// A wallet app names at most this many derivation paths.
@@ -200,8 +200,10 @@ impl Manifest {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u8)]
 pub enum Curve {
-    /// BIP32 on secp256k1: Bitcoin's, Ethereum's.
+    /// BIP32 on secp256k1: Bitcoin's, Ethereum's (and Monero's, from the key at its path).
     Secp256k1 = 1,
+    /// SLIP-10 on Ed25519, every step hardened: Solana's (host API 6).
+    Ed25519 = 2,
 }
 
 /// What a wallet app may use: paths on a curve, each a purpose and a coin type at least, both
@@ -526,6 +528,7 @@ fn wallet_field(v: &[u8]) -> Result<Wallet, Error> {
     let mut r = Reader { b: v, at: 0 };
     let curve = match r.u8()? {
         1 => Curve::Secp256k1,
+        2 => Curve::Ed25519,
         _ => return Err(Error::Manifest("a wallet curve this maki doesn't know")),
     };
     let n = r.u8()? as usize;

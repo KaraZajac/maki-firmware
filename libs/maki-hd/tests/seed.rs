@@ -192,3 +192,55 @@ fn monero_as_ledger_and_every_wallet_has_it() {
         }
     }
 }
+
+fn unhex(text: &str) -> Vec<u8> { (0..text.len()).step_by(2).map(|i| u8::from_str_radix(&text[i..i + 2], 16).unwrap()).collect() }
+
+#[test]
+fn ed25519_as_slip10_has_it() {
+    use maki_hd::{op, seed::answer, Error};
+    // SLIP-0010's test vectors for ed25519: each chain's public key (without SLIP-10's 00 before it)
+    let vectors: [(&str, &[(&str, &str)]); 2] = [
+        ("000102030405060708090a0b0c0d0e0f", &[
+            ("m", "a4b2856bfec510abab89753fac1ac0e1112364e7d250545963f135f2a33188ed"),
+            ("m/0'", "8c8a13df77a28f3445213a0f432fde644acaa215fc72dcdf300d5efaa85d350c"),
+            ("m/0'/1'", "1932a5270f335bed617d5b935c80aedb1a35bd9fc1e31acafd5372c30f5c1187"),
+            ("m/0'/1'/2'", "ae98736566d30ed0e9d2f4486a64bc95740d89c7db33f52121f8ea8f76ff0fc1"),
+            ("m/0'/1'/2'/2'", "8abae2d66361c879b900d204ad2cc4984fa2aa344dd7ddc46007329ac76c429c"),
+            ("m/0'/1'/2'/2'/1000000000'", "3c24da049451555d51a7014a37337aa4e12d41e485abccfa46b47dfb2af54b7a"),
+        ]),
+        ("fffcf9f6f3f0edeae7e4e1dedbd8d5d2cfccc9c6c3c0bdbab7b4b1aeaba8a5a29f9c999693908d8a8784817e7b7875726f6c696663605d5a5754514e4b484542", &[
+            ("m", "8fe9693f8fa62a4305a140b9764c5ee01e455963744fe18204b4fb948249308a"),
+            ("m/0'", "86fab68dcb57aa196c77c5f264f215a112c22a912c10d123b0d03c3c28ef1037"),
+            ("m/0'/2147483647'", "5ba3b9ac6e90e83effcd25ac4e58a1365a9e35a3d3ae5eb07b9e4d90bcf7506d"),
+            ("m/0'/2147483647'/1'", "2e66aa57069c86cc18249aecf5cb5a9cebbfd6fadeab056254763874a9352b45"),
+            ("m/0'/2147483647'/1'/2147483646'", "e33c0f7d81d843c572275f287498e8d408654fdf0d1e065b84e2e6f157aab09b"),
+            ("m/0'/2147483647'/1'/2147483646'/2'", "47150c75db263559a70d5778bf36abbab30fb061ad69f69ece61a72b0cfa4fc0"),
+        ]),
+    ];
+    for (seed, chains) in vectors {
+        let keys = SeedKeys::from_seed(&unhex(seed)).unwrap();
+        for (path, public) in chains {
+            assert_eq!(hex(&answer(&keys, op::ED25519_PUBLIC, &parse_path(path).unwrap(), &[], &[0; 32]).unwrap()), *public, "{path}");
+        }
+    }
+    // Solana's account 0 on the BIP39 test phrase, as Phantom and Solflare have it
+    // (HAgk14JpMQLgt6rVgv7cBQFJWFto5Dqxi472uT3DKpqk), and what it signs, as Node's Ed25519 does
+    let ours = SeedKeys::from_seed(&seed()).unwrap();
+    let account = parse_path("m/44'/501'/0'/0'").unwrap();
+    assert_eq!(
+        hex(&answer(&ours, op::ED25519_PUBLIC, &account, &[], &[0; 32]).unwrap()),
+        "f036276246a75b9de3349ed42b15e232f6518fc20f5fcd4f1d64e81f9bd258f7"
+    );
+    assert_eq!(
+        hex(&answer(&ours, op::ED25519_SIGN, &account, b"maki signs this for Solana", &[0; 32]).unwrap()),
+        "d225d29f65ea59711c459af79bcd109e511c5fa1d16ce35221280c50a305e7d586212248f3331da27126e75e4250e874d7628eb2d3dc8322af7fc6da20149000"
+    );
+    // a message of any length, whole: none at all, or 16 KiB
+    for message in [&[][..], &[7u8; 16 * 1024][..]] {
+        assert_eq!(answer(&ours, op::ED25519_SIGN, &account, message, &[0; 32]).unwrap().len(), 64);
+    }
+    // SLIP-10 has no unhardened Ed25519 keys
+    for p in ["m/44'/501'/0'/0", "m/44'/501'/0/0'"] {
+        assert_eq!(answer(&ours, op::ED25519_PUBLIC, &parse_path(p).unwrap(), &[], &[0; 32]).err(), Some(Error::Path), "{p}");
+    }
+}

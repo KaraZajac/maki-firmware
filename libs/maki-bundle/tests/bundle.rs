@@ -52,6 +52,11 @@ fn a_wallet_app_names_its_paths() {
     assert_eq!(w.coins(), vec!["Bitcoin", "test networks"]);
     let odd = Wallet { curve: Curve::Secp256k1, paths: vec![vec![44 | H, 60 | H], vec![44 | H, 9999 | H]] };
     assert_eq!(odd.coins(), vec!["Ethereum", "coin type 9999"]);
+    // Solana's, on Ed25519
+    let solana = Manifest { wallet: Some(Wallet { curve: Curve::Ed25519, paths: vec![vec![44 | H, 501 | H]] }), ..wallet_app() };
+    let back = read(&write(&solana, CODE, None, &key()).unwrap()).unwrap().manifest;
+    assert_eq!(back, solana);
+    assert_eq!(back.wallet.unwrap().coins(), vec!["Solana"]);
 }
 
 #[test]

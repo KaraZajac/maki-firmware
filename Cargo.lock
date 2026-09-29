@@ -5377,6 +5377,7 @@ name = "maki-hd"
 version = "0.1.0"
 dependencies = [
  "bitcoin",
+ "ed25519-dalek-compat",
  "hmac 0.12.1",
  "k256",
  "maki-hd",
@@ -5519,6 +5520,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "maki-sol"
+version = "0.1.0"
+dependencies = [
+ "curve25519-dalek-bao1x",
+ "ed25519-dalek-compat",
+ "maki-hd",
+ "maki-seed",
+ "serde_json",
+ "sha2 0.10.8",
+]
+
+[[package]]
 name = "maki-spawn"
 version = "0.1.0"
 dependencies = [
@@ -5578,10 +5591,12 @@ dependencies = [
  "maki-hd",
  "maki-native",
  "maki-seed",
+ "maki-sol",
  "maki-xmr",
  "minicbor",
  "qrcode",
  "rqrr",
+ "serde_json",
  "sha1_smol",
  "sha2 0.10.8",
  "ur",

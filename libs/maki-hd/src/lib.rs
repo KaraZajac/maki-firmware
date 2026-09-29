@@ -1,7 +1,7 @@
 //! Keys for maki's wallet apps (ARCHITECTURE.md, "Wallets are apps"): BIP32 from the recovery
 //! phrase's seed, on the derivation paths a wallet uses, and the two signatures wallets need,
 //! ECDSA (with its recovery ID, for Ethereum) and BIP340 Schnorr (tweaked the BIP86 way for a
-//! taproot key spend).
+//! taproot key spend). And Ed25519 keys by SLIP-10, for Solana, through `op` alone.
 //!
 //! `Keys` is all a wallet's code sees. maki-keys implements it from the seed (the `seed`
 //! feature), and so do the fake maki, the simulator and tests; an app implements it with calls
@@ -126,6 +126,13 @@ pub mod op {
     /// maki makes everything that decides where the money goes: the outputs, the range proof and
     /// each input's signature.
     pub const MONERO_SIGN: u8 = 12;
+    /// An Ed25519 public key (32 bytes), by SLIP-10 from the seed, every step of the path
+    /// hardened: as Solana's wallets (Phantom, Solflare, Ledger's) derive theirs, at
+    /// `m/44'/501'/account'/0'`.
+    pub const ED25519_PUBLIC: u8 = 13;
+    /// An Ed25519 signature (RFC 8032, 64 bytes) with that key. The digest is the whole message:
+    /// Ed25519 hashes what it signs itself, so maki has all of it.
+    pub const ED25519_SIGN: u8 = 14;
 }
 
 /// A path as people write it, `m/84'/0'/0'` (or `84h/0h/0h`, with or without the `m/`), as

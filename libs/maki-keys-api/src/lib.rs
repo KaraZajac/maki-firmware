@@ -125,6 +125,10 @@ pub const WALLET_MONERO_VIEW_KEY: u8 = 10;
 pub const WALLET_MONERO_KEY_IMAGE: u8 = 11;
 /// A Monero transaction signed; `digest` is the request (`maki_xmr::request`), up to 64 KiB.
 pub const WALLET_MONERO_SIGN: u8 = 12;
+/// An Ed25519 public key by SLIP-10 (Solana's), every step of the path hardened.
+pub const WALLET_ED25519_PUBLIC: u8 = 13;
+/// An Ed25519 signature; `digest` is the whole message, up to 16 KiB.
+pub const WALLET_ED25519_SIGN: u8 = 14;
 
 /// A wallet app's request, through the app host, and its answer (`answer`, when `result` is
 /// `RESULT_OK`).
@@ -132,7 +136,8 @@ pub const WALLET_MONERO_SIGN: u8 = 12;
 pub struct WalletRequest {
     pub op: u8,
     pub path: Vec<u32>,
-    /// 32 bytes, to sign
+    /// 32 bytes, to sign; or what's asked, whole (a Monero output or transaction, a message
+    /// for Ed25519)
     pub digest: Vec<u8>,
     pub result: u32,
     pub answer: Vec<u8>,

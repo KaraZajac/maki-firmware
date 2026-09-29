@@ -621,6 +621,7 @@ fn gated_functions_need_their_permission() {
         ("wallet_monero_view_key", "(param i32 i32 i32) (result i32)"),
         ("wallet_monero_key_image", "(param i32 i32 i32 i32) (result i32)"),
         ("wallet_monero_sign", "(param i32 i32 i32 i32 i32 i32) (result i32)"),
+        ("wallet_sign_ed25519", "(param i32 i32 i32 i32 i32) (result i32)"),
     ];
     assert_eq!(signatures.len(), GATED.len());
     for (name, signature) in signatures {
@@ -879,9 +880,13 @@ fn path(p: &str) -> Vec<u32> { maki_hd::parse_path(p).unwrap() }
 
 /// A session for a wallet app with these paths, on a platform whose keys are the test phrase's.
 fn wallet_session(paths: &[&str], permissions: &[maki_bundle::Permission]) -> (Session, Rc<RefCell<Record>>) {
+    wallet_session_on(maki_bundle::Curve::Secp256k1, paths, permissions)
+}
+
+fn wallet_session_on(curve: maki_bundle::Curve, paths: &[&str], permissions: &[maki_bundle::Permission]) -> (Session, Rc<RefCell<Record>>) {
     let record = Rc::new(RefCell::new(Record::default()));
     let mut s = Session::new(Box::new(Script(record.clone())), with(permissions));
-    s.wallet = Some(maki_bundle::Wallet { curve: maki_bundle::Curve::Secp256k1, paths: paths.iter().map(|p| path(p)).collect() });
+    s.wallet = Some(maki_bundle::Wallet { curve, paths: paths.iter().map(|p| path(p)).collect() });
     (s, record)
 }
 
@@ -1223,4 +1228,66 @@ fn spending_monero_came_with_host_api_5() {
     let err = admit(&manifest(4), &code).unwrap_err();
     assert!(err.contains("wallet_monero_sign, which came with host API 5, and its manifest says 4"), "{err}");
     admit(&manifest(5), &code).unwrap();
+}
+
+#[test]
+fn an_ed25519_wallet_has_ed25519_keys_on_its_paths_alone() {
+    use ed25519_dalek::{Signature, Verifier, VerifyingKey};
+    use maki_bundle::{Curve, Permission};
+    let (mut s, record) = wallet_session_on(Curve::Ed25519, &["m/44'/501'"], &[Permission::Wallet]);
+    let p = path("m/44'/501'/0'/0'");
+    let public: [u8; 32] = s.wallet_public(&p, WALLET_ED25519).unwrap().try_into().unwrap();
+    // the test phrase's first Solana account, as Phantom has it (HAgk14JpMQLgt6rVgv7cBQFJWFto5Dqxi472uT3DKpqk)
+    let hex: String = public.iter().map(|b| format!("{b:02x}")).collect();
+    assert_eq!(hex, "f036276246a75b9de3349ed42b15e232f6518fc20f5fcd4f1d64e81f9bd258f7");
+    // not secp256k1's keys, or Monero's; not off its paths; and SLIP-10's are hardened
+    for form in [WALLET_PUBLIC, WALLET_UNCOMPRESSED, WALLET_TAPROOT, WALLET_MONERO] {
+        assert_eq!(s.wallet_public(&p, form), Err(REFUSED), "{form}");
+    }
+    assert_eq!(s.wallet_public(&path("m/44'/60'/0'/0'"), WALLET_ED25519), Err(REFUSED));
+    assert_eq!(s.wallet_public(&path("m/44'/501'/0'/0"), WALLET_ED25519), Err(REFUSED));
+    // a signature over the whole message, one for each a yes allows
+    let message = [5u8; 1232];
+    assert_eq!(s.wallet_sign_ed25519(&p, &message), Err(REFUSED));
+    record.borrow_mut().answers.push_back(Answer::Yes);
+    assert_eq!(s.wallet_review("Sign?\x1eSend\x1f1 SOL", 1, 0), 0);
+    let sig = s.wallet_sign_ed25519(&p, &message).unwrap();
+    VerifyingKey::from_bytes(&public).unwrap().verify(&message, &Signature::from_bytes(&sig)).unwrap();
+    assert_eq!(s.wallet_sign_ed25519(&p, &message), Err(REFUSED));
+    record.borrow_mut().answers.push_back(Answer::Yes);
+    assert_eq!(s.wallet_review("Sign?\x1eSend\x1f1 SOL", 2, 0), 0);
+    assert_eq!(s.wallet_sign_ed25519(&p, &vec![0; MAX_SIGN + 1]), Err(TOO_BIG));
+    assert_eq!(s.wallet_sign(&p, &[7; 32], WALLET_SIGN_ECDSA), Err(REFUSED));
+    assert_eq!(s.wallet_sign_ed25519(&p, &[]).map(|s| s.len()), Ok(64));
+    // and a secp256k1 wallet, on the same paths, has no Ed25519 keys
+    let (mut s, record) = wallet_session(&["m/44'/501'"], &[Permission::Wallet]);
+    assert_eq!(s.wallet_public(&p, WALLET_ED25519), Err(REFUSED));
+    record.borrow_mut().answers.push_back(Answer::Yes);
+    assert_eq!(s.wallet_review("Sign?\x1eSend\x1f1 SOL", 1, 0), 0);
+    assert_eq!(s.wallet_sign_ed25519(&p, &message), Err(REFUSED));
+}
+
+#[test]
+fn ed25519_wallets_came_with_host_api_6() {
+    let code = module(
+        r#"(module (import "maki" "wallet_sign_ed25519" (func (param i32 i32 i32 i32 i32) (result i32))) (memory (export "memory") 1) (func (export "maki_main")))"#,
+    );
+    let manifest = |api: u16| maki_bundle::Manifest {
+        id: "org.example.solana".into(),
+        name: "Solana".into(),
+        version: 1,
+        label: "1.0".into(),
+        kind: maki_bundle::Kind::Wasm,
+        api,
+        firmware: String::new(),
+        permissions: vec![(maki_bundle::Permission::Wallet, "to sign".into())],
+        storage_kib: 1,
+        memory_kib: 64,
+        backup: true,
+        description: String::new(),
+        wallet: Some(maki_bundle::Wallet { curve: maki_bundle::Curve::Ed25519, paths: vec![path("m/44'/501'")] }),
+    };
+    let err = admit(&manifest(5), &code).unwrap_err();
+    assert!(err.contains("wallet_sign_ed25519, which came with host API 6, and its manifest says 5"), "{err}");
+    admit(&manifest(6), &code).unwrap();
 }

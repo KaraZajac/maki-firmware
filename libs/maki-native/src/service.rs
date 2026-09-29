@@ -78,6 +78,9 @@ pub const WALLET_SHOW_BACKUP: usize = 37;
 pub const WALLET_MONERO_VIEW_KEY: usize = 38;
 pub const WALLET_MONERO_KEY_IMAGE: usize = 39;
 pub const WALLET_MONERO_SIGN: usize = 40;
+/// Host API 6's, likewise: `WALLET_SIGN_ED25519` takes the message's length (u32), the message and
+/// the path, and gives an Ed25519 signature (64 bytes).
+pub const WALLET_SIGN_ED25519: usize = 41;
 // a plain scalar
 pub const EXIT: usize = 30;
 /// maki's own, from the app host to itself: look at what's waiting (the owner left the app, or

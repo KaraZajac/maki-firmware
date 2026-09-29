@@ -1,7 +1,8 @@
-//! The keys themselves, from a BIP39 seed (BIP32 on secp256k1): maki-keys', the fake maki's, the
-//! simulator's and tests'. Every signature is checked before it's returned: one a fault spoiled
-//! can give the key away.
+//! The keys themselves, from a BIP39 seed (BIP32 on secp256k1, and SLIP-10 on Ed25519): maki-keys',
+//! the fake maki's, the simulator's and tests'. Every signature is checked before it's returned:
+//! one a fault spoiled can give the key away.
 
+use ed25519_dalek::{Signer, Verifier};
 use hmac::{Hmac, Mac};
 use k256::ecdsa::signature::hazmat::PrehashVerifier;
 use k256::ecdsa::{RecoveryId, Signature, SigningKey};
@@ -163,6 +164,39 @@ fn schnorr(key: &SecretKey, digest: &[u8; 32], tweak: Tweak, aux: &[u8; 32]) -> 
     Ok(sig.to_bytes())
 }
 
+/// An Ed25519 key by SLIP-10: the key (an RFC 8032 secret key) and its chain code. Its children
+/// are hardened only; there are no others for Ed25519.
+struct Slip10 {
+    key: [u8; 32],
+    chain_code: [u8; 32],
+}
+
+impl Drop for Slip10 {
+    fn drop(&mut self) {
+        self.key.zeroize();
+        self.chain_code.zeroize();
+    }
+}
+
+impl Slip10 {
+    fn from_hmac(mut i: [u8; 64]) -> Slip10 {
+        let mut k = Slip10 { key: [0; 32], chain_code: [0; 32] };
+        k.key.copy_from_slice(&i[..32]);
+        k.chain_code.copy_from_slice(&i[32..]);
+        i.zeroize();
+        k
+    }
+
+    fn master(seed: &[u8]) -> Slip10 { Slip10::from_hmac(hmac512(b"ed25519 seed", &[seed])) }
+
+    fn child(&self, index: u32) -> Result<Slip10, Error> {
+        if index < HARDENED {
+            return Err(Error::Path);
+        }
+        Ok(Slip10::from_hmac(hmac512(&self.chain_code, &[&[0u8], &self.key, &index.to_be_bytes()])))
+    }
+}
+
 /// Keys derived before, by path (the most recent last), behind a spin lock: `Keys` are shared
 /// between threads, and this is `no_std`. Held only while a path is derived.
 struct Kept {
@@ -210,6 +244,8 @@ impl Generators {
 /// The keys a seed makes.
 pub struct SeedKeys {
     master: Xpriv,
+    /// SLIP-10's Ed25519 master key: an HMAC of the seed, as BIP32's is, under another name
+    ed25519: Slip10,
     kept: Kept,
     generators: Generators,
 }
@@ -218,6 +254,7 @@ impl SeedKeys {
     pub fn from_seed(seed: &[u8]) -> Result<SeedKeys, Error> {
         Ok(SeedKeys {
             master: Xpriv::master(seed)?,
+            ed25519: Slip10::master(seed),
             kept: Kept { busy: AtomicBool::new(false), keys: UnsafeCell::new(Vec::new()) },
             generators: Generators {
                 busy: AtomicBool::new(false),
@@ -262,6 +299,31 @@ impl SeedKeys {
         let keys = maki_xmr::Keys::from_bip32(&secret);
         secret.zeroize();
         Ok(keys)
+    }
+
+    /// The Ed25519 key at `path` (SLIP-10), every step hardened. Each is a single HMAC: nothing
+    /// to keep.
+    fn ed25519_key(&self, path: &[u32]) -> Result<ed25519_dalek::SigningKey, Error> {
+        if path.len() > MAX_DEPTH {
+            return Err(Error::Path);
+        }
+        let mut child: Option<Slip10> = None;
+        for &i in path {
+            child = Some(child.as_ref().unwrap_or(&self.ed25519).child(i)?);
+        }
+        Ok(ed25519_dalek::SigningKey::from_bytes(&child.as_ref().unwrap_or(&self.ed25519).key))
+    }
+
+    /// The Ed25519 public key at `path` (SLIP-10): a Solana account's address, at
+    /// `m/44'/501'/account'/0'`.
+    pub fn ed25519_public(&self, path: &[u32]) -> Result<[u8; 32], Error> { Ok(self.ed25519_key(path)?.verifying_key().to_bytes()) }
+
+    /// An Ed25519 signature (RFC 8032) over the whole of `message` with the key at `path`.
+    pub fn sign_ed25519(&self, path: &[u32], message: &[u8]) -> Result<[u8; 64], Error> {
+        let key = self.ed25519_key(path)?;
+        let sig = key.sign(message);
+        key.verifying_key().verify(message, &sig).map_err(|_| Error::Key)?;
+        Ok(sig.to_bytes())
     }
 
     /// A BIP340 signature with `aux` as its auxiliary randomness: fresh random bytes, on maki,
@@ -336,7 +398,7 @@ impl Keys for OneKey {
 /// maki and the simulator answer apps): the answer's bytes. `aux` is BIP340's auxiliary
 /// randomness for a Schnorr signature. Which paths an app may use is the caller's to check.
 pub fn answer(keys: &SeedKeys, which: u8, path: &[u32], digest: &[u8], aux: &[u8; 32]) -> Result<Vec<u8>, Error> {
-    // what's asked, whole: a Monero output, or a transaction to sign
+    // what's asked, whole: a Monero output, a transaction to sign, a message for Ed25519
     let asked = digest;
     let indices = || -> Result<(u32, u32), Error> {
         let d: &[u8; 8] = digest.try_into().map_err(|_| Error::Failed)?;
@@ -383,6 +445,8 @@ pub fn answer(keys: &SeedKeys, which: u8, path: &[u32], digest: &[u8], aux: &[u8
             let (image, proof) = keys.monero(path)?.key_image_proof(&tx_key, index, major, minor, key, aux).ok_or(Error::Key)?;
             [&image[..], &proof[..]].concat()
         }
+        op::ED25519_PUBLIC => keys.ed25519_public(path)?.to_vec(),
+        op::ED25519_SIGN => keys.sign_ed25519(path, asked)?.to_vec(),
         op::MONERO_SIGN => {
             let account = keys.monero(path)?;
             let signed = maki_xmr::request::Request::parse(asked)

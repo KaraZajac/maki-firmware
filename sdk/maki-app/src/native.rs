@@ -404,6 +404,20 @@ mod wallet_calls {
         let (status, got) = request(service::WALLET_MONERO_SIGN, &payload, cap);
         fits(status, &got, out, cap)
     }
+
+    pub unsafe fn wallet_sign_ed25519(pptr: *const u32, plen: usize, mptr: *const u8, mlen: usize, out: *mut u8) -> i32 {
+        let Some(path) = path_bytes(pptr, plen) else { return INVALID };
+        let mut payload = Vec::with_capacity(4 + mlen + path.len());
+        payload.extend_from_slice(&(mlen as u32).to_le_bytes());
+        payload.extend_from_slice(slice(mptr, mlen));
+        payload.extend_from_slice(&path);
+        let (status, got) = request(service::WALLET_SIGN_ED25519, &payload, 64);
+        match fits(status, &got, out, 64) {
+            64 => 0,
+            n if n < 0 => n,
+            _ => -5,
+        }
+    }
 }
 #[cfg(feature = "wallet")]
 pub use wallet_calls::*;

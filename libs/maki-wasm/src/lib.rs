@@ -21,7 +21,7 @@ pub use session::{Session, REFUSED};
 use wasmi::{Caller, Config, Engine, Error, Extern, Linker, Memory, Module, Store, StoreLimits, StoreLimitsBuilder};
 
 /// The functions this host offers apps.
-pub const API_VERSION: u16 = 5;
+pub const API_VERSION: u16 = 6;
 
 /// Functions that came after host API 1, and with which: an app calling one says that API or later.
 pub const SINCE: &[(&str, u16)] = &[
@@ -38,6 +38,7 @@ pub const SINCE: &[(&str, u16)] = &[
     ("wallet_monero_view_key", 5),
     ("wallet_monero_key_image", 5),
     ("wallet_monero_sign", 5),
+    ("wallet_sign_ed25519", 6),
 ];
 
 /// What maki's functions return for failures they report (rather than stopping the app).
@@ -98,6 +99,10 @@ pub const WALLET_MONERO: u8 = maki_hd::op::MONERO_PUBLIC;
 pub const MONERO_OUTPUT: usize = 32 + 8 + 4 + 4 + 32;
 /// The biggest transaction `wallet_monero_sign` takes to sign (`maki_xmr::request`): 16 inputs.
 pub const MAX_MONERO_REQUEST: usize = 64 * 1024;
+/// Host API 6: an Ed25519 public key (32 bytes), from `wallet_public`, by SLIP-10 (every step of
+/// the path hardened), as Solana's wallets derive them; `wallet_sign_ed25519` signs with it, over
+/// a whole message of up to `MAX_SIGN` bytes (Ed25519 hashes what it signs itself).
+pub const WALLET_ED25519: u8 = maki_hd::op::ED25519_PUBLIC;
 /// A review's text, pages, and each page's parts, in bytes. A page's text runs on over as many
 /// screens as it takes ("Message (2)"): a message to sign can be 4 KiB, and a transaction 64
 /// payments, their change and the fee.
@@ -138,6 +143,7 @@ pub const GATED: &[(&str, Permission)] = &[
     ("wallet_monero_view_key", Permission::Wallet),
     ("wallet_monero_key_image", Permission::Wallet),
     ("wallet_monero_sign", Permission::Wallet),
+    ("wallet_sign_ed25519", Permission::Wallet),
 ];
 
 /// What `wait` hands the app.
@@ -894,6 +900,22 @@ fn link(linker: &mut Linker<State>) -> Result<(), Error> {
             c.set_fuel(fuel)?;
             match signed {
                 Ok(bytes) => written(&mut c, out, cap, &bytes, "wallet_monero_sign"),
+                Err(code) => Ok(code),
+            }
+        },
+    )?;
+    linker.func_wrap(
+        M,
+        "wallet_sign_ed25519",
+        |mut c: Caller<'_, State>, pptr: i32, plen: i32, mptr: i32, mlen: i32, out: i32| -> Result<i32, Error> {
+            permitted(&c, Permission::Wallet, "wallet_sign_ed25519")?;
+            let Some(path) = read_path(&c, pptr, plen, "wallet_sign_ed25519")? else { return Ok(INVALID) };
+            if mlen as u32 as usize > MAX_SIGN {
+                return Ok(TOO_BIG);
+            }
+            let message = read(&c, mptr, mlen, MAX_SIGN, "wallet_sign_ed25519")?;
+            match c.data_mut().session.wallet_sign_ed25519(&path, &message) {
+                Ok(sig) => write(&mut c, out, &sig, "wallet_sign_ed25519").map(|_| 0),
                 Err(code) => Ok(code),
             }
         },

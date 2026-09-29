@@ -105,6 +105,8 @@ mod sys {
         pub fn wallet_monero_key_image(pptr: *const u32, plen: usize, optr: *const u8, out: *mut u8) -> i32;
         #[cfg(feature = "wallet")]
         pub fn wallet_monero_sign(pptr: *const u32, plen: usize, rptr: *const u8, rlen: usize, out: *mut u8, cap: usize) -> i32;
+        #[cfg(feature = "wallet")]
+        pub fn wallet_sign_ed25519(pptr: *const u32, plen: usize, mptr: *const u8, mlen: usize, out: *mut u8) -> i32;
     }
 }
 
@@ -637,6 +639,7 @@ pub mod wallet {
     const SIGN_SCHNORR: i32 = maki_hd::op::SIGN_SCHNORR as i32;
     const SIGN_TAPROOT: i32 = maki_hd::op::SIGN_TAPROOT as i32;
     const MONERO: i32 = maki_hd::op::MONERO_PUBLIC as i32;
+    const ED25519: i32 = maki_hd::op::ED25519_PUBLIC as i32;
 
     /// The master key's fingerprint, as descriptors and PSBTs name the seed.
     pub fn fingerprint() -> Result<[u8; 4], Error> {
@@ -748,6 +751,20 @@ pub mod wallet {
             Some((_, why)) => Ok(Err(String::from_utf8_lossy(why).into_owned())),
             None => Err(Error::Failed),
         }
+    }
+
+    /// An Ed25519 public key (host API 6), by SLIP-10 from the phrase, at `path`, every step of it
+    /// hardened: a Solana account's address, at `m/44'/501'/account'/0'` (as Phantom, Solflare and
+    /// Ledger's app have it).
+    pub fn ed25519_public(path: &[u32]) -> Result<[u8; 32], Error> { public_form(path, ED25519) }
+
+    /// An Ed25519 signature (RFC 8032) with the key at `path`, over the whole of `message`, up to
+    /// 16 KiB (host API 6): a Solana transaction's message, say. Checked by maki before it's
+    /// returned, and one of what the owner's last yes to a review allows.
+    pub fn sign_ed25519(path: &[u32], message: &[u8]) -> Result<[u8; 64], Error> {
+        let mut out = [0u8; 64];
+        result(unsafe { sys::wallet_sign_ed25519(path.as_ptr(), path.len(), message.as_ptr(), message.len(), out.as_mut_ptr()) })?;
+        Ok(out)
     }
 
     fn sign<const N: usize>(path: &[u32], digest: &[u8; 32], scheme: i32) -> Result<[u8; N], Error> {

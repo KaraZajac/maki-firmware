@@ -6,7 +6,7 @@ use std::collections::BTreeMap;
 use std::time::Duration;
 
 use ed25519_dalek::Signer;
-use maki_bundle::Permission;
+use maki_bundle::{Curve, Permission};
 
 use crate::*;
 
@@ -259,10 +259,11 @@ impl Session {
         Ok(shared)
     }
 
-    /// Whether the wallet permission's paths let the app use `path`.
-    fn wallet_path(&self, path: &[u32]) -> Result<(), i32> {
+    /// Whether the wallet permission's paths let the app use `path`, on its curve: a
+    /// secp256k1 wallet's keys (and Monero's, made from them), or an Ed25519 wallet's.
+    fn wallet_path(&self, path: &[u32], curve: Curve) -> Result<(), i32> {
         match &self.wallet {
-            Some(w) if path.len() <= maki_hd::MAX_DEPTH && w.allows(path) => Ok(()),
+            Some(w) if w.curve == curve && path.len() <= maki_hd::MAX_DEPTH && w.allows(path) => Ok(()),
             _ => Err(REFUSED),
         }
     }
@@ -278,10 +279,10 @@ impl Session {
     /// form asked for.
     pub fn wallet_public(&mut self, path: &[u32], form: u8) -> Result<Vec<u8>, i32> {
         self.needs(Permission::Wallet)?;
-        if !matches!(form, WALLET_PUBLIC | WALLET_UNCOMPRESSED | WALLET_TAPROOT | WALLET_MONERO) {
+        if !matches!(form, WALLET_PUBLIC | WALLET_UNCOMPRESSED | WALLET_TAPROOT | WALLET_MONERO | WALLET_ED25519) {
             return Err(INVALID);
         }
-        self.wallet_path(path)?;
+        self.wallet_path(path, if form == WALLET_ED25519 { Curve::Ed25519 } else { Curve::Secp256k1 })?;
         self.platform.wallet(form, path, &[])
     }
 
@@ -290,7 +291,7 @@ impl Session {
     /// `path` (one of its own).
     pub fn wallet_subaddress(&mut self, path: &[u32], major: u32, minor: u32) -> Result<[u8; 64], i32> {
         self.needs(Permission::Wallet)?;
-        self.wallet_path(path)?;
+        self.wallet_path(path, Curve::Secp256k1)?;
         let mut indices = [0u8; 8];
         indices[..4].copy_from_slice(&major.to_le_bytes());
         indices[4..].copy_from_slice(&minor.to_le_bytes());
@@ -301,7 +302,7 @@ impl Session {
     /// at `path` (one of its own), itself, once they've said they want them. 0 shown, 1 not
     /// wanted, 2 no answer; the words never come to the app.
     pub fn wallet_show_backup(&mut self, path: &[u32]) -> i32 {
-        if let Err(e) = self.needs(Permission::Wallet).and_then(|_| self.wallet_path(path)) {
+        if let Err(e) = self.needs(Permission::Wallet).and_then(|_| self.wallet_path(path, Curve::Secp256k1)) {
             return e;
         }
         match self.platform.show_backup(path) {
@@ -339,7 +340,7 @@ impl Session {
         if !matches!(scheme, WALLET_SIGN_ECDSA | WALLET_SIGN_SCHNORR | WALLET_SIGN_TAPROOT) || digest.len() != 32 {
             return Err(INVALID);
         }
-        self.wallet_path(path)?;
+        self.wallet_path(path, Curve::Secp256k1)?;
         self.allowed(1)?;
         self.platform.wallet(scheme, path, digest)
     }
@@ -360,7 +361,7 @@ impl Session {
     /// if the owner's last yes to a review allows one more.
     pub fn wallet_monero_view_key(&mut self, path: &[u32]) -> Result<[u8; 32], i32> {
         self.needs(Permission::Wallet)?;
-        self.wallet_path(path)?;
+        self.wallet_path(path, Curve::Secp256k1)?;
         self.allowed(1)?;
         self.platform.wallet(maki_hd::op::MONERO_VIEW_KEY, path, &[])?.try_into().map_err(|_| FAILED)
     }
@@ -374,7 +375,7 @@ impl Session {
         if output.len() != MONERO_OUTPUT {
             return Err(INVALID);
         }
-        self.wallet_path(path)?;
+        self.wallet_path(path, Curve::Secp256k1)?;
         self.platform.wallet(maki_hd::op::MONERO_KEY_IMAGE, path, output)?.try_into().map_err(|_| FAILED)
     }
 
@@ -388,9 +389,22 @@ impl Session {
             return Err(TOO_BIG);
         }
         let inputs = maki_xmr::request::Request::parse(request).map_err(|_| INVALID)?.inputs.len();
-        self.wallet_path(path)?;
+        self.wallet_path(path, Curve::Secp256k1)?;
         self.allowed(inputs as u32)?;
         self.platform.wallet(maki_hd::op::MONERO_SIGN, path, request)
+    }
+
+    /// The wallet permission (host API 6): an Ed25519 signature (RFC 8032) over the whole of
+    /// `message`, with the key at `path` (one of its own, by SLIP-10: a Solana account's), if the
+    /// owner's last yes to a review allows one more.
+    pub fn wallet_sign_ed25519(&mut self, path: &[u32], message: &[u8]) -> Result<[u8; 64], i32> {
+        self.needs(Permission::Wallet)?;
+        if message.len() > MAX_SIGN {
+            return Err(TOO_BIG);
+        }
+        self.wallet_path(path, Curve::Ed25519)?;
+        self.allowed(1)?;
+        self.platform.wallet(maki_hd::op::ED25519_SIGN, path, message)?.try_into().map_err(|_| FAILED)
     }
 
     /// The keyboard permission: printable ASCII, newlines and tabs.

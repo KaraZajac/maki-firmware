@@ -366,6 +366,19 @@ fn lent(session: &mut Session, id: usize, request: &[u8], last_log: &mut String)
                 _ => (maki_wasm::INVALID, vec![]),
             }
         }
+        service::WALLET_SIGN_ED25519 => {
+            let parsed = request.get(..4).map(|n| u32::from_le_bytes(n.try_into().unwrap()) as usize).and_then(|n| {
+                let message = request.get(4..4 + n)?;
+                Some((message, path_of(&request[4 + n..])))
+            });
+            match parsed {
+                Some((message, Some(path))) => match session.wallet_sign_ed25519(&path, message) {
+                    Ok(sig) => (0, sig.to_vec()),
+                    Err(code) => (code, vec![]),
+                },
+                _ => (maki_wasm::INVALID, vec![]),
+            }
+        }
         service::STORAGE_GET => match text().map(|k| session.storage_get(k)) {
             Some(Ok(v)) => (0, v),
             Some(Err(code)) => (code, vec![]),

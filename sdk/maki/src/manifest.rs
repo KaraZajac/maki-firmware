@@ -124,7 +124,8 @@ pub fn load(path: &Path) -> Result<Project, String> {
 fn wallet(path: &Path, w: WalletToml) -> Result<Wallet, String> {
     let curve = match w.curve.as_str() {
         "secp256k1" => Curve::Secp256k1,
-        other => return Err(format!("{}: [wallet] curve \"{other}\": maki's wallets are secp256k1", path.display())),
+        "ed25519" => Curve::Ed25519,
+        other => return Err(format!("{}: [wallet] curve \"{other}\": maki's wallets are secp256k1 or ed25519", path.display())),
     };
     if w.paths.is_empty() || w.paths.len() > maki_bundle::MAX_WALLET_PATHS {
         return Err(format!("{}: [wallet] names 1 to {} paths", path.display(), maki_bundle::MAX_WALLET_PATHS));
