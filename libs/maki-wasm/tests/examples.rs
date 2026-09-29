@@ -23,6 +23,8 @@ struct Record {
     current: Option<Vec<u8>>,
     replies: Vec<Vec<u8>>,
     qr: Option<String>,
+    /// codes the camera reads after `qr`, one a scan
+    qrs: VecDeque<String>,
     motion: Option<[i16; 3]>,
     /// maki is locked: no wallet keys
     locked: bool,
@@ -79,7 +81,10 @@ impl Platform for Script {
         true
     }
     fn message(&mut self) -> Option<Vec<u8>> { self.0.borrow().current.clone() }
-    fn scan_qr(&mut self) -> Option<String> { self.0.borrow_mut().qr.take() }
+    fn scan_qr(&mut self) -> Option<String> {
+        let mut r = self.0.borrow_mut();
+        r.qr.take().or_else(|| r.qrs.pop_front())
+    }
     fn motion(&mut self) -> Option<[i16; 3]> { self.0.borrow().motion }
     fn reply(&mut self, reply: &[u8]) -> bool {
         let mut r = self.0.borrow_mut();
@@ -1092,6 +1097,59 @@ fn wifi_keeps_networks_from_the_camera_and_the_computer() {
     assert_eq!(replies, ["ok", "maki guests\nCafe;Bar\n", "that isn't a network: a WIFI: text with a name", "maki guests\n"]);
     // kept as its QR code had it, for the next time
     assert_eq!(r.storage.get("networks").unwrap(), b"WIFI:T:WPA;S:maki guests;P:correct horse;;\n");
+}
+
+#[test]
+fn bitcoin_signs_a_psbt_read_off_a_screen_and_shows_it_back() {
+    let psbt = std::fs::read(format!("{BTC_FIXTURES}/abandon-unsigned.psbt")).unwrap();
+    let expected = std::fs::read(format!("{BTC_FIXTURES}/abandon-signed.psbt")).unwrap();
+    // as Sparrow shows it: a crypto-psbt's parts in turn, in capitals
+    let cbor = |b: &[u8]| {
+        let mut c = vec![0x59, (b.len() >> 8) as u8, b.len() as u8];
+        c.extend_from_slice(b);
+        c
+    };
+    let mut encoder = ur::Encoder::new(&cbor(&psbt), 60, "crypto-psbt").unwrap();
+    let n = encoder.fragment_count();
+    let mut parts: Vec<String> = (0..n + 3).map(|_| encoder.next_part().unwrap().to_uppercase()).collect();
+    // a part missed (the fountain's later ones make up for it), and one read twice
+    parts.remove(1);
+    parts.insert(3, parts[2].clone());
+    let bytes = std::fs::read(format!("{}/tests/fixtures/bitcoin.maki", env!("CARGO_MANIFEST_DIR"))).unwrap();
+    let bundle = maki_bundle::read(&bytes).unwrap();
+    let record = Rc::new(RefCell::new(Record {
+        // Sign from a QR code; then the signed PSBT's parts shown in turn, until the centre
+        events: std::iter::once(Event::Menu(3)).chain(std::iter::repeat(Event::Timeout).take(40)).chain([Event::Centre]).collect(),
+        qrs: parts.into_iter().collect(),
+        answers: [Answer::Yes].into_iter().collect(),
+        ..Default::default()
+    }));
+    let loaded = load(&bundle.manifest, bundle.code).unwrap();
+    assert_eq!(loaded.run(Box::new(Script(record.clone()))), Stop::Finished);
+    let r = record.borrow();
+    assert_eq!(r.menu, ["Taproot or SegWit", "Bitcoin or testnet", "Account key", "Sign from a QR code"]);
+    assert_eq!(r.reviews[0].question, "Sign and spend");
+    // read off maki's screen as the wallet's camera would, the signed PSBT: the same bytes as ever
+    let mut decoder = ur::Decoder::default();
+    for frame in &r.frames {
+        if let Some(text) = read_qr(frame) {
+            if text.starts_with("UR:CRYPTO-PSBT/") {
+                decoder.receive(&text.to_lowercase()).unwrap();
+            }
+        }
+    }
+    assert!(decoder.complete(), "the signed PSBT's parts, from maki's screen");
+    assert_eq!(decoder.message().unwrap().unwrap(), cbor(&expected));
+}
+
+#[test]
+fn bitcoin_shows_its_descriptor_for_sparrow_to_scan() {
+    let r = run_wallet_with("bitcoin", vec![Event::Menu(2), Event::Menu(2)], vec![], vec![], false);
+    // an address, the account key, then the descriptor: as the link has shared it
+    assert_eq!(
+        read_qr(r.frames.last().unwrap()).unwrap(),
+        "wpkh([73c5da0a/84h/0h/0h]xpub6CatWdiZiodmUeTDp8LT5or8nmbKNcuyvz7WyksVFkKB4RHwCD3XyuvPEbvqAQY3rAPshWcMLoP2fMFMKHPJ4ZeZXYVUhLv1VMrjPC7PW6V/<0;1>/*)#qf45pmyh"
+    );
 }
 
 /// A wallet app, run as maki runs it (its manifest's paths and all), on these messages and

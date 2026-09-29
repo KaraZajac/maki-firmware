@@ -55,3 +55,5 @@ maki-seed = { path = "../maki-seed" }
 maki-xmr = { path = "../maki-xmr" }
 # reading the QR codes apps draw, with the decoder maki's camera uses (bao-video's)
 rqrr = { git = "https://github.com/betrusted-io/rqrr.git", branch = "rv32-opt" }
+# PSBTs over QR codes as wallet software writes and reads them (Blockchain Commons' UR)
+ur = "0.4"

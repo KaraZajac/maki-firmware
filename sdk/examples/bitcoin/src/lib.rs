@@ -7,7 +7,14 @@
 //! change and the fee on maki's own review screen, and signs once the owner says yes.
 //!
 //! Opened, it shows a receiving address as a QR code: left and right step through them, the
-//! centre shows it as text, and the menu picks the account, the network, or the account key.
+//! centre shows it as text, and the menu picks the account, the network, or the account's key
+//! and descriptor (the descriptor as Sparrow and the like scan it, for a watch-only wallet).
+//!
+//! With no cable at all, too: the menu's Sign from a QR code reads a PSBT off wallet software's
+//! screen (camera), as Sparrow, Nunchuk and BlueWallet show them in turn to Keystone, Passport and
+//! the like: a UR `crypto-psbt` in parts (Blockchain Commons' UR, its fountain codes filling in
+//! parts missed), or one base64 code for a small one. It's checked and gone through as any
+//! other, and the signed PSBT shown back the same way, a part at a time, for the wallet to scan.
 //!
 //! maki desktop (and wallet software through it) talks to it over the link. Each message starts
 //! with what it is; each answer with a status, then its fields (strings as a u16 length and the
@@ -49,6 +56,10 @@ const MAX_PSBT: usize = 256 * 1024;
 const PIECE: usize = 4000;
 /// More outputs than this and a transaction isn't gone through page by page with any care.
 const MAX_OUTPUTS: usize = 64;
+/// A signed PSBT's parts, a QR code each: a fragment's most bytes, so a part is QR code version 8
+/// at most (279 capitals), which maki draws two pixels a module; and how long each shows.
+const FRAGMENT: usize = 100;
+const PART_MS: u32 = 300;
 
 fn network(n: u8) -> Option<Network> {
     match n {
@@ -249,17 +260,165 @@ fn sign(net: Network, bytes: &[u8]) -> Result<Vec<u8>, Answer> {
     Ok(psbt.serialize())
 }
 
+/// A CBOR byte string (RFC 8949): what a UR `crypto-psbt` holds.
+fn cbor_bytes(data: &[u8]) -> Vec<u8> {
+    let n = data.len();
+    let mut out = match n {
+        0..=23 => vec![0x40 | n as u8],
+        24..=0xff => vec![0x58, n as u8],
+        0x100..=0xffff => vec![0x59, (n >> 8) as u8, n as u8],
+        _ => [&[0x5a][..], &(n as u32).to_be_bytes()].concat(),
+    };
+    out.extend_from_slice(data);
+    out
+}
+
+/// What's in a CBOR byte string that's all of `b`.
+fn from_cbor_bytes(b: &[u8]) -> Option<&[u8]> {
+    let (&head, rest) = b.split_first()?;
+    if head >> 5 != 2 {
+        return None;
+    }
+    let (len, rest) = match head & 31 {
+        n @ 0..=23 => (n as usize, rest),
+        24 => (*rest.first()? as usize, rest.get(1..)?),
+        25 => (u16::from_be_bytes(rest.get(..2)?.try_into().ok()?) as usize, rest.get(2..)?),
+        26 => (u32::from_be_bytes(rest.get(..4)?.try_into().ok()?) as usize, rest.get(4..)?),
+        _ => return None,
+    };
+    (rest.len() == len).then_some(rest)
+}
+
+fn unbase64(s: &str) -> Option<Vec<u8>> {
+    const B64: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = Vec::new();
+    let (mut acc, mut bits) = (0u32, 0);
+    for c in s.trim().trim_end_matches('=').bytes() {
+        acc = acc << 6 | B64.iter().position(|&b| b == c)? as u32;
+        bits += 6;
+        if bits >= 8 {
+            bits -= 8;
+            out.push((acc >> bits) as u8);
+        }
+    }
+    Some(out)
+}
+
+fn reading(parts: usize, of: usize) {
+    screen::clear(Color::Dark);
+    screen::text_centred(24, "Reading the PSBT", Style::Bold, Color::Light);
+    let line = if of > 0 { format!("{parts} of {of} parts") } else { "the first part".into() };
+    screen::text_centred(50, &line, Style::Regular, Color::Light);
+    screen::text_centred(80, "any button stops", Style::Small, Color::Light);
+    screen::present();
+}
+
+/// A PSBT read off wallet software's screen: a UR `crypto-psbt` in parts (or whole), or a base64
+/// code. Why not, if it isn't one, or the owner stopped.
+fn scan_psbt() -> Result<Vec<u8>, String> {
+    let mut decoder = ur::Decoder::default();
+    let mut seen = std::collections::BTreeSet::new();
+    let mut of = 0;
+    loop {
+        reading(seen.len(), of);
+        let mut buf = vec![0u8; 4400];
+        let Some(text) = camera::scan_qr(&mut buf) else { return Err("stopped".into()) };
+        let text = text.trim();
+        if text.starts_with("cHNidP8") {
+            return unbase64(text).ok_or_else(|| "not base64".into());
+        }
+        // URs are in capitals in QR codes, and read in small letters
+        let lower = text.to_ascii_lowercase();
+        let Some(rest) = lower.strip_prefix("ur:crypto-psbt/").or_else(|| lower.strip_prefix("ur:psbt/")) else {
+            return Err("that isn't a PSBT".into());
+        };
+        let cbor = match ur::ur::decode(&lower) {
+            Ok((ur::ur::Kind::SinglePart, cbor)) => cbor,
+            Ok((ur::ur::Kind::MultiPart, _)) => {
+                if decoder.receive(&lower).is_err() {
+                    // another PSBT's parts: start again with this one
+                    decoder = ur::Decoder::default();
+                    seen.clear();
+                    if decoder.receive(&lower).is_err() {
+                        return Err("a part maki can't read".into());
+                    }
+                }
+                if let Some((n, total)) = rest.split_once('/').and_then(|(i, _)| i.split_once('-')) {
+                    if let (Ok(n), Ok(total)) = (n.parse::<usize>(), total.parse::<usize>()) {
+                        of = total;
+                        seen.insert(n.min(total + 1));
+                    }
+                }
+                if !decoder.complete() {
+                    continue;
+                }
+                decoder.message().ok().flatten().ok_or("parts that don't add up")?
+            }
+            Err(_) => return Err("a code maki can't read".into()),
+        };
+        return from_cbor_bytes(&cbor).map(|b| b.to_vec()).ok_or_else(|| "not a PSBT inside".into());
+    }
+}
+
+/// A signed PSBT, shown a part at a time as a UR `crypto-psbt`, for the wallet to scan, until the
+/// centre; whether the owner left the app meanwhile.
+fn show_psbt(psbt: &[u8]) -> bool {
+    let Ok(mut encoder) = ur::Encoder::new(&cbor_bytes(psbt), FRAGMENT, "crypto-psbt") else { return false };
+    let mut hidden = false;
+    loop {
+        if !hidden {
+            let Ok(part) = encoder.next_part() else { return false };
+            let code = part.to_uppercase();
+            screen::clear(Color::Dark);
+            let side = screen::qr(0, 0, code.as_bytes(), HEIGHT).unwrap_or(0);
+            screen::clear(Color::Dark);
+            screen::qr((WIDTH - side) / 2, (HEIGHT - side) / 2, code.as_bytes(), HEIGHT);
+            screen::present();
+        }
+        match wait(if hidden { None } else { Some(PART_MS) }) {
+            Event::Centre | Event::Left | Event::Right => return false,
+            Event::Hidden => hidden = true,
+            Event::Shown => hidden = false,
+            Event::Exit => return true,
+            _ => {}
+        }
+    }
+}
+
+/// Why `sign` didn't, in words, from its answer.
+fn refusal(a: &Answer) -> String {
+    match a.0.first() {
+        Some(&DENIED) => "you said no".into(),
+        Some(&NO_ANSWER) => "no answer".into(),
+        Some(&LOCKED) => "maki is locked".into(),
+        Some(&REFUSED) => {
+            let n = a.0.get(1..3).map_or(0, |b| u16::from_le_bytes([b[0], b[1]]) as usize);
+            String::from_utf8_lossy(a.0.get(3..3 + n).unwrap_or_default()).chars().take(60).collect()
+        }
+        _ => "it isn't one maki signs".into(),
+    }
+}
+
 /// What the screen shows when the app is open.
 struct View {
     network: Network,
     kind: Kind,
     index: u32,
     as_text: bool,
-    /// the account key rather than an address
-    account_key: bool,
+    shows: Shows,
+    /// why Sign from a QR code didn't, for a moment
+    note: String,
 }
 
-const MENU: [&str; 3] = ["Taproot or SegWit", "Bitcoin or testnet", "Account key"];
+/// An address, the account's key, or its descriptor.
+#[derive(Clone, Copy, PartialEq)]
+enum Shows {
+    Address,
+    Key,
+    Descriptor,
+}
+
+const MENU: [&str; 4] = ["Taproot or SegWit", "Bitcoin or testnet", "Account key", "Sign from a QR code"];
 
 impl View {
     fn draw(&self) {
@@ -273,16 +432,22 @@ impl View {
                 return;
             }
         };
-        let (text, caption) = if self.account_key {
+        let (text, caption) = if self.shows == Shows::Key {
             let which = if self.kind == Kind::Taproot { "taproot account" } else { "account key" };
             (account.zpub(), which.to_string())
+        } else if self.shows == Shows::Descriptor {
+            (account.descriptor(), "descriptor, for Sparrow".to_string())
         } else {
             let address = account.address(false, self.index).unwrap_or_default();
             let tap = if self.kind == Kind::Taproot { " taproot" } else { "" };
             let net = if self.network == Network::Testnet { " testnet" } else { "" };
             (address, format!("receive #{}{tap}{net}", self.index))
         };
-        if self.as_text {
+        if !self.note.is_empty() {
+            screen::text_centred(30, "Not signed:", Style::Bold, Color::Light);
+            screen::text_centred(52, &self.note, Style::Small, Color::Light);
+            screen::text_centred(80, "centre: back", Style::Small, Color::Light);
+        } else if self.as_text {
             screen::text_centred(2, &caption, Style::Small, Color::Light);
             for (i, start) in (0..text.len()).step_by(14).enumerate().take(6) {
                 screen::text_centred(18 + i as i32 * 15, &text[start..(start + 14).min(text.len())], Style::Mono, Color::Light);
@@ -290,7 +455,7 @@ impl View {
         } else {
             let upper = text.to_uppercase();
             // bech32 addresses make smaller codes in capitals, which every wallet reads
-            let data = if self.account_key { text.as_bytes() } else { upper.as_bytes() };
+            let data = if self.shows == Shows::Address { upper.as_bytes() } else { text.as_bytes() };
             let side = screen::qr(0, 0, data, 94).unwrap_or(0);
             screen::clear(Color::Dark);
             screen::qr((WIDTH - side) / 2, 0, data, 94);
@@ -302,7 +467,7 @@ impl View {
 
 fn main() {
     let _ = menu(&MENU);
-    let mut view = View { network: Network::Bitcoin, kind: Kind::Segwit, index: 0, as_text: false, account_key: false };
+    let mut view = View { network: Network::Bitcoin, kind: Kind::Segwit, index: 0, as_text: false, shows: Shows::Address, note: String::new() };
     let mut wallet = Wallet::default();
     let mut shown = true;
     loop {
@@ -316,12 +481,32 @@ fn main() {
                 let answer = wallet.answer(&m[..n]);
                 let _ = link::reply(&answer.0);
             }
-            Event::Left if !view.account_key => view.index = view.index.saturating_sub(1),
-            Event::Right if !view.account_key => view.index = (view.index + 1).min(maki_btc::bip32::HARDENED - 1),
+            Event::Centre | Event::Left | Event::Right if !view.note.is_empty() => view.note.clear(),
+            Event::Left if view.shows == Shows::Address => view.index = view.index.saturating_sub(1),
+            Event::Right if view.shows == Shows::Address => view.index = (view.index + 1).min(maki_btc::bip32::HARDENED - 1),
             Event::Centre => view.as_text = !view.as_text,
             Event::Menu(0) => view.kind = if view.kind == Kind::Segwit { Kind::Taproot } else { Kind::Segwit },
             Event::Menu(1) => view.network = if view.network == Network::Bitcoin { Network::Testnet } else { Network::Bitcoin },
-            Event::Menu(2) => view.account_key = !view.account_key,
+            Event::Menu(2) => {
+                view.shows = match view.shows {
+                    Shows::Address => Shows::Key,
+                    Shows::Key => Shows::Descriptor,
+                    Shows::Descriptor => Shows::Address,
+                }
+            }
+            // no cable: a PSBT off the wallet's screen, signed, and shown back
+            Event::Menu(3) => match scan_psbt() {
+                Ok(psbt) => match sign(view.network, &psbt) {
+                    Ok(signed) => {
+                        if show_psbt(&signed) {
+                            return;
+                        }
+                    }
+                    Err(a) => view.note = refusal(&a),
+                },
+                Err(why) if why == "stopped" => {}
+                Err(why) => view.note = why,
+            },
             Event::Hidden => shown = false,
             Event::Shown => shown = true,
             Event::Exit => return,

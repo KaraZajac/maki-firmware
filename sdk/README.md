@@ -46,7 +46,9 @@ This directory has the Rust crate apps are written with (`maki-app`), twenty-thr
   permission). maki keeps the keys; each reads what it's asked to sign with maki's own wallet
   code (`maki-btc`, `maki-eth`), shows it on maki's review screen and signs once the owner says
   yes. maki desktop, wallet software and sites talk to them over the link (PROTOCOL.md, "The
-  wallets"). Opened, each shows an address as a QR code.
+  wallets"). Opened, each shows an address as a QR code. Bitcoin signs with no cable too: it reads
+  a PSBT off wallet software's screen (a UR `crypto-psbt` in parts, as Sparrow shows them) and
+  shows the signed one back the same way, and shows its descriptor for Sparrow to scan.
 - **Monero**: the Monero wallet Ledger's Monero app makes from the same phrase (host APIs 4
   and 5): its address and subaddresses as QR codes; from its menu, the 25 words that restore it
   in any Monero wallet, which maki shows its owner itself; the view key, for maki desktop or the

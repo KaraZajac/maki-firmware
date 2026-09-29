@@ -14,3 +14,6 @@ maki-app = { path = "../../maki-app", default-features = false, features = ["std
 maki-btc = { path = "../../../libs/maki-btc" }
 # what maki's keys say when they can't
 maki-hd = { path = "../../../libs/maki-hd" }
+# PSBTs over QR codes, as wallet software shows them in turn (Blockchain Commons' UR, with its
+# fountain codes)
+ur = { version = "0.4", default-features = false }
