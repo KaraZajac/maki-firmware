@@ -824,6 +824,15 @@ pub fn pagetable_entry(addr: usize) -> Result<*mut usize, xous_kernel::Error> {
     Ok((PAGE_TABLE_OFFSET + vpn1 * PAGE_SIZE + vpn0 * 4) as *mut usize)
 }
 
+/// maki: whether the page at `virt`, in the address space in use, is out in swap.
+#[cfg(feature = "swap")]
+pub fn page_in_swap(virt: usize) -> bool {
+    pagetable_entry(virt).map_or(false, |entry| {
+        let pte = unsafe { entry.read_volatile() };
+        pte & MMUFlags::VALID.bits() == 0 && pte & MMUFlags::P.bits() != 0
+    })
+}
+
 /// Ummap the given page from the specified process table.  Never allocate a new
 /// page.
 ///

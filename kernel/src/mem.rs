@@ -822,6 +822,13 @@ impl MemoryManager {
     pub fn unmap_page(&mut self, virt: *mut usize) -> Result<usize, xous_kernel::Error> {
         let pid = crate::arch::process::current_pid();
 
+        // maki: a page out in swap has no physical page to release, but a swap page: the
+        // swapper's to free
+        #[cfg(feature = "swap")]
+        if crate::arch::mem::page_in_swap(virt as usize) {
+            crate::swap::Swap::with_mut(|swap| swap.page_freed(pid, virt as usize));
+        }
+
         // If the virtual address has an assigned physical address, release that
         // address from this process.
         if let Ok(phys) = crate::arch::mem::virt_to_phys(virt as usize) {

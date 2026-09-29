@@ -47,6 +47,10 @@ pub enum SwapAbi {
     /// maki: the processes that ended since the swapper last asked (13, clear of the swapper's
     /// own numbering, which runs to 12)
     TakeEnded = 13,
+    /// maki: pages unmapped while they were out in swap, since the swapper last asked
+    TakeFreed = 14,
+    /// maki: the swapper panicked, at this line of its main.rs (it can't print itself)
+    Panicked = 15,
 }
 /// SYNC WITH `xous-swapper/src/main.rs`
 impl SwapAbi {
@@ -63,6 +67,8 @@ impl SwapAbi {
             8 => BlockErase,
             9 => DebugServers,
             13 => TakeEnded,
+            14 => TakeFreed,
+            15 => Panicked,
             _ => Invalid,
         }
     }
@@ -216,7 +222,14 @@ static mut SWAP: Swap = Swap {
     oom_stack_backing: [0usize; BACKUP_STACK_SIZE_WORDS],
     oom_stashed_pid: None,
     ended: 0,
+    freed: [0usize; FREED_MAX],
+    freed_len: 0,
+    freed_lost: 0,
 };
+
+/// maki: how many pages unmapped while in swap the kernel keeps for the swapper to free, between
+/// its asking (it asks before it evicts anything)
+const FREED_MAX: usize = 256;
 
 pub struct Swap {
     /// PC for blocking handler
@@ -258,6 +271,11 @@ pub struct Swap {
     /// maki: the processes that ended since the swapper last asked (bit `pid - 1`). Whatever
     /// they had in swap is the swapper's to free, before another process gets the PID.
     ended: u64,
+    /// maki: pages unmapped while out in swap, each its address with its PID in the low byte,
+    /// for the swapper to free their swap pages (`SwapAbi::TakeFreed`); past `FREED_MAX`, counted
+    freed: [usize; FREED_MAX],
+    freed_len: usize,
+    freed_lost: usize,
 }
 impl Swap {
     pub fn with_mut<F, R>(f: F) -> R
@@ -320,6 +338,36 @@ impl Swap {
     /// maki: the processes that ended since the last call (`SwapAbi::TakeEnded`).
     pub fn take_ended(&mut self) -> u64 { core::mem::take(&mut self.ended) }
 
+    /// maki: a page of `pid`'s at `vaddr`, out in swap, was unmapped: there's no physical page to
+    /// free, only the swap page holding it, which the swapper alone knows. Without this, every
+    /// such page (a buffer dropped after being swapped out, say) kept its swap page for good,
+    /// until swap filled and the swapper panicked in a hard OOM.
+    pub fn page_freed(&mut self, pid: PID, vaddr: usize) {
+        if self.freed_len < FREED_MAX {
+            self.freed[self.freed_len] = (vaddr & !0xFFF) | pid.get() as usize;
+            self.freed_len += 1;
+        } else {
+            self.freed_lost += 1;
+        }
+    }
+
+    /// maki: up to five of those, for `SwapAbi::TakeFreed` (0 where there are no more).
+    pub fn take_freed(&mut self) -> [usize; 5] {
+        let mut out = [0usize; 5];
+        for slot in out.iter_mut() {
+            if self.freed_len == 0 {
+                break;
+            }
+            self.freed_len -= 1;
+            *slot = self.freed[self.freed_len];
+        }
+        if self.freed_len == 0 && self.freed_lost > 0 {
+            println!("swap: {} pages unmapped in swap weren't handed to the swapper", self.freed_lost);
+            self.freed_lost = 0;
+        }
+        out
+    }
+
     pub fn track_alloc(&mut self, is_alloc: bool) {
         if is_alloc {
             self.used_pages = self.used_pages.saturating_add(1);
@@ -372,6 +420,12 @@ impl Swap {
     }
 
     /// This is a non-divergent syscall (handled entirely within the kernel)
+    /// The pages free, and all of them, as `get_free_mem` answers, without printing.
+    pub fn get_free_pages_quietly(&self) -> SysCallResult {
+        let ram_size = crate::mem::MemoryManager::with(|mm| mm.memory_size());
+        Ok(xous_kernel::Result::Scalar5(ram_size / PAGE_SIZE - self.used_pages, ram_size / PAGE_SIZE, 0, 0, 0))
+    }
+
     pub fn get_free_mem(&self) -> SysCallResult {
         // #[cfg(feature = "debug-swap")]
         {
@@ -782,13 +836,21 @@ impl Swap {
                 self.swapper_args[2] = pid.get() as usize;
             }
         }
-        if let Some(op) = self.prev_op.take() {
+        if let Some(prev) = self.prev_op.take() {
             if let Some(dop) = self.nested_op {
                 println!("ERR: nesting depth of 2 exceeded! {:x?}", dop);
                 panic!("Nesting depth of 2 exceeded!");
             }
             // this happens in the case of an IRQ happening during an OOM
-            println!("Nesting {:x?} {:?}", op, crate::arch::irq::is_handling_irq());
+            // maki: and what was asked while it was going on, and by whom
+            println!(
+                "Nesting {:x?} {:?}, then {:x?} from PID {}",
+                prev,
+                crate::arch::irq::is_handling_irq(),
+                op,
+                crate::arch::process::current_pid().get()
+            );
+            let op = prev;
             self.nested_op = Some(op);
             panic!(
                 "Nesting should not happen - this code is vestigial but remains to see if this edge case remains"

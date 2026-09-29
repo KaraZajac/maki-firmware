@@ -1400,7 +1400,12 @@ pub fn handle_inner(pid: PID, tid: TID, in_irq: bool, call: SysCall) -> SysCallR
                     if pid.get() != xous_kernel::SWAPPER_PID {
                         return Err(xous_kernel::Error::AccessDenied);
                     }
-                    Swap::with(|swap| swap.get_free_mem())
+                    // maki: `a1` 1 asks for the count alone, without the table of who uses what
+                    if a1 == 1 {
+                        Swap::with(|swap| swap.get_free_pages_quietly())
+                    } else {
+                        Swap::with(|swap| swap.get_free_mem())
+                    }
                 }
                 SwapAbi::TakeEnded => {
                     if pid.get() != xous_kernel::SWAPPER_PID {
@@ -1408,6 +1413,20 @@ pub fn handle_inner(pid: PID, tid: TID, in_irq: bool, call: SysCall) -> SysCallR
                     }
                     let ended = Swap::with_mut(|swap| swap.take_ended());
                     Ok(xous_kernel::Result::Scalar5(ended as u32 as usize, (ended >> 32) as usize, 0, 0, 0))
+                }
+                SwapAbi::Panicked => {
+                    if pid.get() != xous_kernel::SWAPPER_PID {
+                        return Err(xous_kernel::Error::AccessDenied);
+                    }
+                    println!("swapper: panicked at xous-swapper/src/main.rs:{}", a1);
+                    Ok(xous_kernel::Result::Ok)
+                }
+                SwapAbi::TakeFreed => {
+                    if pid.get() != xous_kernel::SWAPPER_PID {
+                        return Err(xous_kernel::Error::AccessDenied);
+                    }
+                    let f = Swap::with_mut(|swap| swap.take_freed());
+                    Ok(xous_kernel::Result::Scalar5(f[0], f[1], f[2], f[3], f[4]))
                 }
                 SwapAbi::StealPage => {
                     if pid.get() != xous_kernel::SWAPPER_PID {

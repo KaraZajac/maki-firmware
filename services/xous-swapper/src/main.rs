@@ -271,6 +271,13 @@ fn map_swap(ss: &mut SwapperSharedState, swap_phys: usize, virt: usize, owner: u
     // Check if the entry was already mapped.
     if ((l0_pt[vpn0] as usize) & loader::FLG_VALID) != 0 && ((l0_pt[vpn0] as usize & 0xffff_fc00) << 2) != ppn
     {
+        // maki: whatever was swapped out at this address before is gone (the page being swapped
+        // out now is there): its swap page is free, for the case the kernel's list of unmapped
+        // pages (`forget_freed`) overflowed. The slot is the entry's PPN, as `pt_walk` reads it.
+        let stale = ((l0_pt[vpn0] as usize & 0xFFFF_FC00) << 2) / PAGE_SIZE;
+        if let Some(count) = ss.sct.counts.get_mut(stale) {
+            *count &= !loader::FLG_SWAP_USED;
+        }
         // Print a warning, because this can be indicative of either an error in the algorithm, OR
         // it can be indicative of a scenario where a page was swapped, then released without updating the
         // swapper. Swap then release can happen in the case that a page was lent to a target process;
@@ -311,6 +318,15 @@ fn get_free_pages() -> usize {
     }
 }
 
+/// maki: the pages free now, without the kernel printing its table of who uses what: for the
+/// hard-OOM handler, which asks often. A kernel that doesn't know the quiet form prints anyway.
+fn free_pages_quietly() -> usize {
+    match xous::rsyscall(xous::SysCall::SwapOp(SwapAbi::GetFreePages as usize, 1, 0, 0, 0, 0, 0)) {
+        Ok(Result::Scalar5(free_pages, _total_memory, _, _, _)) => free_pages,
+        _ => 0,
+    }
+}
+
 /// maki: frees what processes that ended had in swap (the kernel says which), and empties their
 /// swap page tables, which are kept for the next process given the PID. Done before anything is
 /// evicted, so before any such process has anything in swap. Without it, every process that
@@ -343,6 +359,31 @@ fn forget_ended(ss: &mut SwapperSharedState) {
                         *count &= !loader::FLG_SWAP_USED;
                     }
                     *entry = 0;
+                }
+            }
+        }
+    }
+}
+
+/// maki: frees the swap pages of pages unmapped while they were out in swap (the kernel says
+/// which: unmapping one, a process gives up a page it doesn't have in RAM, and only the swapper
+/// knows which swap page holds it). Done before anything is evicted, as `forget_ended` is, so no
+/// page since swapped out to the same address is mistaken for one of them. Without it, those swap
+/// pages were taken for good: a few dozen with every app installed, until swap filled.
+fn forget_freed(ss: &mut SwapperSharedState) {
+    loop {
+        let freed = match xous::rsyscall(xous::SysCall::SwapOp(SwapAbi::TakeFreed as usize, 0, 0, 0, 0, 0, 0)) {
+            Ok(Result::Scalar5(a, b, c, d, e)) => [a, b, c, d, e],
+            _ => return,
+        };
+        if freed[0] == 0 {
+            return;
+        }
+        for entry in freed.iter().copied().filter(|&e| e != 0) {
+            let (pid, vaddr) = ((entry & 0xFF) as u8, entry & !0xFFF);
+            if let Some(paddr_in_swap) = ss.pt_walk(pid, vaddr, true) {
+                if let Some(count) = ss.sct.counts.get_mut(paddr_in_swap / PAGE_SIZE) {
+                    *count &= !loader::FLG_SWAP_USED;
                 }
             }
         }
@@ -399,7 +440,8 @@ fn write_to_swap_inner(
             break;
         }
     }
-    if let Some(free_page_number) = next_free_page {
+    // the swap page it goes to, recorded once the page is released (below)
+    let swap_slot = if let Some(free_page_number) = next_free_page {
         ss.free_swap_search_origin = free_page_number + 1; // start search at next page beyond the one about to be used
         // increment the swap counter by one, rolling over if full. Note that we only have 31
         // bits; the MSB is the "swap used" status bit
@@ -415,9 +457,6 @@ fn write_to_swap_inner(
         )
         .ok();
 
-        // add a PT mapping for the swap entry
-        map_swap(ss, free_page_number * PAGE_SIZE, candidate.vaddr(), candidate.raw_pid());
-
         ss.hal.encrypt_swap_to(
             buf,
             count,
@@ -425,6 +464,7 @@ fn write_to_swap_inner(
             candidate.vaddr(),
             candidate.raw_pid(),
         );
+        free_page_number
     } else {
         writeln!(DebugUart {}, "OOM detected, dumping all swap allocs:").ok();
         for (i, &entry) in ss.sct.counts.iter().enumerate() {
@@ -432,7 +472,7 @@ fn write_to_swap_inner(
         }
         // OOS path
         panic!("Ran out of swap space, hard OOM!");
-    }
+    };
 
     // step 3: release the page (currently mapped into the swapper's memory space). Need
     // to demonstrate to the memory system that we know what we are
@@ -447,6 +487,12 @@ fn write_to_swap_inner(
         0,
     ))
     .expect("Unexpected error: couldn't release a page that was mapped into the swapper's space");
+    // maki: the swap page tables' entry for it, made after the release: a table page this needs
+    // (the first page swapped out of a 4 MiB region) then comes from the page just freed. Made
+    // before, in a hard OOM with nothing free, it had only the handler's few reserved pages, and
+    // a round needing more asked the kernel for memory from inside the handler: the kernel's
+    // nested hard OOM, and its panic.
+    map_swap(ss, swap_slot * PAGE_SIZE, candidate.vaddr(), candidate.raw_pid());
     *pages_to_free -= 1;
 
     Ok(())
@@ -644,6 +690,7 @@ fn swap_handler(
             // memory than fits evicts its own working set to make room for itself.
             let needy = a2 as u8;
             forget_ended(ss);
+            forget_freed(ss);
 
             // be sure to allocate some extra space for the handler itself to run the next time!
             let mut pages_to_free = ss.pages_to_free;
@@ -668,7 +715,10 @@ fn swap_handler(
                     }
                 };
             } else {
-                panic!("No space was reserved for the hard OOM manager to run!");
+                // maki: the last round couldn't take its reserve back (too little was free then).
+                // Going on without it is safe now that an eviction pays for its own tables; a
+                // panic here takes the whole system down.
+                writeln!(DebugUart {}, "Entering HARD OOM without reserved pages").ok();
             }
             // recover the RPT from kernel
             let rpt = unsafe {
@@ -758,7 +808,10 @@ fn swap_handler(
             )
             .ok();
             //  Restore some reserved memory for the next hard OOM invocation.
-            if ss.hard_oom_reserved_page.is_none() {
+            // maki: only if that much is free: touching it with less would ask the kernel for
+            // memory from inside this handler (its nested hard OOM, and a panic). A round that
+            // freed too little tries again at the end of the next.
+            if ss.hard_oom_reserved_page.is_none() && free_pages_quietly() >= HARD_OOM_RESERVED_PAGES + 2 {
                 let mut reserved = xous::map_memory(
                     None,
                     None,
@@ -804,6 +857,13 @@ fn swap_handler(
 }
 
 fn main() {
+    // maki: the swapper's own panics can't print (its UART is compiled out, and one in a hard OOM
+    // happens while nothing else can run): the kernel says where it was, so the one that follows
+    // ('Nesting should not happen', as other processes run mid-OOM) isn't all there is to go on
+    std::panic::set_hook(Box::new(|info| {
+        let line = info.location().map(|l| l.line()).unwrap_or(0) as usize;
+        xous::rsyscall(xous::SysCall::SwapOp(SwapAbi::Panicked as usize, line, 0, 0, 0, 0, 0)).ok();
+    }));
     let mut sss = Box::new(SharedStateStorage { inner: None });
     sss.init();
 

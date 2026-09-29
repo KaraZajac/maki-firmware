@@ -28,6 +28,11 @@ pub enum SwapAbi {
     DebugInterrupts = 12,
     /// maki: the processes that ended since the swapper last asked, as a bitmask (bit `pid - 1`)
     TakeEnded = 13,
+    /// maki: pages unmapped while out in swap, up to five at a time (a page's address, its PID in
+    /// the low byte; 0 for none)
+    TakeFreed = 14,
+    /// maki: the swapper panicked at this line of its main.rs, for the kernel to say so
+    Panicked = 15,
 }
 /// SYNC WITH `kernel/src/swap.rs`
 impl SwapAbi {
@@ -46,6 +51,8 @@ impl SwapAbi {
             10 => DebugServers,
             11 => DebugFree,
             13 => TakeEnded,
+            14 => TakeFreed,
+            15 => Panicked,
             12 => DebugInterrupts,
             _ => Invalid,
         }
