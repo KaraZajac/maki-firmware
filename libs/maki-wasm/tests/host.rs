@@ -618,6 +618,9 @@ fn gated_functions_need_their_permission() {
         ("wallet_sign", "(param i32 i32 i32 i32 i32 i32) (result i32)"),
         ("wallet_subaddress", "(param i32 i32 i32 i32 i32) (result i32)"),
         ("wallet_show_backup", "(param i32 i32) (result i32)"),
+        ("wallet_monero_view_key", "(param i32 i32 i32) (result i32)"),
+        ("wallet_monero_key_image", "(param i32 i32 i32 i32) (result i32)"),
+        ("wallet_monero_sign", "(param i32 i32 i32 i32 i32 i32) (result i32)"),
     ];
     assert_eq!(signatures.len(), GATED.len());
     for (name, signature) in signatures {
@@ -1102,4 +1105,122 @@ fn moneros_functions_came_with_host_api_4() {
     let err = admit(&manifest(3), &code).unwrap_err();
     assert!(err.contains("wallet_subaddress, which came with host API 4, and its manifest says 3"), "{err}");
     admit(&manifest(4), &code).unwrap();
+}
+
+/// An output paid to the test phrase's Monero account (its subaddress `minor`), in a ring of 16
+/// made-up members: what maki desktop asks maki to spend.
+fn monero_input(seed: u64, minor: u32, amount: u64) -> maki_xmr::request::Input {
+    use maki_xmr::sign::{self, Scalar, G};
+    let keys = maki_hd::seed::SeedKeys::from_seed(&test_seed()).unwrap();
+    let pair = maki_hd::seed::answer(&keys, maki_hd::op::MONERO_SUBADDRESS, &path("m/44'/128'/0'/0/0"), &[0, 0, 0, 0, minor as u8, 0, 0, 0], &[0; 32]).unwrap();
+    let (spend, view) = (sign::point(&pair[..32].try_into().unwrap()).unwrap(), sign::point(&pair[32..].try_into().unwrap()).unwrap());
+    let scalar = |n: u64| Scalar::from_bytes_mod_order(maki_xmr::keccak(&(seed * 1000 + n).to_le_bytes()));
+    let r = scalar(0);
+    let tx_key = if minor == 0 { G * r } else { spend * r };
+    let out = sign::pay(&r, &view, &spend, 1, amount);
+    let ring = (0..16u64)
+        .map(|i| {
+            if i == 5 {
+                maki_xmr::request::Member { global: 100 + i, key: out.key, commitment: out.commitment }
+            } else {
+                maki_xmr::request::Member {
+                    global: 100 + i,
+                    key: (G * scalar(i + 1)).compress().to_bytes(),
+                    commitment: sign::commit(&scalar(i + 100), i).compress().to_bytes(),
+                }
+            }
+        })
+        .collect();
+    maki_xmr::request::Input { amount, tx_key: tx_key.compress().to_bytes(), index: 1, subaddress: minor, real: 5, ring }
+}
+
+#[test]
+fn spending_monero_needs_a_yes_and_maki_makes_the_transaction() {
+    use maki_bundle::Permission;
+    use maki_xmr::request::{read_destination, Payment, Request};
+    let (mut s, record) = wallet_session(&["m/44'/128'"], &[Permission::Wallet]);
+    let p = path("m/44'/128'/0'/0/0");
+
+    // the view key: after a yes, once
+    assert_eq!(s.wallet_monero_view_key(&p), Err(REFUSED));
+    record.borrow_mut().answers.push_back(Answer::Yes);
+    assert_eq!(s.wallet_review("Watch on computer?\nit can't spend", 1, 0), 0);
+    let view = s.wallet_monero_view_key(&p).unwrap();
+    assert_eq!(view.to_vec(), (0..32).map(|i| u8::from_str_radix(&"0f3fe25d0c6d4c94dde0c0bcc214b233e9c72927f813728b0f01f28f9d5e1201"[2 * i..2 * i + 2], 16).unwrap()).collect::<Vec<u8>>());
+    assert_eq!(s.wallet_monero_view_key(&p), Err(REFUSED), "one yes, one key");
+
+    // a key image, for the account's outputs alone, with no yes
+    let input = monero_input(1, 3, 5_000);
+    let real = input.ring[input.real];
+    let mut output = input.tx_key.to_vec();
+    output.extend_from_slice(&input.index.to_le_bytes());
+    output.extend_from_slice(&[0, 0, 0, 0, 3, 0, 0, 0]);
+    output.extend_from_slice(&real.key);
+    let proof = s.wallet_monero_key_image(&p, &output).unwrap();
+    assert_eq!(proof.len(), 96);
+    output[44] = 4;
+    assert_eq!(s.wallet_monero_key_image(&p, &output), Err(FAILED), "another subaddress's");
+    assert_eq!(s.wallet_monero_key_image(&p, &output[..79]), Err(INVALID));
+
+    // a transaction: a signature for each input, of what the yes allowed
+    let them = "49vDbkSo7eve3J41sBdjvjaBUyz8qHohsQcGtRf63qEUTMBvmA45fpp5pSacMdSg7A3b71RejLzB8EkGbfjp5PELVF2N4Zn";
+    let request = Request {
+        network: maki_xmr::Network::Mainnet,
+        account: 0,
+        fee: 1_000,
+        change: 2_000,
+        payments: vec![Payment { address: them.into(), amount: 12_000, destination: read_destination(them).unwrap().1 }],
+        inputs: vec![monero_input(2, 0, 10_000), monero_input(3, 1, 5_000)],
+    };
+    let bytes = request.to_bytes();
+    assert_eq!(s.wallet_monero_sign(&p, &bytes), Err(REFUSED));
+    record.borrow_mut().answers.push_back(Answer::Yes);
+    assert_eq!(s.wallet_review("Sign and spend?\nTotal 0.000000013 XMR", 1, 0), 0);
+    assert_eq!(s.wallet_monero_sign(&p, &bytes), Err(REFUSED), "two inputs, one signature allowed");
+    record.borrow_mut().answers.push_back(Answer::Yes);
+    assert_eq!(s.wallet_review("Sign and spend?\nTotal 0.000000013 XMR", 2, 0), 0);
+    let answer = s.wallet_monero_sign(&p, &bytes).unwrap();
+    assert_eq!(answer[0], 0);
+    let signed = maki_xmr::spend::Signed::from_bytes(&answer[1..]).unwrap();
+    let tx = maki_xmr::tx::Transaction::from_bytes(&signed.transaction).unwrap();
+    assert_eq!((tx.prefix.inputs.len(), tx.prefix.outputs.len(), tx.base.fee), (2, 2, 1_000));
+    assert_eq!(s.wallet_monero_sign(&p, &bytes), Err(REFUSED), "used up");
+    // what maki won't sign, it says why: a lie about an amount
+    let mut lie = request.clone();
+    lie.inputs[0].amount += 1;
+    lie.fee += 1;
+    record.borrow_mut().answers.push_back(Answer::Yes);
+    assert_eq!(s.wallet_review("Sign and spend?\nx", 2, 0), 0);
+    let answer = s.wallet_monero_sign(&p, &lie.to_bytes()).unwrap();
+    assert_eq!((answer[0], String::from_utf8_lossy(&answer[1..]).into_owned()), (1, "input 1's amount isn't what the chain has".into()));
+    // not a request, or off its paths
+    assert_eq!(s.wallet_monero_sign(&p, &bytes[..bytes.len() - 1]), Err(INVALID));
+    record.borrow_mut().answers.push_back(Answer::Yes);
+    assert_eq!(s.wallet_review("Sign and spend?\nx", 2, 0), 0);
+    assert_eq!(s.wallet_monero_sign(&path("m/44'/60'/0'/0/0"), &bytes), Err(REFUSED));
+}
+
+#[test]
+fn spending_monero_came_with_host_api_5() {
+    let code = module(
+        r#"(module (import "maki" "wallet_monero_sign" (func (param i32 i32 i32 i32 i32 i32) (result i32))) (memory (export "memory") 1) (func (export "maki_main")))"#,
+    );
+    let manifest = |api: u16| maki_bundle::Manifest {
+        id: "org.example.monero".into(),
+        name: "Monero".into(),
+        version: 1,
+        label: "1.0".into(),
+        kind: maki_bundle::Kind::Wasm,
+        api,
+        firmware: String::new(),
+        permissions: vec![(maki_bundle::Permission::Wallet, "to spend".into())],
+        storage_kib: 1,
+        memory_kib: 64,
+        backup: true,
+        description: String::new(),
+        wallet: Some(maki_bundle::Wallet { curve: maki_bundle::Curve::Secp256k1, paths: vec![path("m/44'/128'")] }),
+    };
+    let err = admit(&manifest(4), &code).unwrap_err();
+    assert!(err.contains("wallet_monero_sign, which came with host API 5, and its manifest says 4"), "{err}");
+    admit(&manifest(5), &code).unwrap();
 }

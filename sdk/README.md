@@ -31,9 +31,11 @@ This directory has the Rust crate apps are written with (`maki-app`), seventeen 
   code (`maki-btc`, `maki-eth`), shows it on maki's review screen and signs once the owner says
   yes. maki desktop, wallet software and sites talk to them over the link (PROTOCOL.md, "The
   wallets"). Opened, each shows an address as a QR code.
-- **Monero**: the Monero wallet Ledger's Monero app makes from the same phrase (host API 4):
-  its address and subaddresses as QR codes, and, from its menu, the 25 words that restore it in
-  any Monero wallet, which maki shows its owner itself.
+- **Monero**: the Monero wallet Ledger's Monero app makes from the same phrase (host APIs 4
+  and 5): its address and subaddresses as QR codes; from its menu, the 25 words that restore it
+  in any Monero wallet, which maki shows its owner itself; the view key, for maki desktop or the
+  Monero GUI to watch the wallet, once the owner says so; and spending, each payment, the change
+  and the fee on maki's review screen, then the transaction made and signed by maki.
 - **Hello Native**, Hello built as a native app, and **Pomodoro**, a native focus timer whose
   pie empties like a clock while you work and fills back up while you rest.
 
@@ -194,7 +196,13 @@ function whose permission it didn't ask for):
   spend and view keys, `wallet::subaddress(path, account, index)`, a subaddress's (with
   `maki-xmr` to make the addresses), and `wallet::show_backup(path)`, which has maki show its
   owner the account's 25 words on its own screens once they've said they want them: the app
-  hears whether they were shown, never the words. The wallet examples show how: they need `std` (for their allocator), so
+  hears whether they were shown, never the words. Host API 5 spends Monero:
+  `wallet::monero_view_key(path)` (after a yes, one of what it allows) for a computer to watch
+  the wallet, `wallet::monero_key_image(path, tx_key, index, account, subaddress, key)` for an
+  output's key image and its proof, and `wallet::monero_sign(path, &request)`, where the request
+  (`maki_xmr::request`) says what to spend and pay: maki makes the whole transaction itself (the
+  outputs, the range proof, a signature for each input, as many as the yes allowed) and hands it
+  back, or says why not. The wallet examples show how: they need `std` (for their allocator), so
   their `Cargo.toml` asks for `maki-app` with `default-features = false, features = ["std",
   "wallet"]`.
 

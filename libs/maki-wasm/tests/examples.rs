@@ -869,3 +869,118 @@ fn monero_has_maki_show_its_backup_and_never_sees_it() {
     // and the app drew its address all along: a QR code, then as text
     assert!(r.frames.len() >= 3 && r.frames.iter().all(|f| lit(f) > 500));
 }
+
+/// An output paid to the test phrase's Monero account (its subaddress `minor`), as a sender
+/// makes one, in a ring of 16 made-up members: what maki desktop asks the Monero app to spend.
+fn xmr_input(seed: u64, minor: u32, amount: u64) -> maki_xmr::request::Input {
+    use maki_xmr::sign::{self, Scalar, G};
+    let keys = maki_hd::seed::SeedKeys::from_seed(&test_seed()).unwrap();
+    let account = maki_hd::parse_path("m/44'/128'/0'/0/0").unwrap();
+    let pair = maki_hd::seed::answer(&keys, maki_hd::op::MONERO_SUBADDRESS, &account, &[0, 0, 0, 0, minor as u8, 0, 0, 0], &[0; 32]).unwrap();
+    let (spend, view) = (sign::point(&pair[..32].try_into().unwrap()).unwrap(), sign::point(&pair[32..].try_into().unwrap()).unwrap());
+    let scalar = |n: u64| Scalar::from_bytes_mod_order(maki_xmr::keccak(&(seed * 1000 + n).to_le_bytes()));
+    let r = scalar(0);
+    let tx_key = if minor == 0 { G * r } else { spend * r };
+    let out = sign::pay(&r, &view, &spend, 2, amount);
+    let ring = (0..16u64)
+        .map(|i| maki_xmr::request::Member {
+            global: 5000 + 7 * i,
+            key: if i == 9 { out.key } else { (G * scalar(i + 1)).compress().to_bytes() },
+            commitment: if i == 9 { out.commitment } else { sign::commit(&scalar(i + 100), i).compress().to_bytes() },
+        })
+        .collect();
+    maki_xmr::request::Input { amount, tx_key: tx_key.compress().to_bytes(), index: 2, subaddress: minor, real: 9, ring }
+}
+
+/// An output of the test phrase's account as `K` asks about it: its transaction key, index,
+/// subaddress and key.
+fn xmr_output(input: &maki_xmr::request::Input) -> Vec<u8> {
+    [&input.tx_key[..], &input.index.to_le_bytes(), &0u32.to_le_bytes(), &input.subaddress.to_le_bytes(), &input.ring[input.real].key].concat()
+}
+
+#[test]
+fn monero_lets_a_computer_watch_once_its_owner_says_so() {
+    let (a, b) = (xmr_input(1, 0, 10), xmr_input(2, 4, 20));
+    let images = [&[b'K', 2][..], &xmr_output(&a), &xmr_output(&b)].concat();
+    let inbox = vec![images.clone(), vec![b'W', 0], vec![b'W', 0], images.clone(), [&[b'K', 1][..], &xmr_output(&xmr_input(3, 1, 5))[4..], &[0; 4]].concat()];
+    let r = run_wallet("monero", inbox, vec![Answer::No, Answer::Yes], false);
+    // no key images until a computer may watch
+    assert_eq!(r.replies[0][0], 5);
+    assert_eq!(texts(&r.replies[0]), ["let maki desktop watch this wallet first"]);
+    // the owner's no, then yes: the address and the view key
+    assert_eq!(r.replies[1], [1]);
+    assert_eq!(r.reviews[0].question, "Let computer watch?");
+    assert_eq!(r.reviews[1].pages[0].mono, "49vDbkSo7eve3J41sBdjvjaBUyz8qHohsQcGtRf63qEUTMBvmA45fpp5pSacMdSg7A3b71RejLzB8EkGbfjp5PELVF2N4Zn");
+    let watch = &r.replies[2];
+    assert_eq!((watch[0], watch.len()), (0, 1 + 2 + 95 + 32));
+    let view: String = watch[98..].iter().map(|b| format!("{b:02x}")).collect();
+    assert_eq!(view, "0f3fe25d0c6d4c94dde0c0bcc214b233e9c72927f813728b0f01f28f9d5e1201");
+    // then key images, each with its proof, as the account makes them
+    let keys = maki_xmr::Keys::from_spend(maki_xmr::sign::Scalar::from_bytes_mod_order(
+        (0..32).map(|i| u8::from_str_radix(&"3b094ca7218f175e91fa2402b4ae239a2fe8262792a3e718533a1a357a1e4109"[2 * i..2 * i + 2], 16).unwrap()).collect::<Vec<u8>>().try_into().unwrap(),
+    ));
+    let images = &r.replies[3];
+    assert_eq!((images[0], images.len()), (0, 1 + 2 * 96));
+    for (i, input) in [&a, &b].into_iter().enumerate() {
+        let tx_key = maki_xmr::sign::point(&input.tx_key).unwrap();
+        let (image, proof) = keys.key_image_proof(&tx_key, input.index, 0, input.subaddress, &input.ring[input.real].key, &[0; 32]).unwrap();
+        assert_eq!(images[1 + 96 * i..1 + 96 * i + 32], image);
+        assert_eq!(images[1 + 96 * i + 32..1 + 96 * (i + 1)], proof);
+    }
+    // an output that isn't the account's gets none
+    assert_eq!(r.replies[4][0], 5);
+}
+
+/// A Monero request sent to the app in pieces, as maki desktop sends it: `S` messages, then the
+/// signed transaction fetched with `G`s.
+fn xmr_messages(request: &[u8], fetches: usize) -> Vec<Vec<u8>> {
+    let mut out: Vec<Vec<u8>> = request
+        .chunks(4000)
+        .enumerate()
+        .map(|(i, piece)| [&[b'S', 0][..], &(request.len() as u32).to_le_bytes(), &((i * 4000) as u32).to_le_bytes(), piece].concat())
+        .collect();
+    out.extend((0..fetches).map(|i| [&[b'G'][..], &((i * 4000) as u32).to_le_bytes()].concat()));
+    out
+}
+
+#[test]
+fn monero_signs_what_its_owner_saw() {
+    use maki_xmr::request::{read_destination, Payment, Request};
+    let to = "8AB7PQPtducdkghYFN2prK3rZ7zPeL9f2REEdqE4WXYbSZr3797Aqti5xAjRsVy4jTdcwMW11GWejQtqk2kNXxj2QZxJwPZ";
+    let request = Request {
+        network: maki_xmr::Network::Mainnet,
+        account: 0,
+        fee: 30_000_000,
+        change: 470_000_000,
+        payments: vec![Payment { address: to.into(), amount: 1_500_000_000_000, destination: read_destination(to).unwrap().1 }],
+        inputs: vec![xmr_input(4, 0, 1_000_000_000_000), xmr_input(5, 2, 500_500_000_000)],
+    };
+    let bytes = request.to_bytes();
+    assert!(bytes.len() > 2400);
+    let r = run_wallet("monero", xmr_messages(&bytes, 1), vec![Answer::Yes], false);
+    let review = &r.reviews[0];
+    assert_eq!((review.question.as_str(), review.detail.as_str()), ("Sign and spend", "Total 1.50003 XMR"));
+    let pages: Vec<(&str, &str, &str)> = review.pages.iter().map(|p| (p.heading.as_str(), p.value.as_str(), p.mono.as_str())).collect();
+    assert_eq!(pages, [("Send", "1.5 XMR", to), ("Change", "0.00047 XMR", "back to you"), ("Fee", "0.00003 XMR", "")]);
+    // taken whole, signed, and fetched
+    let signed_size = u32::from_le_bytes(r.replies[0][1..5].try_into().unwrap()) as usize;
+    assert_eq!(r.replies[0][0], 0);
+    let fetched = &r.replies[1];
+    assert_eq!((fetched[0], u32::from_le_bytes(fetched[1..5].try_into().unwrap()) as usize), (0, signed_size));
+    let signed = maki_xmr::spend::Signed::from_bytes(&fetched[9..]).unwrap();
+    let tx = maki_xmr::tx::Transaction::from_bytes(&signed.transaction).unwrap();
+    assert_eq!((tx.prefix.inputs.len(), tx.prefix.outputs.len(), tx.base.fee), (2, 2, 30_000_000));
+    assert_eq!(signed.own.len(), 1, "the change's key image");
+
+    // a no signs nothing; an output that isn't the account's, maki says so
+    let r = run_wallet("monero", xmr_messages(&bytes, 0), vec![Answer::No], false);
+    assert_eq!(r.replies, [vec![1u8]]);
+    let mut theirs = request.clone();
+    theirs.inputs[1].subaddress = 3;
+    let r = run_wallet("monero", xmr_messages(&theirs.to_bytes(), 0), vec![Answer::Yes], false);
+    assert_eq!((r.replies[0][0], texts(&r.replies[0])), (5, vec!["input 2 isn't this wallet's".to_string()]));
+    // not a request: refused before the owner sees anything
+    let r = run_wallet("monero", xmr_messages(&bytes[..bytes.len() - 1], 0), vec![Answer::Yes], false);
+    assert_eq!((r.replies[0][0], texts(&r.replies[0])), (5, vec!["not a request maki can read".to_string()]));
+    assert!(r.reviews.is_empty());
+}

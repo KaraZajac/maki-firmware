@@ -145,10 +145,49 @@ fn monero_as_ledger_and_every_wallet_has_it() {
         "tavern judge beyond bifocals deepest mural onward dummy eagle diode gained vacation rally cause firm idled \
          jerseys moat vigilant upload bobsled jobs cunning doing jobs"
     );
+    // the view key: the one every wallet makes from the spend key
+    let view_key: String = ask(op::MONERO_VIEW_KEY, &[]).unwrap().iter().map(|b| format!("{b:02x}")).collect();
+    assert_eq!(view_key, "0f3fe25d0c6d4c94dde0c0bcc214b233e9c72927f813728b0f01f28f9d5e1201");
+    // an output of the account's: its key image and proof; one that isn't, none
+    use maki_xmr::sign::{self, Scalar, G};
+    let r = Scalar::from_bytes_mod_order([3; 32]);
+    let out = sign::pay(&r, &sign::point(&view).unwrap(), &sign::point(&spend).unwrap(), 4, 1000);
+    let output = [&(G * r).compress().to_bytes()[..], &4u64.to_le_bytes(), &[0; 8], &out.key].concat();
+    let image = ask(op::MONERO_KEY_IMAGE, &output).unwrap();
+    assert_eq!(image.len(), 96);
+    let mut theirs = output.clone();
+    theirs[40] = 1;
+    assert_eq!(ask(op::MONERO_KEY_IMAGE, &theirs).err(), Some(Error::Key));
+    assert_eq!(ask(op::MONERO_KEY_IMAGE, &output[..79]).err(), Some(Error::Failed));
+    // a transaction: signed, or why not
+    let to = "8AB7PQPtducdkghYFN2prK3rZ7zPeL9f2REEdqE4WXYbSZr3797Aqti5xAjRsVy4jTdcwMW11GWejQtqk2kNXxj2QZxJwPZ";
+    let ring: Vec<maki_xmr::request::Member> = (0..16u64)
+        .map(|i| maki_xmr::request::Member {
+            global: 10 + i,
+            key: if i == 3 { out.key } else { (G * Scalar::from(i + 7)).compress().to_bytes() },
+            commitment: if i == 3 { out.commitment } else { sign::commit(&Scalar::from(i), i).compress().to_bytes() },
+        })
+        .collect();
+    let request = maki_xmr::request::Request {
+        network: Network::Mainnet,
+        account: 0,
+        fee: 100,
+        change: 0,
+        payments: vec![maki_xmr::request::Payment { address: to.into(), amount: 900, destination: maki_xmr::request::read_destination(to).unwrap().1 }],
+        inputs: vec![maki_xmr::request::Input { amount: 1000, tx_key: output[..32].try_into().unwrap(), index: 4, subaddress: 0, real: 3, ring }],
+    };
+    let signed = ask(op::MONERO_SIGN, &request.to_bytes()).unwrap();
+    assert_eq!(signed[0], 0);
+    assert!(maki_xmr::spend::Signed::from_bytes(&signed[1..]).is_some());
+    let mut lie = request.clone();
+    lie.fee = 101;
+    lie.inputs[0].amount = 1001;
+    assert_eq!(ask(op::MONERO_SIGN, &lie.to_bytes()).unwrap(), [&[1u8][..], b"input 1's amount isn't what the chain has"].concat());
+    assert_eq!(ask(op::MONERO_SIGN, &[1, 2, 3]).unwrap(), [&[1u8][..], b"not a request maki can read"].concat());
     // on Monero's coin type alone: no other coin's key becomes a Monero wallet
     for other in ["m/44'/60'/0'/0/0", "m/84'/0'/0'/0/0", "m/44'", "m"] {
         let p = parse_path(other).unwrap();
-        for which in [op::MONERO_PUBLIC, op::MONERO_WORDS] {
+        for which in [op::MONERO_PUBLIC, op::MONERO_WORDS, op::MONERO_VIEW_KEY] {
             assert_eq!(answer(&ours, which, &p, &[], &[0; 32]).err(), Some(Error::Path), "{other}");
         }
     }

@@ -19,6 +19,8 @@ wasmi = { version = "2.0", default-features = false, features = [
 maki-bundle = { path = "../maki-bundle" }
 # wallet apps' paths (host API 3)
 maki-hd = { path = "../maki-hd" }
+# the Monero transactions it's asked to sign (host API 5): how many signatures they take
+maki-xmr = { path = "../maki-xmr" }
 # apps' Ed25519 keys (the keys permission): the Baochip build, as maki-bundle has it
 ed25519-dalek = { package = "ed25519-dalek-compat", path = "../../bao1x-boot/ed25519-dalek-compat", default-features = false, features = ["zeroize"] }
 zeroize = "1.8.1"

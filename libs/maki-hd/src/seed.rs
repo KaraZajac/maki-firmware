@@ -185,15 +185,45 @@ impl Kept {
     }
 }
 
+/// The range proofs' generators, made the first time Monero is spent and kept for the next:
+/// making them takes longer than a proof. Behind a spin lock, as `Kept` is.
+struct Generators {
+    busy: AtomicBool,
+    generators: UnsafeCell<maki_xmr::bulletproof::Generators>,
+}
+
+// SAFETY: `generators` is only reached through `with`, which holds `busy` for the whole of it.
+unsafe impl Sync for Generators {}
+
+impl Generators {
+    fn with<R>(&self, f: impl FnOnce(&mut maki_xmr::bulletproof::Generators) -> R) -> R {
+        while self.busy.compare_exchange_weak(false, true, Ordering::Acquire, Ordering::Relaxed).is_err() {
+            core::hint::spin_loop();
+        }
+        // SAFETY: `busy` is ours until it's released below
+        let r = f(unsafe { &mut *self.generators.get() });
+        self.busy.store(false, Ordering::Release);
+        r
+    }
+}
+
 /// The keys a seed makes.
 pub struct SeedKeys {
     master: Xpriv,
     kept: Kept,
+    generators: Generators,
 }
 
 impl SeedKeys {
     pub fn from_seed(seed: &[u8]) -> Result<SeedKeys, Error> {
-        Ok(SeedKeys { master: Xpriv::master(seed)?, kept: Kept { busy: AtomicBool::new(false), keys: UnsafeCell::new(Vec::new()) } })
+        Ok(SeedKeys {
+            master: Xpriv::master(seed)?,
+            kept: Kept { busy: AtomicBool::new(false), keys: UnsafeCell::new(Vec::new()) },
+            generators: Generators {
+                busy: AtomicBool::new(false),
+                generators: UnsafeCell::new(maki_xmr::bulletproof::Generators::new()),
+            },
+        })
     }
 
     /// The key at `path`, from the deepest key kept on the way to it.
@@ -306,6 +336,8 @@ impl Keys for OneKey {
 /// maki and the simulator answer apps): the answer's bytes. `aux` is BIP340's auxiliary
 /// randomness for a Schnorr signature. Which paths an app may use is the caller's to check.
 pub fn answer(keys: &SeedKeys, which: u8, path: &[u32], digest: &[u8], aux: &[u8; 32]) -> Result<Vec<u8>, Error> {
+    // what's asked, whole: a Monero output, or a transaction to sign
+    let asked = digest;
     let indices = || -> Result<(u32, u32), Error> {
         let d: &[u8; 8] = digest.try_into().map_err(|_| Error::Failed)?;
         Ok((u32::from_le_bytes(d[..4].try_into().unwrap()), u32::from_le_bytes(d[4..].try_into().unwrap())))
@@ -341,6 +373,28 @@ pub fn answer(keys: &SeedKeys, which: u8, path: &[u32], digest: &[u8], aux: &[u8
             [spend, view].concat()
         }
         op::MONERO_WORDS => keys.monero(path)?.words().join(" ").into_bytes(),
+        op::MONERO_VIEW_KEY => keys.monero(path)?.view_bytes().to_vec(),
+        op::MONERO_KEY_IMAGE => {
+            let d: &[u8; 80] = asked.try_into().map_err(|_| Error::Failed)?;
+            let tx_key = maki_xmr::sign::point(d[..32].try_into().unwrap()).ok_or(Error::Key)?;
+            let index = u64::from_le_bytes(d[32..40].try_into().unwrap());
+            let (major, minor) = (u32::from_le_bytes(d[40..44].try_into().unwrap()), u32::from_le_bytes(d[44..48].try_into().unwrap()));
+            let key: &[u8; 32] = d[48..].try_into().unwrap();
+            let (image, proof) = keys.monero(path)?.key_image_proof(&tx_key, index, major, minor, key, aux).ok_or(Error::Key)?;
+            [&image[..], &proof[..]].concat()
+        }
+        op::MONERO_SIGN => {
+            let account = keys.monero(path)?;
+            let signed = maki_xmr::request::Request::parse(asked)
+                .map_err(|e| alloc::format!("{e}"))
+                .and_then(|request| {
+                    keys.generators.with(|g| maki_xmr::spend::sign_with(&account, &request, aux, g)).map_err(|e| alloc::format!("{e}"))
+                });
+            match signed {
+                Ok(signed) => [&[0u8][..], &signed.to_bytes()].concat(),
+                Err(why) => [&[1u8][..], why.as_bytes()].concat(),
+            }
+        }
         _ => return Err(Error::Failed),
     })
 }

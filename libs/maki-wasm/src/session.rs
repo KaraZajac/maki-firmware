@@ -340,13 +340,57 @@ impl Session {
             return Err(INVALID);
         }
         self.wallet_path(path)?;
+        self.allowed(1)?;
+        self.platform.wallet(scheme, path, digest)
+    }
+
+    /// Takes `n` of what the owner's last yes to a review allows, or refuses and ends it.
+    fn allowed(&mut self, n: u32) -> Result<(), i32> {
         let (left, until) = self.allowance;
-        if left == 0 || self.platform.millis() > until {
+        if left < n || n == 0 || self.platform.millis() > until {
             self.allowance = (0, 0);
             return Err(REFUSED);
         }
-        self.allowance.0 -= 1;
-        self.platform.wallet(scheme, path, digest)
+        self.allowance.0 -= n;
+        Ok(())
+    }
+
+    /// The wallet permission (host API 5): the secret view key of the Monero account at `path`
+    /// (one of its own), what a computer finds the account's outputs with, and can't spend them,
+    /// if the owner's last yes to a review allows one more.
+    pub fn wallet_monero_view_key(&mut self, path: &[u32]) -> Result<[u8; 32], i32> {
+        self.needs(Permission::Wallet)?;
+        self.wallet_path(path)?;
+        self.allowed(1)?;
+        self.platform.wallet(maki_hd::op::MONERO_VIEW_KEY, path, &[])?.try_into().map_err(|_| FAILED)
+    }
+
+    /// The wallet permission (host API 5): the key image of an output of the Monero account at
+    /// `path` (one of its own), and what proves it, for a view-only wallet to learn what's spent:
+    /// `output` is its transaction key, index, subaddress and key (`maki_hd::op::MONERO_KEY_IMAGE`).
+    /// `FAILED` for an output that isn't the account's.
+    pub fn wallet_monero_key_image(&mut self, path: &[u32], output: &[u8]) -> Result<[u8; 96], i32> {
+        self.needs(Permission::Wallet)?;
+        if output.len() != MONERO_OUTPUT {
+            return Err(INVALID);
+        }
+        self.wallet_path(path)?;
+        self.platform.wallet(maki_hd::op::MONERO_KEY_IMAGE, path, output)?.try_into().map_err(|_| FAILED)
+    }
+
+    /// The wallet permission (host API 5): a Monero transaction, made and signed by maki, from the
+    /// account at `path` (one of its own): `request` says what it pays (`maki_xmr::request`). A
+    /// signature for each input, of what the owner's last yes allows. 0 and the signed transaction
+    /// (`maki_xmr::spend::Signed`), or 1 and why maki didn't sign.
+    pub fn wallet_monero_sign(&mut self, path: &[u32], request: &[u8]) -> Result<Vec<u8>, i32> {
+        self.needs(Permission::Wallet)?;
+        if request.len() > MAX_MONERO_REQUEST {
+            return Err(TOO_BIG);
+        }
+        let inputs = maki_xmr::request::Request::parse(request).map_err(|_| INVALID)?.inputs.len();
+        self.wallet_path(path)?;
+        self.allowed(inputs as u32)?;
+        self.platform.wallet(maki_hd::op::MONERO_SIGN, path, request)
     }
 
     /// The keyboard permission: printable ASCII, newlines and tabs.

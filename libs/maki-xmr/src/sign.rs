@@ -157,13 +157,19 @@ pub struct Output {
 /// key must then be r times its spend key).
 pub fn pay(r: &Scalar, view: &EdwardsPoint, spend: &EdwardsPoint, index: u64, amount: u64) -> Output {
     let mut shared = derivation(r, view);
-    let scalar = output_scalar(&shared, index);
-    let tag = view_tag(&shared, index);
+    let out = output(&shared, index, spend, amount);
     shared.zeroize();
+    out
+}
+
+/// Output `index`, from the derivation it's made with (8·r·A as the sender has it, 8·a·R as the
+/// receiver does), paying `amount` to spend key `spend`.
+pub fn output(derivation: &[u8; 32], index: u64, spend: &EdwardsPoint, amount: u64) -> Output {
+    let scalar = output_scalar(derivation, index);
     let mask = commitment_mask(&scalar);
     Output {
         key: (G * scalar + spend).compress().to_bytes(),
-        view_tag: tag,
+        view_tag: view_tag(derivation, index),
         encrypted_amount: encrypt_amount(amount, &scalar),
         commitment: commit(&mask, amount).compress().to_bytes(),
         mask,

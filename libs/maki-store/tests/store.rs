@@ -71,6 +71,7 @@ fn manifest(version: u32, permissions: Vec<(Permission, String)>) -> Manifest {
         memory_kib: 64,
         backup: false,
         description: String::new(),
+        wallet: None,
     }
 }
 

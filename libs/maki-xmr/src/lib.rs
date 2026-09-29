@@ -21,6 +21,12 @@ mod keys;
 pub mod words;
 #[cfg(feature = "keys")]
 pub mod sign;
+#[cfg(feature = "keys")]
+pub mod bulletproof;
+#[cfg(feature = "keys")]
+pub mod spend;
+pub mod request;
+pub mod tx;
 
 #[cfg(feature = "keys")]
 pub use keys::Keys;
@@ -63,6 +69,15 @@ impl Network {
             (Network::Stagenet, Kind::Subaddress) => 36,
         }
     }
+
+    /// The tag an integrated address (a standard one with a payment ID) starts with.
+    fn integrated_tag(self) -> u8 {
+        match self {
+            Network::Mainnet => 19,
+            Network::Testnet => 54,
+            Network::Stagenet => 25,
+        }
+    }
 }
 
 /// Keccak-256, as Monero hashes (Keccak's own padding, not SHA-3's).
@@ -75,6 +90,19 @@ pub fn address(network: Network, kind: Kind, spend: &[u8; 32], view: &[u8; 32]) 
     data.push(network.tag(kind));
     data.extend_from_slice(spend);
     data.extend_from_slice(view);
+    let check = keccak(&data);
+    data.extend_from_slice(&check[..4]);
+    base58::encode(&data)
+}
+
+/// An integrated address: a standard address with a payment ID, which a payment to it carries,
+/// encrypted (106 characters).
+pub fn integrated_address(network: Network, spend: &[u8; 32], view: &[u8; 32], payment_id: &[u8; 8]) -> String {
+    let mut data = Vec::with_capacity(77);
+    data.push(network.integrated_tag());
+    data.extend_from_slice(spend);
+    data.extend_from_slice(view);
+    data.extend_from_slice(payment_id);
     let check = keccak(&data);
     data.extend_from_slice(&check[..4]);
     base58::encode(&data)

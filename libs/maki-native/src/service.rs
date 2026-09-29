@@ -70,6 +70,14 @@ pub const WALLET_SIGN: usize = 35;
 /// path, and its status is the answer (maki shows the words itself).
 pub const WALLET_SUBADDRESS: usize = 36;
 pub const WALLET_SHOW_BACKUP: usize = 37;
+/// Host API 5's, likewise: `WALLET_MONERO_VIEW_KEY` takes the path and gives the account's
+/// secret view key (32 bytes); `WALLET_MONERO_KEY_IMAGE` takes the output (80 bytes, as
+/// `maki_wasm::MONERO_OUTPUT`) and the path, and gives its key image and proof (96);
+/// `WALLET_MONERO_SIGN` takes the request's length (u32), the request and the path, and gives 0 and
+/// the signed transaction, or 1 and why not.
+pub const WALLET_MONERO_VIEW_KEY: usize = 38;
+pub const WALLET_MONERO_KEY_IMAGE: usize = 39;
+pub const WALLET_MONERO_SIGN: usize = 40;
 // a plain scalar
 pub const EXIT: usize = 30;
 /// maki's own, from the app host to itself: look at what's waiting (the owner left the app, or

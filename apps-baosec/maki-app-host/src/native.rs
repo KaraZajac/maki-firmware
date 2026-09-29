@@ -337,6 +337,35 @@ fn lent(session: &mut Session, id: usize, request: &[u8], last_log: &mut String)
             Some(path) => (session.wallet_show_backup(&path), vec![]),
             None => (maki_wasm::INVALID, vec![]),
         },
+        service::WALLET_MONERO_VIEW_KEY => match path_of(request).map(|p| session.wallet_monero_view_key(&p)) {
+            Some(Ok(key)) => (0, key.to_vec()),
+            Some(Err(code)) => (code, vec![]),
+            None => (maki_wasm::INVALID, vec![]),
+        },
+        service::WALLET_MONERO_KEY_IMAGE => {
+            let parsed = (request.len() >= maki_wasm::MONERO_OUTPUT)
+                .then(|| (&request[..maki_wasm::MONERO_OUTPUT], path_of(&request[maki_wasm::MONERO_OUTPUT..])));
+            match parsed {
+                Some((output, Some(path))) => match session.wallet_monero_key_image(&path, output) {
+                    Ok(image) => (0, image.to_vec()),
+                    Err(code) => (code, vec![]),
+                },
+                _ => (maki_wasm::INVALID, vec![]),
+            }
+        }
+        service::WALLET_MONERO_SIGN => {
+            let parsed = request.get(..4).map(|n| u32::from_le_bytes(n.try_into().unwrap()) as usize).and_then(|n| {
+                let asked = request.get(4..4 + n)?;
+                Some((asked, path_of(&request[4 + n..])))
+            });
+            match parsed {
+                Some((asked, Some(path))) => match session.wallet_monero_sign(&path, asked) {
+                    Ok(signed) => (0, signed),
+                    Err(code) => (code, vec![]),
+                },
+                _ => (maki_wasm::INVALID, vec![]),
+            }
+        }
         service::STORAGE_GET => match text().map(|k| session.storage_get(k)) {
             Some(Ok(v)) => (0, v),
             Some(Err(code)) => (code, vec![]),

@@ -119,6 +119,12 @@ pub const WALLET_MONERO_PUBLIC: u8 = 7;
 pub const WALLET_MONERO_SUBADDRESS: u8 = 8;
 /// The Monero spend key's 25 words, for the app host to have maki show its owner: never an app.
 pub const WALLET_MONERO_WORDS: u8 = 9;
+/// The Monero account's secret view key, once the owner has said yes to sharing it.
+pub const WALLET_MONERO_VIEW_KEY: u8 = 10;
+/// An output's key image and its proof; `digest` is the output (`maki_hd::op::MONERO_KEY_IMAGE`).
+pub const WALLET_MONERO_KEY_IMAGE: u8 = 11;
+/// A Monero transaction signed; `digest` is the request (`maki_xmr::request`), up to 64 KiB.
+pub const WALLET_MONERO_SIGN: u8 = 12;
 
 /// A wallet app's request, through the app host, and its answer (`answer`, when `result` is
 /// `RESULT_OK`).
@@ -373,7 +379,15 @@ impl Keys {
     /// app host: the answer's bytes, or a `RESULT_*` code.
     pub fn wallet(&self, op: u8, path: &[u32], digest: &[u8]) -> Result<Vec<u8>, u32> {
         let request = WalletRequest { op, path: path.to_vec(), digest: digest.to_vec(), result: RESULT_FAILED, answer: Vec::new() };
-        let mut buf = Buffer::into_buf(request).map_err(|_| RESULT_FAILED)?;
+        // a page holds a key or a signature; a Monero transaction to sign, and the signed one
+        // coming back (maki-keys sends the request back empty), take more
+        let mut buf = if digest.len() > 1024 {
+            let mut buf = Buffer::new(digest.len() * 2 + 8192);
+            buf.replace(request).map_err(|_| RESULT_FAILED)?;
+            buf
+        } else {
+            Buffer::into_buf(request).map_err(|_| RESULT_FAILED)?
+        };
         buf.lend_mut(self.conn, KeysOp::Wallet.to_u32().unwrap()).map_err(|_| RESULT_FAILED)?;
         let answer = buf.to_original::<WalletRequest, _>().map_err(|_| RESULT_FAILED)?;
         match answer.result {

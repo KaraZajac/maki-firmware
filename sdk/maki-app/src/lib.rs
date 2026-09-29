@@ -99,6 +99,12 @@ mod sys {
         pub fn wallet_subaddress(pptr: *const u32, plen: usize, major: i32, minor: i32, out: *mut u8) -> i32;
         #[cfg(feature = "wallet")]
         pub fn wallet_show_backup(pptr: *const u32, plen: usize) -> i32;
+        #[cfg(feature = "wallet")]
+        pub fn wallet_monero_view_key(pptr: *const u32, plen: usize, out: *mut u8) -> i32;
+        #[cfg(feature = "wallet")]
+        pub fn wallet_monero_key_image(pptr: *const u32, plen: usize, optr: *const u8, out: *mut u8) -> i32;
+        #[cfg(feature = "wallet")]
+        pub fn wallet_monero_sign(pptr: *const u32, plen: usize, rptr: *const u8, rlen: usize, out: *mut u8, cap: usize) -> i32;
     }
 }
 
@@ -692,6 +698,56 @@ pub mod wallet {
             1 => Answer::No,
             _ => Answer::NoAnswer,
         })
+    }
+
+    /// A Monero account's secret view key (host API 5), for the account at `path`: what a computer
+    /// finds the account's outputs with, and can't spend them. It takes one of what the owner's
+    /// last yes to a review allows: ask first.
+    pub fn monero_view_key(path: &[u32]) -> Result<[u8; 32], Error> {
+        let mut out = [0u8; 32];
+        result(unsafe { sys::wallet_monero_view_key(path.as_ptr(), path.len(), out.as_mut_ptr()) })?;
+        Ok(out)
+    }
+
+    /// An output's key image, and what proves it's the image of that output (Monero's ring
+    /// signature of one), as a view-only wallet imports them to learn what's spent (host API 5):
+    /// the output of the account at `path` with key `key`, output `index` of a transaction with
+    /// public key `tx_key` (or the output's own), paid to subaddress `minor` of account `major`.
+    /// `Error::Failed` if it isn't the account's.
+    pub fn monero_key_image(
+        path: &[u32],
+        tx_key: &[u8; 32],
+        index: u64,
+        major: u32,
+        minor: u32,
+        key: &[u8; 32],
+    ) -> Result<([u8; 32], [u8; 64]), Error> {
+        let mut output = [0u8; 80];
+        output[..32].copy_from_slice(tx_key);
+        output[32..40].copy_from_slice(&index.to_le_bytes());
+        output[40..44].copy_from_slice(&major.to_le_bytes());
+        output[44..48].copy_from_slice(&minor.to_le_bytes());
+        output[48..].copy_from_slice(key);
+        let mut out = [0u8; 96];
+        result(unsafe { sys::wallet_monero_key_image(path.as_ptr(), path.len(), output.as_ptr(), out.as_mut_ptr()) })?;
+        Ok((out[..32].try_into().unwrap(), out[32..].try_into().unwrap()))
+    }
+
+    /// A Monero transaction made and signed by maki (host API 5), from the account at `path`:
+    /// `request` says what it spends and pays (`maki_xmr::request`); maki makes the outputs, the
+    /// range proof and a signature for each input, of what the owner's last yes allows. The
+    /// signed transaction (`maki_xmr::spend::Signed`'s bytes), or why maki didn't sign.
+    pub fn monero_sign(path: &[u32], request: &[u8]) -> Result<Result<Vec<u8>, String>, Error> {
+        let mut out = alloc::vec![0u8; request.len() + 8192];
+        let n = result(unsafe {
+            sys::wallet_monero_sign(path.as_ptr(), path.len(), request.as_ptr(), request.len(), out.as_mut_ptr(), out.len())
+        })? as usize;
+        out.truncate(n);
+        match out.split_first() {
+            Some((0, signed)) => Ok(Ok(signed.to_vec())),
+            Some((_, why)) => Ok(Err(String::from_utf8_lossy(why).into_owned())),
+            None => Err(Error::Failed),
+        }
     }
 
     fn sign<const N: usize>(path: &[u32], digest: &[u8; 32], scheme: i32) -> Result<[u8; N], Error> {

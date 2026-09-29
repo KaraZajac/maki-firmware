@@ -21,7 +21,7 @@ pub use session::{Session, REFUSED};
 use wasmi::{Caller, Config, Engine, Error, Extern, Linker, Memory, Module, Store, StoreLimits, StoreLimitsBuilder};
 
 /// The functions this host offers apps.
-pub const API_VERSION: u16 = 4;
+pub const API_VERSION: u16 = 5;
 
 /// Functions that came after host API 1, and with which: an app calling one says that API or later.
 pub const SINCE: &[(&str, u16)] = &[
@@ -35,6 +35,9 @@ pub const SINCE: &[(&str, u16)] = &[
     ("wallet_sign", 3),
     ("wallet_subaddress", 4),
     ("wallet_show_backup", 4),
+    ("wallet_monero_view_key", 5),
+    ("wallet_monero_key_image", 5),
+    ("wallet_monero_sign", 5),
 ];
 
 /// What maki's functions return for failures they report (rather than stopping the app).
@@ -90,6 +93,11 @@ pub const WALLET_SIGN_TAPROOT: u8 = maki_hd::op::SIGN_TAPROOT;
 /// Host API 4: Monero's public spend and view keys (64 bytes), from `wallet_public`; on Monero's
 /// coin type alone.
 pub const WALLET_MONERO: u8 = maki_hd::op::MONERO_PUBLIC;
+/// Host API 5: a Monero output, as `wallet_monero_key_image` takes it: its transaction's key, its
+/// index there, the subaddress it was paid to (account and index) and its key.
+pub const MONERO_OUTPUT: usize = 32 + 8 + 4 + 4 + 32;
+/// The biggest transaction `wallet_monero_sign` takes to sign (`maki_xmr::request`): 16 inputs.
+pub const MAX_MONERO_REQUEST: usize = 64 * 1024;
 /// A review's text, pages, and each page's parts, in bytes. A page's text runs on over as many
 /// screens as it takes ("Message (2)"): a message to sign can be 4 KiB, and a transaction 64
 /// payments, their change and the fee.
@@ -127,6 +135,9 @@ pub const GATED: &[(&str, Permission)] = &[
     ("wallet_sign", Permission::Wallet),
     ("wallet_subaddress", Permission::Wallet),
     ("wallet_show_backup", Permission::Wallet),
+    ("wallet_monero_view_key", Permission::Wallet),
+    ("wallet_monero_key_image", Permission::Wallet),
+    ("wallet_monero_sign", Permission::Wallet),
 ];
 
 /// What `wait` hands the app.
@@ -842,6 +853,51 @@ fn link(linker: &mut Linker<State>) -> Result<(), Error> {
         let Some(path) = read_path(&c, pptr, plen, "wallet_show_backup")? else { return Ok(INVALID) };
         Ok(c.data_mut().session.wallet_show_backup(&path))
     })?;
+    linker.func_wrap(M, "wallet_monero_view_key", |mut c: Caller<'_, State>, pptr: i32, plen: i32, out: i32| -> Result<i32, Error> {
+        permitted(&c, Permission::Wallet, "wallet_monero_view_key")?;
+        let Some(path) = read_path(&c, pptr, plen, "wallet_monero_view_key")? else { return Ok(INVALID) };
+        match c.data_mut().session.wallet_monero_view_key(&path) {
+            Ok(mut key) => {
+                let written = write(&mut c, out, &key, "wallet_monero_view_key");
+                zeroize::Zeroize::zeroize(&mut key);
+                written.map(|_| 0)
+            }
+            Err(code) => Ok(code),
+        }
+    })?;
+    linker.func_wrap(
+        M,
+        "wallet_monero_key_image",
+        |mut c: Caller<'_, State>, pptr: i32, plen: i32, optr: i32, out: i32| -> Result<i32, Error> {
+            permitted(&c, Permission::Wallet, "wallet_monero_key_image")?;
+            let Some(path) = read_path(&c, pptr, plen, "wallet_monero_key_image")? else { return Ok(INVALID) };
+            let output = read(&c, optr, MONERO_OUTPUT as i32, MONERO_OUTPUT, "wallet_monero_key_image")?;
+            match c.data_mut().session.wallet_monero_key_image(&path, &output) {
+                Ok(image) => write(&mut c, out, &image, "wallet_monero_key_image").map(|_| 0),
+                Err(code) => Ok(code),
+            }
+        },
+    )?;
+    linker.func_wrap(
+        M,
+        "wallet_monero_sign",
+        |mut c: Caller<'_, State>, pptr: i32, plen: i32, rptr: i32, rlen: i32, out: i32, cap: i32| -> Result<i32, Error> {
+            permitted(&c, Permission::Wallet, "wallet_monero_sign")?;
+            let Some(path) = read_path(&c, pptr, plen, "wallet_monero_sign")? else { return Ok(INVALID) };
+            if rlen as u32 as usize > MAX_MONERO_REQUEST {
+                return Ok(TOO_BIG);
+            }
+            let request = read(&c, rptr, rlen, MAX_MONERO_REQUEST, "wallet_monero_sign")?;
+            let signed = c.data_mut().session.wallet_monero_sign(&path, &request);
+            // maki's time, not the app's
+            let fuel = c.data().session.limits.fuel;
+            c.set_fuel(fuel)?;
+            match signed {
+                Ok(bytes) => written(&mut c, out, cap, &bytes, "wallet_monero_sign"),
+                Err(code) => Ok(code),
+            }
+        },
+    )?;
     linker.func_wrap(M, "type_text", |mut c: Caller<'_, State>, ptr: i32, len: i32| -> Result<i32, Error> {
         permitted(&c, Permission::Keyboard, "type_text")?;
         if len as u32 as usize > MAX_TYPE {

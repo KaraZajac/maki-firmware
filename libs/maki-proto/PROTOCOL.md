@@ -354,11 +354,40 @@ same wallet there, and the spend key's 25 words restore it in any Monero wallet.
 owner those words itself, from the app's menu, once they've said they want them: they never
 leave maki, not even for the app. `network` is 0 (Monero), 1 (testnet) or 2 (stagenet).
 
+A computer finds the wallet's outputs with its view key, which maki gives once its owner says
+so, and can't spend them: maki makes every transaction itself, from what the computer asks it to
+pay (maki desktop's own wallet, or a view-only wallet's file: the Monero GUI's, the CLI's).
+
 | Message | Answer |
 |---|---|
 | `D` `network:u8` `account:u32` `index:u32` | `status` `address:str16` |
+| `W` `network:u8` | `status` `address:str16` `view_key:32` |
+| `K` `count:u8` then `count` × (`tx_key:32` `index:u64` `account:u32` `subaddress:u32` `key:32`) | `status` then `count` × (`key_image:32` `proof:64`), or `status` `why:str16` |
+| `S` `network:u8` `total:u32` `offset:u32` `piece` | `status` (`6`: send the next piece), then `size:u32`, or `why:str16` |
+| `G` `offset:u32` | `status` `total:u32` `offset:u32` `piece` |
 
 - **`D`** puts an address on maki's screen, the whole of it, for the owner to compare with what
   the computer shows: account 0's index 0 is the primary address, any other a subaddress (made
   with the view key, which maki keeps). 0 if they said it matches, 1 if it doesn't (then the
   computer's copy isn't to be trusted); `address` is maki's, either way.
+- **`W`** asks the owner to let the computer watch the wallet, showing the primary address: on a
+  yes, the address and the secret view key, what finds the wallet's payments and balance and
+  can't spend them. The app remembers the yes.
+- **`K`** gives outputs' key images, what marks each one spent, and with each Monero's proof
+  that it's that output's (a ring signature of one, over the key image), as a view-only wallet
+  imports them: up to 40 at once, each an output of the wallet's (its transaction's public key, or
+  the output's own additional key; its index in that transaction; the subaddress it was paid
+  to). Refused (5) until the owner has let a computer watch, and for an output that isn't the
+  wallet's.
+- **`S`** sends what to pay, in pieces of up to 4000 bytes, `offset` counting from 0: the request
+  (`libs/maki-xmr/src/request.rs`), with the outputs spent, each with its ring of 16 as the chain
+  has them, and the payments, the change and the fee. With the last piece the app shows each
+  payment (the whole address, and an integrated address's payment ID), the change and the fee,
+  "High fee!" over a tenth of what's paid, then "sign" or "reject". On a yes maki makes the
+  transaction as Monero's own wallet makes one (the outputs and their keys, the change or
+  wallet2's output of nothing, a range proof over every amount) and signs each input; the answer
+  is the signed transaction's size, to fetch with **`G`**: the transaction (a u32 length, then
+  it, ready for `send_raw_transaction`), its secret key and any additional keys (what proves a
+  payment), each output's kind (a payment's index, 0xfe change, 0xff nothing) and the change's
+  key images (`maki_xmr::spend::Signed`). maki refuses (5, with why) to spend an output that
+  isn't the wallet's or an amount its commitment on the chain doesn't hide.

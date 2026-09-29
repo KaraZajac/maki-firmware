@@ -52,9 +52,20 @@ impl Keys {
         (spend.compress().to_bytes(), view.compress().to_bytes())
     }
 
+    /// Subaddress `minor` of account `major`'s public spend and view keys, as points.
+    pub(crate) fn subaddress_points(&self, major: u32, minor: u32) -> (EdwardsPoint, EdwardsPoint) {
+        if (major, minor) == (0, 0) {
+            return (point(&self.spend), point(&self.view));
+        }
+        let mut m = self.subaddress_scalar(major, minor);
+        let spend = point(&self.spend) + point(&m);
+        m.zeroize();
+        (spend, self.view * spend)
+    }
+
     /// What a subaddress's spend key adds to the account's: Hs("SubAddr" ‖ view key ‖ major ‖
     /// minor).
-    fn subaddress_scalar(&self, major: u32, minor: u32) -> Scalar {
+    pub(crate) fn subaddress_scalar(&self, major: u32, minor: u32) -> Scalar {
         let mut data = [0u8; 8 + 32 + 8];
         data[..8].copy_from_slice(b"SubAddr\0");
         data[8..40].copy_from_slice(self.view.as_bytes());
@@ -110,6 +121,67 @@ impl Keys {
         (sign::commit(&mask, amount) == *commitment).then_some((amount, mask))
     }
 
+    /// The mask of the commitment to output `index`'s amount, in a transaction whose public key
+    /// (or the output's own) is `tx_key`, if the output is this account's: how maki opens a
+    /// commitment to spend it. (A coinbase output's mask is 1.)
+    pub fn output_mask(&self, tx_key: &EdwardsPoint, index: u64) -> Scalar {
+        let mut shared = sign::derivation(&self.view, tx_key);
+        let mut scalar = sign::output_scalar(&shared, index);
+        shared.zeroize();
+        let mask = sign::commitment_mask(&scalar);
+        scalar.zeroize();
+        mask
+    }
+
+    /// Output `index`'s key image, with what proves it's the key image of the output with key
+    /// `key` (Monero's ring signature, of that key alone, over the image itself), as wallet2
+    /// exports key images to a view-only wallet: None unless the output is this account's, paid
+    /// to subaddress `minor` of account `major`. `aux` is fresh randomness.
+    pub fn key_image_proof(
+        &self,
+        tx_key: &EdwardsPoint,
+        index: u64,
+        major: u32,
+        minor: u32,
+        key: &[u8; 32],
+        aux: &[u8; 32],
+    ) -> Option<([u8; 32], [u8; 64])> {
+        let point_key = sign::point(key)?;
+        let mut secret = self.output_secret(tx_key, index, major, minor);
+        if point(&secret) != point_key {
+            secret.zeroize();
+            return None;
+        }
+        let hp = sign::hash_to_point(key);
+        let image = (secret * hp).compress().to_bytes();
+        // k from the secret, what's signed and the randomness: fresh, and never repeated
+        let mut data = [0u8; 32 + 32 + 32 + 20];
+        data[..32].copy_from_slice(secret.as_bytes());
+        data[32..64].copy_from_slice(&image);
+        data[64..96].copy_from_slice(aux);
+        data[96..].copy_from_slice(b"maki key image proof");
+        let mut wide = [0u8; 64];
+        wide[..32].copy_from_slice(&crate::keccak(&data));
+        data[..32].copy_from_slice(&[0xa5; 32]);
+        wide[32..].copy_from_slice(&crate::keccak(&data));
+        data.zeroize();
+        let mut k = Scalar::from_bytes_mod_order_wide(&wide);
+        wide.zeroize();
+        // c = Hs(image ‖ k·G ‖ k·Hp(key)), r = k - c·x
+        let mut buf = [0u8; 96];
+        buf[..32].copy_from_slice(&image);
+        buf[32..64].copy_from_slice(point(&k).compress().as_bytes());
+        buf[64..].copy_from_slice((k * hp).compress().as_bytes());
+        let c = hash_to_scalar(&buf);
+        let r = k - c * secret;
+        k.zeroize();
+        secret.zeroize();
+        let mut proof = [0u8; 64];
+        proof[..32].copy_from_slice(c.as_bytes());
+        proof[32..].copy_from_slice(r.as_bytes());
+        Some((image, proof))
+    }
+
     /// The spend key's 25 words: the backup Monero wallets restore from.
     pub fn words(&self) -> [&'static str; 25] { crate::words::encode(self.spend.as_bytes()) }
 
@@ -118,6 +190,10 @@ impl Keys {
 
     /// The view key, as 32 bytes.
     pub fn view_bytes(&self) -> [u8; 32] { self.view.to_bytes() }
+
+    pub(crate) fn view(&self) -> &Scalar { &self.view }
+
+    pub(crate) fn spend(&self) -> &Scalar { &self.spend }
 }
 
 fn point(s: &Scalar) -> EdwardsPoint { ED25519_BASEPOINT_POINT * s }

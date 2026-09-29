@@ -840,6 +840,8 @@ fn main() -> ! {
             }
             Some(KeysOp::Wallet) => {
                 let Some(mem) = msg.body.memory_message_mut() else { continue };
+                // what the answer has room for: xous-ipc panics on one that doesn't fit
+                let room = mem.buf.len();
                 let mut buffer = unsafe { Buffer::from_memory_message_mut(mem) };
                 let Ok(mut req) = buffer.to_original::<WalletRequest, _>() else { continue };
                 req.answer.clear();
@@ -866,6 +868,13 @@ fn main() -> ! {
                         },
                     }
                 };
+                // the asker has what it asked; the answer goes back alone
+                req.digest.zeroize();
+                req.digest.clear();
+                if req.answer.len() + 4 * req.path.len() + 256 > room {
+                    req.answer.clear();
+                    req.result = RESULT_FAILED;
+                }
                 buffer.replace(req).ok();
             }
             Some(KeysOp::FidoKeys) => {

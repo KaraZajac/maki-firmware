@@ -750,6 +750,7 @@ dependencies = [
  "maki-bundle",
  "maki-hd",
  "maki-native",
+ "maki-xmr",
  "qrcode",
  "sha2",
  "wasmi",

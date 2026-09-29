@@ -371,6 +371,39 @@ mod wallet_calls {
         let Some(path) = path_bytes(pptr, plen) else { return INVALID };
         request(service::WALLET_SHOW_BACKUP, &path, 0).0
     }
+
+    pub unsafe fn wallet_monero_view_key(pptr: *const u32, plen: usize, out: *mut u8) -> i32 {
+        let Some(path) = path_bytes(pptr, plen) else { return INVALID };
+        let (status, got) = request(service::WALLET_MONERO_VIEW_KEY, &path, 32);
+        match fits(status, &got, out, 32) {
+            32 => 0,
+            n if n < 0 => n,
+            _ => -5,
+        }
+    }
+
+    pub unsafe fn wallet_monero_key_image(pptr: *const u32, plen: usize, optr: *const u8, out: *mut u8) -> i32 {
+        let Some(path) = path_bytes(pptr, plen) else { return INVALID };
+        let mut payload = Vec::with_capacity(80 + path.len());
+        payload.extend_from_slice(slice(optr, 80));
+        payload.extend_from_slice(&path);
+        let (status, got) = request(service::WALLET_MONERO_KEY_IMAGE, &payload, 96);
+        match fits(status, &got, out, 96) {
+            96 => 0,
+            n if n < 0 => n,
+            _ => -5,
+        }
+    }
+
+    pub unsafe fn wallet_monero_sign(pptr: *const u32, plen: usize, rptr: *const u8, rlen: usize, out: *mut u8, cap: usize) -> i32 {
+        let Some(path) = path_bytes(pptr, plen) else { return INVALID };
+        let mut payload = Vec::with_capacity(4 + rlen + path.len());
+        payload.extend_from_slice(&(rlen as u32).to_le_bytes());
+        payload.extend_from_slice(slice(rptr, rlen));
+        payload.extend_from_slice(&path);
+        let (status, got) = request(service::WALLET_MONERO_SIGN, &payload, cap);
+        fits(status, &got, out, cap)
+    }
 }
 #[cfg(feature = "wallet")]
 pub use wallet_calls::*;

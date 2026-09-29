@@ -113,6 +113,19 @@ pub mod op {
     /// The Monero spend key's 25 words (UTF-8, a space between each), for maki to show its owner
     /// itself: never an app's.
     pub const MONERO_WORDS: u8 = 9;
+    /// The Monero account's secret view key (32 bytes): what a computer finds the account's
+    /// outputs with, and can't spend them. maki gives it once its owner says yes.
+    pub const MONERO_VIEW_KEY: u8 = 10;
+    /// An output of the account's key image, and what proves it (Monero's ring signature of one,
+    /// 64 bytes): what a view-only wallet learns what's spent from. The digest is the output's
+    /// transaction key (32 bytes), its index there (u64), the subaddress it was paid to (account
+    /// and index, u32s) and its key (32), little-endian; refused unless it's the account's.
+    pub const MONERO_KEY_IMAGE: u8 = 11;
+    /// A Monero transaction, signed: the digest is what's to be paid (`maki_xmr::request`); the
+    /// answer 0 and the signed transaction (`maki_xmr::spend::Signed`), or 1 and why not (UTF-8).
+    /// maki makes everything that decides where the money goes: the outputs, the range proof and
+    /// each input's signature.
+    pub const MONERO_SIGN: u8 = 12;
 }
 
 /// A path as people write it, `m/84'/0'/0'` (or `84h/0h/0h`, with or without the `m/`), as
