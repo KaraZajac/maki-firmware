@@ -578,6 +578,18 @@ fn main() -> ! {
     log_server::init_wait().unwrap();
     log::set_max_level(log::LevelFilter::Info);
     log::info!("maki-keys PID is {}", xous::process::id());
+    // Xous starts a process with 512 KiB of heap at most. A Monero transaction's range proof
+    // takes more: about a third of a MiB beside what's kept for two outputs, 1.7 MiB in all for
+    // sixteen. The swapper pages it like any other, and it's only taken as it's used.
+    const HEAP: usize = 2 * 1024 * 1024 + 512 * 1024;
+    let heap = xous::Limits::HeapMaximum as usize;
+    match xous::rsyscall(xous::SysCall::AdjustProcessLimit(heap, 0, HEAP)) {
+        Ok(xous::Result::Scalar2(1, now)) => match xous::rsyscall(xous::SysCall::AdjustProcessLimit(heap, now, HEAP)) {
+            Ok(xous::Result::Scalar2(1, set)) => log::info!("heap up to {} KiB (from {})", set / 1024, now / 1024),
+            other => log::warn!("the heap stays as it was: {other:?}"),
+        },
+        other => log::warn!("the heap stays as it was: {other:?}"),
+    }
     if option_env!("MAKI_DEMO_XMR_BENCH").is_some() {
         xmr_bench::spawn();
     }

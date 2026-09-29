@@ -71,9 +71,20 @@ fn weighted_inner_product(a: &[Scalar], b: &[Scalar], y: &[Scalar]) -> Scalar {
 
 /// Σ scalars·points, in variable time, as Monero's own prover works them out (`multiexp`): what
 /// it hides (amounts, masks and their blinding) is the asker's to know anyway.
+///
+/// In pieces: dalek gathers what it works each point with (1.25 KiB of table by Straus, which it
+/// takes below 190 points; 224 bytes by Pippenger) without knowing how many, so into room for
+/// up to twice as many, and all at once that was more than maki-keys' heap. Pieces of up to 64
+/// points by Straus, else of 190 to 512 by Pippenger, cost a little more time.
 fn msm(scalars: Vec<Scalar>, points: &[EdwardsPoint]) -> EdwardsPoint {
     let mut scalars = scalars;
-    let p = EdwardsPoint::vartime_multiscalar_mul(scalars.iter(), points.iter());
+    let most = if points.len() < 190 { 64 } else { 512 };
+    let size = points.len().div_ceil(points.len().div_ceil(most).max(1)).max(1);
+    let p = scalars
+        .chunks(size)
+        .zip(points.chunks(size))
+        .map(|(s, p)| EdwardsPoint::vartime_multiscalar_mul(s, p))
+        .sum();
     scalars.zeroize();
     p
 }
