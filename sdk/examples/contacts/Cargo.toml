@@ -1,0 +1,14 @@
+[package]
+name = "contacts"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+# std, for an allocator: the people met, and their cards
+maki-app = { path = "../../maki-app", default-features = false, features = ["std"] }
+# checking a card's signature, on maki: a few tenths of a second in maki's WebAssembly
+ed25519-compact = { version = "2", default-features = false }

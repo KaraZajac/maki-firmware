@@ -769,6 +769,116 @@ fn notes_keeps_what_its_owner_says_yes_to_and_shows_it_on_maki_alone() {
     assert_eq!(r.storage["n:1"], b"GitHub codes\nabcd-1234\nefgh-5678");
 }
 
+/// RFC 9285's base45, as maki cards' QR codes carry them.
+fn base45(data: &[u8]) -> String {
+    const B45: &[u8; 45] = b"0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ $%*+-./:";
+    let mut out = String::new();
+    for pair in data.chunks(2) {
+        let (mut n, digits) = if pair.len() == 2 { ((pair[0] as u32) << 8 | pair[1] as u32, 3) } else { (pair[0] as u32, 2) };
+        for _ in 0..digits {
+            out.push(B45[(n % 45) as usize] as char);
+            n /= 45;
+        }
+    }
+    out
+}
+
+/// The QR code on an app's screen, read as maki's camera reads one (rqrr, as bao-video has it).
+fn read_qr(c: &Canvas) -> Option<String> {
+    let scale = 4;
+    let margin = 16;
+    let (w, h) = (WIDTH * scale + 2 * margin, HEIGHT * scale + 2 * margin);
+    let mut img = rqrr::PreparedImage::prepare_from_greyscale(w, h, |x, y| {
+        let (x, y) = (x as i32 - margin as i32, y as i32 - margin as i32);
+        // a lit pixel is light: a QR code's dark modules are the unlit ones
+        let lit = x >= 0 && y >= 0 && c.get(x / scale as i32, y / scale as i32);
+        if lit || x < 0 || y < 0 || x >= (WIDTH * scale) as i32 || y >= (HEIGHT * scale) as i32 { 255 } else { 0 }
+    });
+    let grids = img.detect_grids();
+    grids.first()?.decode().ok().map(|(_, text)| text)
+}
+
+#[test]
+fn contacts_swaps_signed_cards_and_keeps_who_you_met() {
+    use ed25519_dalek::{Signer, SigningKey};
+    let bytes = std::fs::read(format!("{}/tests/fixtures/contacts.maki", env!("CARGO_MANIFEST_DIR"))).unwrap();
+    let bundle = maki_bundle::read(&bytes).unwrap();
+    let limits = admit(&bundle.manifest, bundle.code).unwrap();
+    let card = |name: &str, lines: &[&str]| {
+        let mut b = vec![1, name.len() as u8];
+        b.extend_from_slice(name.as_bytes());
+        b.push(lines.len() as u8);
+        for l in lines {
+            b.push(l.len() as u8);
+            b.extend_from_slice(l.as_bytes());
+        }
+        b
+    };
+    // someone else's maki card, as their maki signs it
+    let theirs = SigningKey::from_bytes(&[3; 32]);
+    let signed_code = |body: &[u8]| {
+        let mut b = body.to_vec();
+        b.extend_from_slice(theirs.verifying_key().as_bytes());
+        let sig = theirs.sign(&b);
+        b.extend_from_slice(&sig.to_bytes());
+        format!("MAKI1:{}", base45(&b))
+    };
+    let alex = card("Alex Chen", &["@alex@hackers.town", "alex.example"]);
+    let run_with = |events: Vec<Event>, inbox: Vec<Vec<u8>>, answers: Vec<Answer>, qr: Option<String>, storage: BTreeMap<String, Vec<u8>>| {
+        let record = Rc::new(RefCell::new(Record {
+            events: events.into_iter().collect(),
+            inbox: inbox.into_iter().collect(),
+            answers: answers.into_iter().collect(),
+            qr,
+            storage,
+            ..Default::default()
+        }));
+        assert_eq!(run(bundle.code, Box::new(Script(record.clone())), limits), Stop::Finished);
+        Rc::try_unwrap(record).ok().unwrap().into_inner()
+    };
+    // your card, from maki desktop, once you say yes
+    let mine = card("Kara Zajac", &["kara@soulstone.org"]);
+    let r = run_with(vec![Event::Message], vec![[&[b'C'][..], &mine].concat()], vec![Answer::Yes], None, BTreeMap::new());
+    assert_eq!(r.replies, [vec![0]]);
+    assert_eq!((r.asks[0].question.as_str(), r.asks[0].detail.as_str()), ("Make this your card?", "Kara Zajac: kara@soulstone.org"));
+    assert_eq!(r.storage["card"], mine);
+    // shown as a QR code another maki reads, and keeps as signed by this one's key
+    let code = read_qr(r.frames.last().unwrap()).expect("a QR code maki's camera reads");
+    assert!(code.starts_with("MAKI1:"), "{code}");
+    let r2 = run_with(vec![Event::Menu(0)], vec![], vec![], Some(code), BTreeMap::new());
+    let (_, kept) = r2.storage.iter().find(|(k, _)| k.starts_with("p:")).expect("kept");
+    assert_eq!(kept[0], 1);
+    assert_eq!(&kept[11 + mine.len()..], SigningKey::from_bytes(&[7; 32]).verifying_key().as_bytes());
+    // a maki card, checked and kept as signed; a changed one, not at all
+    let r = run_with(vec![Event::Menu(0)], vec![], vec![], Some(signed_code(&alex)), BTreeMap::new());
+    let (key, kept) = r.storage.iter().find(|(k, _)| k.starts_with("p:")).expect("kept");
+    assert_eq!(key, &format!("p:{}", theirs.verifying_key().as_bytes()[..8].iter().map(|b| format!("{b:02x}")).collect::<String>()));
+    assert_eq!(kept[0], 1);
+    assert_eq!(&kept[11..11 + alex.len()], &alex[..]);
+    assert_eq!(&kept[11 + alex.len()..], theirs.verifying_key().as_bytes());
+    let people = r.storage.clone();
+    let mut changed = signed_code(&alex).into_bytes();
+    changed[10] = if changed[10] == b'A' { b'B' } else { b'A' };
+    let r = run_with(vec![Event::Menu(0)], vec![], vec![], Some(String::from_utf8(changed).unwrap()), BTreeMap::new());
+    assert!(!r.storage.keys().any(|k| k.starts_with("p:")));
+    // a phone's vCard, kept as unsigned
+    let vcard = "BEGIN:VCARD\nVERSION:3.0\nN:Doe;Jane\nTEL:+1 555 0100\nEMAIL:jane@example.org\nEND:VCARD";
+    let r = run_with(vec![Event::Menu(0)], vec![], vec![], Some(vcard.into()), people.clone());
+    let jane = r.storage.iter().find(|(k, _)| k.starts_with("p:u")).expect("kept").1;
+    assert_eq!(jane[0], 0);
+    assert_eq!(&jane[11..], &card("Jane Doe", &["+1 555 0100", "jane@example.org"])[..]);
+    // who you met, for the computer, once you say yes
+    let everyone = r.storage.clone();
+    let r = run_with(vec![Event::Message, Event::Message], vec![b"P".to_vec(), b"P".to_vec()], vec![Answer::No, Answer::Yes], None, everyone.clone());
+    assert_eq!(r.replies[0], [1]);
+    assert_eq!(r.replies[1][0], 0);
+    assert_eq!(r.replies[1].len(), 1 + (11 + alex.len() + 32) + (11 + card("Jane Doe", &["+1 555 0100", "jane@example.org"]).len()));
+    assert_eq!(r.asks[1].question, "Share who you met with the computer?");
+    // forgotten, from the menu, with someone open
+    let r = run_with(vec![Event::Centre, Event::Centre, Event::Menu(3)], vec![], vec![], None, everyone);
+    assert_eq!(r.storage.keys().filter(|k| k.starts_with("p:")).count(), 1);
+}
+
 fn words_list() -> Vec<String> {
     std::fs::read_to_string(format!("{}/../../sdk/examples/passphrase/src/words.txt", env!("CARGO_MANIFEST_DIR")))
         .unwrap()

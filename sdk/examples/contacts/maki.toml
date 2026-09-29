@@ -1,0 +1,16 @@
+id = "com.leviathan.maki.contacts"
+name = "Contacts"
+version = 1
+label = "1.0"
+api = 1
+storage = 64
+memory = 256
+backup = true
+description = "Your card as a QR code, signed by your maki, to swap at the con: scan theirs, and maki checks it's signed and keeps who you met and when. maki desktop sets your card, and saves the people you met as vCards."
+icon = "icon.pbm"
+
+[permissions]
+ask = "To ask you before your card changes, and before the computer sees who you met."
+camera = "To read people's cards (a maki's, or a phone's contact QR code)."
+keys = "For your card's key, from your recovery phrase: it signs your card."
+link = "So maki desktop can set your card, and save the people you met."

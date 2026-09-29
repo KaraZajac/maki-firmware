@@ -53,3 +53,5 @@ maki-hd = { path = "../maki-hd", features = ["seed"] }
 maki-seed = { path = "../maki-seed" }
 # Monero addresses, to check what the Monero app shows
 maki-xmr = { path = "../maki-xmr" }
+# reading the QR codes apps draw, with the decoder maki's camera uses (bao-video's)
+rqrr = { git = "https://github.com/betrusted-io/rqrr.git", branch = "rv32-opt" }

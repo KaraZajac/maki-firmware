@@ -6,7 +6,7 @@ you can install"). Anyone can build one and sideload it through maki desktop; ma
 owner what it is, where it's from and what it may do before installing it, and a sideloaded
 app carries a mark in maki's top bar for as long as it's installed.
 
-This directory has the Rust crate apps are written with (`maki-app`), twenty-two examples, and the
+This directory has the Rust crate apps are written with (`maki-app`), twenty-three examples, and the
 `maki` tool that packs, signs, checks and simulates them. The examples:
 
 - **Hello**, **Dice** and **Tally**: a screen, the buttons, storage and randomness.
@@ -28,6 +28,9 @@ This directory has the Rust crate apps are written with (`maki-app`), twenty-two
   sticker, a phone's share screen) or from the computer (the link permission).
 - **Passphrase**: diceware passphrases from maki's random number generator and the EFF's long
   word list, typed into the computer on request (the keyboard permission).
+- **Contacts**: your card as a QR code, signed with a key of its own, to swap at the con; it
+  checks the cards it scans itself (Ed25519, in WebAssembly), and maki desktop sets yours and
+  saves the people you met.
 - **Notes**: secrets read on maki and never on the computer again, from maki desktop (maki asks
   first) or a QR code, typed into a field on request; the computer sees their titles alone.
 - **Scanner**: reads a QR code and shows what it says, a page at a time, and types it into the
