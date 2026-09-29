@@ -1,0 +1,12 @@
+[package]
+name = "notes"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+# std, for an allocator: notes of any length, and a list of them
+maki-app = { path = "../../maki-app", default-features = false, features = ["std"] }

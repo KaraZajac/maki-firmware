@@ -721,6 +721,54 @@ fn the_ssh_app_signs_a_commit_it_was_sent_whole_showing_what_it_is() {
     assert_eq!(r.asks.len(), 2);
 }
 
+#[test]
+fn notes_keeps_what_its_owner_says_yes_to_and_shows_it_on_maki_alone() {
+    let bytes = std::fs::read(format!("{}/tests/fixtures/notes.maki", env!("CARGO_MANIFEST_DIR"))).unwrap();
+    let bundle = maki_bundle::read(&bytes).unwrap();
+    let limits = admit(&bundle.manifest, bundle.code).unwrap();
+    let add = |title: &str, text: &str| [&[b'A', title.len() as u8][..], title.as_bytes(), text.as_bytes()].concat();
+    let run_with = |events: Vec<Event>, inbox: Vec<Vec<u8>>, answers: Vec<Answer>, qr: Option<&str>, storage: BTreeMap<String, Vec<u8>>| {
+        let record = Rc::new(RefCell::new(Record {
+            events: events.into_iter().collect(),
+            inbox: inbox.into_iter().collect(),
+            answers: answers.into_iter().collect(),
+            qr: qr.map(String::from),
+            storage,
+            ..Default::default()
+        }));
+        assert_eq!(run(bundle.code, Box::new(Script(record.clone())), limits), Stop::Finished);
+        Rc::try_unwrap(record).ok().unwrap().into_inner()
+    };
+    // from the computer: kept once the owner says yes, and listed by title alone
+    let r = run_with(
+        vec![Event::Message; 6],
+        vec![b"L".to_vec(), add("Bank PIN", "1234\n5678"), add("Safe", "12-34-56"), add("", "x"), add("Bad\ttitle", "x"), b"L".to_vec()],
+        vec![Answer::Yes, Answer::No],
+        None,
+        BTreeMap::new(),
+    );
+    assert_eq!(r.menu, ["Scan a note", "Type it", "Delete it"]);
+    assert_eq!(r.replies, [vec![0], vec![0], vec![1], vec![4], vec![4], b"\0Bank PIN\n".to_vec()]);
+    assert_eq!(r.asks.len(), 2);
+    assert_eq!((r.asks[0].question.as_str(), r.asks[0].detail.as_str()), ("Keep a note from the computer?", "\"Bank PIN\", 9 characters"));
+    assert_eq!(r.storage["n:1"], b"Bank PIN\n1234\n5678");
+    // opened on maki, and typed into a field once the centre says so: it presses Enter once
+    let kept = r.storage.clone();
+    let r = run_with(vec![Event::Centre, Event::Menu(1), Event::Centre], vec![], vec![], None, kept.clone());
+    assert_eq!(r.typed, ["1234\n5678"]);
+    assert_ne!(r.frames[2], r.frames[1]);
+    // deleted, once the centre says so; left keeps it
+    let r = run_with(vec![Event::Centre, Event::Menu(2), Event::Left], vec![], vec![], None, kept.clone());
+    assert!(r.storage.contains_key("n:1"));
+    let r = run_with(vec![Event::Centre, Event::Menu(2), Event::Centre], vec![], vec![], None, kept);
+    assert!(!r.storage.contains_key("n:1"));
+    // scanned: one line is its title and its text; more, the first line its title
+    let r = run_with(vec![Event::Menu(0)], vec![], vec![], Some("ABCD-EFGH-IJKL"), BTreeMap::new());
+    assert_eq!(r.storage["n:1"], b"ABCD-EFGH-IJKL\nABCD-EFGH-IJKL");
+    let r = run_with(vec![Event::Menu(0)], vec![], vec![], Some("GitHub codes\nabcd-1234\nefgh-5678"), BTreeMap::new());
+    assert_eq!(r.storage["n:1"], b"GitHub codes\nabcd-1234\nefgh-5678");
+}
+
 fn words_list() -> Vec<String> {
     std::fs::read_to_string(format!("{}/../../sdk/examples/passphrase/src/words.txt", env!("CARGO_MANIFEST_DIR")))
         .unwrap()
