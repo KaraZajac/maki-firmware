@@ -6,7 +6,7 @@ you can install"). Anyone can build one and sideload it through maki desktop; ma
 owner what it is, where it's from and what it may do before installing it, and a sideloaded
 app carries a mark in maki's top bar for as long as it's installed.
 
-This directory has the Rust crate apps are written with (`maki-app`), twenty-three examples, and the
+This directory has the Rust crate apps are written with (`maki-app`), twenty-four examples, and the
 `maki` tool that packs, signs, checks and simulates them. The examples:
 
 - **Hello**, **Dice** and **Tally**: a screen, the buttons, storage and randomness.
@@ -21,6 +21,10 @@ This directory has the Rust crate apps are written with (`maki-app`), twenty-thr
 - **Age**: your age key, which maki holds (host API 2's X25519 keys): anyone encrypts files to its
   recipient with age as it is, and maki desktop's `age-plugin-maki` asks it to decrypt one, which
   it asks its owner about first.
+- **OpenPGP**: an OpenPGP key (Ed25519 to sign, Curve25519 to decrypt, host API 2's X25519),
+  for maki desktop's `maki-gpg` (git's `gpg.program`): what's signed comes whole, and maki makes
+  the signature itself, a commit read out by its subject first; a message's session key is
+  unwrapped on maki once its owner says yes. GnuPG imports its key and verifies what it signs.
 - **Minisign**: a minisign key, which maki holds: maki desktop's `maki-minisign` hashes a file as
   minisign does and asks it to sign; it asks its owner, with the file's name and size, and signs
   a trusted comment dated by maki's own clock. minisign itself checks the signatures.

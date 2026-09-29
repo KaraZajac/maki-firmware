@@ -1,0 +1,17 @@
+[package]
+name = "openpgp"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+# std, for an allocator: keys, signatures and messages of any length
+maki-app = { path = "../../maki-app", default-features = false, features = ["std"] }
+# OpenPGP's hashes: SHA-256 for signatures and the ECDH key derivation, SHA-1 for fingerprints
+sha2 = { version = "0.10", default-features = false }
+sha1 = { version = "0.10", default-features = false }
+# AES key unwrap (RFC 3394), for a message's session key
+aes = "0.8"

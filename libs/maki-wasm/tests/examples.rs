@@ -884,6 +884,76 @@ fn contacts_swaps_signed_cards_and_keeps_who_you_met() {
     assert_eq!(r.storage.keys().filter(|k| k.starts_with("p:")).count(), 1);
 }
 
+#[test]
+fn openpgp_names_its_key_and_signs_a_commit_it_was_sent_whole() {
+    use ed25519_dalek::{Signature, SigningKey, Verifier};
+    use sha2::{Digest, Sha256};
+    let bytes = std::fs::read(format!("{}/tests/fixtures/openpgp.maki", env!("CARGO_MANIFEST_DIR"))).unwrap();
+    let bundle = maki_bundle::read(&bytes).unwrap();
+    let limits = admit(&bundle.manifest, bundle.code).unwrap();
+    let commit = b"tree 0123456789012345678901234567890123456789\nauthor Kara Zajac <kara@example.org> 1790000000 +0000\ncommitter Kara Zajac <kara@example.org> 1790000000 +0000\n\nSign with OpenPGP on maki\n";
+    let sign = [&b"S"[..], &(commit.len() as u32).to_le_bytes(), &0u32.to_le_bytes(), &commit[..]].concat();
+    // a session key packet for another key: refused without asking
+    let other = [&b"D\x03"[..], &[9; 8], &[18, 1, 7], &[0x40; 33], &[40], &[0; 40]].concat();
+    let inbox = vec![b"K".to_vec(), b"UKara Zajac <kara@example.org>".to_vec(), b"K".to_vec(), b"F".to_vec(), sign, other];
+    let record = Rc::new(RefCell::new(Record {
+        events: std::iter::repeat(Event::Message).take(inbox.len()).collect(),
+        inbox: inbox.into_iter().collect(),
+        answers: [Answer::Yes, Answer::Yes].into_iter().collect(),
+        ..Default::default()
+    }));
+    assert_eq!(run(bundle.code, Box::new(Script(record.clone())), limits), Stop::Finished);
+    let r = record.borrow();
+    // no name, no key to hand out; named once the owner says so
+    assert_eq!(r.replies[0], [5]);
+    assert_eq!(r.replies[1], [0]);
+    assert_eq!((r.asks[0].question.as_str(), r.asks[0].detail.as_str()), ("Name your OpenPGP key?", "Kara Zajac <kara@example.org>"));
+    let key = &r.replies[2];
+    assert_eq!(key[0], 0);
+    // the public key packet first (new format, tag 6): Ed25519's, dated 2026-01-01, maki's key
+    assert_eq!(&key[1..4], &[0xc6, 51, 4]);
+    assert_eq!(&key[4..8], &1_767_225_600u32.to_be_bytes());
+    let public = SigningKey::from_bytes(&[7; 32]).verifying_key();
+    // after the version, the date, the algorithm, the curve and the key's bit count: 0x40, then the key
+    assert_eq!(&key[21..54], &[&[0x40][..], public.as_bytes()].concat()[..]);
+    // its fingerprint, as SHA-1 of the key packet says
+    let body = &key[3..3 + 51];
+    let mut h = sha1_smol::Sha1::new();
+    h.update(&[0x99, 0, 51]);
+    h.update(body);
+    assert_eq!(&r.replies[3][1..21], &h.digest().bytes());
+    // the commit, read on maki by its subject, signed as OpenPGP signs a binary document
+    assert_eq!((r.asks[1].question.as_str(), r.asks[1].detail.as_str()), ("Sign this commit?", "\"Sign with OpenPGP on maki\" by Kara Zajac"));
+    let sig = &r.replies[4];
+    assert_eq!(sig[0], 0);
+    let p = &sig[1..];
+    let (len, at) = if p[1] < 192 { (p[1] as usize, 2) } else { panic!("a short signature") };
+    let body = &p[at..at + len];
+    assert_eq!(&body[..4], &[4, 0x00, 22, 8]);
+    let hashed_len = u16::from_be_bytes([body[4], body[5]]) as usize;
+    let head = &body[..6 + hashed_len];
+    let mut digest = Sha256::new();
+    digest.update(commit);
+    digest.update(head);
+    digest.update([0x04, 0xff]);
+    digest.update((head.len() as u32).to_be_bytes());
+    let digest = digest.finalize();
+    let unhashed_len = u16::from_be_bytes([body[6 + hashed_len], body[7 + hashed_len]]) as usize;
+    let rest = &body[8 + hashed_len + unhashed_len..];
+    assert_eq!(&rest[..2], &digest[..2]);
+    // r and s, 256 bits each (or fewer, their leading zeros left off)
+    let rn = (u16::from_be_bytes([rest[2], rest[3]]) as usize).div_ceil(8);
+    let r_bytes = &rest[4..4 + rn];
+    let sn = (u16::from_be_bytes([rest[4 + rn], rest[5 + rn]]) as usize).div_ceil(8);
+    let s_bytes = &rest[6 + rn..6 + rn + sn];
+    let pad = |b: &[u8]| [vec![0; 32 - b.len()], b.to_vec()].concat();
+    let signature = Signature::from_slice(&[pad(r_bytes), pad(s_bytes)].concat()).unwrap();
+    public.verify(&digest, &signature).unwrap();
+    // not for this key: no ask
+    assert_eq!(r.replies[5], [4]);
+    assert_eq!(r.asks.len(), 2);
+}
+
 fn words_list() -> Vec<String> {
     std::fs::read_to_string(format!("{}/../../sdk/examples/passphrase/src/words.txt", env!("CARGO_MANIFEST_DIR")))
         .unwrap()
