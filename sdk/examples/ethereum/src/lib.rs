@@ -21,6 +21,14 @@
 //!   read, shown and signed, and answered with the signed transaction's size (or why not);
 //! - `Y` the same for typed data (EIP-712, JSON): the last piece is answered with its signature;
 //! - `G` offset (u32): a piece of the transaction last signed: total, offset, the bytes.
+//!
+//! And MetaMask, with no cable, as a QR-code wallet (Keystone's protocol, ERC-4527, which
+//! MetaMask's "QR-based" hardware wallets speak): the menu's Account for MetaMask shows the
+//! account as a UR `crypto-hdkey` (the key at `m/44'/60'/0'` with maki's fingerprint, the
+//! accounts under it `0/*`), which MetaMask scans to add it; Sign from a QR code reads an
+//! `eth-sign-request` off MetaMask's screen (a transaction, a message or typed data, for an
+//! account of this wallet's, checked before anything's shown), goes through it on maki's review
+//! screen as any other, and shows the `eth-signature` back for MetaMask to scan.
 
 use maki_app::wallet::{HostKeys, Page, Review};
 use maki_app::*;
@@ -238,6 +246,236 @@ fn typed(account: &Account, site: &str, bytes: &[u8]) -> Result<[u8; 65], Answer
     account.sign_typed(&typed).map_err(|e| Answer::new(REFUSED).text(&e.to_string()))
 }
 
+const H: u32 = maki_app::wallet::HARDENED;
+const MENU: [&str; 2] = ["Account for MetaMask", "Sign from a QR code"];
+
+/// What MetaMask's QR-code wallets scan to add the account: a UR `crypto-hdkey` (BCR-2020-007),
+/// the key at `m/44'/60'/0'` and its chain code, where it's from (maki's fingerprint), and the
+/// accounts under it (`0/*`), BIP44's standard ones.
+fn hdkey() -> Result<String, Error> {
+    let public = maki_app::wallet::public(&[44 | H, 60 | H, H])?;
+    let master = u32::from_be_bytes(maki_app::wallet::fingerprint()?);
+    let mut e = minicbor::Encoder::new(Vec::new());
+    (|| -> Result<(), minicbor::encode::Error<core::convert::Infallible>> {
+        let keypath = minicbor::data::Tag::Unassigned(304);
+        e.map(8)?;
+        e.u8(3)?.bytes(&public.key)?;
+        e.u8(4)?.bytes(&public.chain_code)?;
+        e.u8(5)?.tag(minicbor::data::Tag::Unassigned(305))?.map(1)?.u8(1)?.u8(60)?;
+        e.u8(6)?.tag(keypath)?.map(3)?;
+        e.u8(1)?.array(6)?.u32(44)?.bool(true)?.u32(60)?.bool(true)?.u32(0)?.bool(true)?;
+        e.u8(2)?.u32(master)?.u8(3)?.u8(3)?;
+        e.u8(7)?.tag(keypath)?.map(1)?.u8(1)?.array(4)?.u32(0)?.bool(false)?.array(0)?.bool(false)?;
+        e.u8(8)?.u32(u32::from_be_bytes(public.parent_fingerprint))?;
+        e.u8(9)?.str("maki")?;
+        e.u8(10)?.str("account.standard")?;
+        Ok(())
+    })()
+    .map_err(|_| Error::Failed)?;
+    Ok(ur::ur::encode(&e.into_writer(), &ur::ur::Type::Custom("crypto-hdkey")))
+}
+
+/// What MetaMask asks a QR-code wallet to sign (ERC-4527's eth-sign-request).
+struct Request {
+    id: Vec<u8>,
+    data: Vec<u8>,
+    /// 1 a legacy transaction, 2 typed data, 3 a message, 4 an EIP-1559 transaction
+    kind: u32,
+    chain: Option<u64>,
+    path: Vec<u32>,
+    fingerprint: Option<u32>,
+    address: Option<Vec<u8>>,
+    origin: String,
+}
+
+/// A request from its CBOR: None if it isn't one.
+fn read_request(cbor: &[u8]) -> Option<Request> {
+    let mut d = minicbor::Decoder::new(cbor);
+    let n = d.map().ok()??;
+    let mut r = Request { id: Vec::new(), data: Vec::new(), kind: 0, chain: None, path: Vec::new(), fingerprint: None, address: None, origin: String::new() };
+    for _ in 0..n {
+        match d.u32().ok()? {
+            1 => {
+                d.tag().ok()?;
+                r.id = d.bytes().ok()?.to_vec();
+            }
+            2 => r.data = d.bytes().ok()?.to_vec(),
+            3 => r.kind = d.u32().ok()?,
+            4 => r.chain = Some(d.u64().ok()?),
+            5 => {
+                d.tag().ok()?;
+                for _ in 0..d.map().ok()?? {
+                    match d.u32().ok()? {
+                        1 => {
+                            let items = d.array().ok()??;
+                            for _ in 0..items / 2 {
+                                let index = d.u32().ok()?;
+                                let hardened = d.bool().ok()?;
+                                r.path.push(if hardened { index | H } else { index });
+                            }
+                        }
+                        2 => r.fingerprint = Some(d.u32().ok()?),
+                        _ => d.skip().ok()?,
+                    }
+                }
+            }
+            6 => r.address = Some(d.bytes().ok()?.to_vec()),
+            7 => r.origin = d.str().ok()?.chars().filter(|c| !c.is_control()).take(40).collect(),
+            _ => d.skip().ok()?,
+        }
+    }
+    (!r.id.is_empty() && !r.data.is_empty() && (1..=4).contains(&r.kind)).then_some(r)
+}
+
+/// The signature for MetaMask to scan: a UR `eth-signature`, the request's ID with it.
+fn signature_ur(id: &[u8], signature: &[u8]) -> String {
+    let mut e = minicbor::Encoder::new(Vec::new());
+    let _ = (|| -> Result<(), minicbor::encode::Error<core::convert::Infallible>> {
+        e.map(3)?;
+        e.u8(1)?.tag(minicbor::data::Tag::Unassigned(37))?.bytes(id)?;
+        e.u8(2)?.bytes(signature)?;
+        e.u8(3)?.str("maki")?;
+        Ok(())
+    })();
+    ur::ur::encode(&e.into_writer(), &ur::ur::Type::Custom("eth-signature"))
+}
+
+/// What's asked, read off MetaMask's screen: a UR `eth-sign-request`, whole or in parts. Why not,
+/// if it isn't one, or the owner stopped.
+fn scan_request() -> Result<Request, String> {
+    let mut decoder = ur::Decoder::default();
+    let (mut seen, mut of) = (std::collections::BTreeSet::new(), 0);
+    loop {
+        screen::clear(Color::Dark);
+        screen::text_centred(24, "Reading the request", Style::Bold, Color::Light);
+        let line = if of > 0 { format!("{} of {of} parts", seen.len()) } else { "from MetaMask's screen".into() };
+        screen::text_centred(50, &line, Style::Regular, Color::Light);
+        screen::text_centred(80, "any button stops", Style::Small, Color::Light);
+        screen::present();
+        let mut buf = vec![0u8; 4400];
+        let Some(text) = camera::scan_qr(&mut buf) else { return Err("stopped".into()) };
+        let lower = text.trim().to_ascii_lowercase();
+        let Some(rest) = lower.strip_prefix("ur:eth-sign-request/") else { return Err("that isn't a request to sign".into()) };
+        let cbor = match ur::ur::decode(&lower) {
+            Ok((ur::ur::Kind::SinglePart, cbor)) => cbor,
+            Ok((ur::ur::Kind::MultiPart, _)) => {
+                if decoder.receive(&lower).is_err() {
+                    decoder = ur::Decoder::default();
+                    seen.clear();
+                    decoder.receive(&lower).map_err(|_| "a part maki can't read")?;
+                }
+                if let Some((n, total)) = rest.split_once('/').and_then(|(i, _)| i.split_once('-')) {
+                    if let (Ok(n), Ok(total)) = (n.parse::<usize>(), total.parse::<usize>()) {
+                        of = total;
+                        seen.insert(n.min(total + 1));
+                    }
+                }
+                if !decoder.complete() {
+                    continue;
+                }
+                decoder.message().ok().flatten().ok_or("parts that don't add up")?
+            }
+            Err(_) => return Err("a code maki can't read".into()),
+        };
+        return read_request(&cbor).ok_or_else(|| "not a request maki can read".into());
+    }
+}
+
+/// A request signed, once it's checked and gone through on maki's review screen: the signature.
+fn sign_request(r: &Request) -> Result<Vec<u8>, String> {
+    // an account of this wallet's: m/44'/60'/0'/0/i, maki's fingerprint, its address
+    let [a, b, c, 0, index] = r.path[..] else { return Err("for an account maki doesn't make".into()) };
+    if [a, b, c] != [44 | H, 60 | H, H] || index >= H {
+        return Err("for an account maki doesn't make".into());
+    }
+    let ours = maki_app::wallet::fingerprint().map(u32::from_be_bytes).map_err(|_| "maki is locked")?;
+    if r.fingerprint.is_some_and(|f| f != ours) {
+        return Err("for another wallet".into());
+    }
+    let account = account(index).map_err(|_| "maki is locked")?;
+    if r.address.as_deref().is_some_and(|a| a != account.address()) {
+        return Err("for another address".into());
+    }
+    let asked_by = Page::new("Asked by").value("a QR code").mono(if r.origin.is_empty() { "the site isn't known" } else { &r.origin });
+    let said = |asked: Result<maki_app::Answer, Error>| said_yes(asked).map_err(|a| refusal(&a));
+    match r.kind {
+        1 | 4 => {
+            let tx = Tx::parse(&r.data).map_err(|e| e.to_string())?;
+            if r.chain.is_some_and(|c| c != tx.chain_id) {
+                return Err("a transaction for another network than it says".into());
+            }
+            let (pages, summary) = display::review(&tx).map_err(|e| e.to_string())?;
+            let mut asked = Review::new("Sign and send").detail(&summary).page(asked_by).timeout(300);
+            for p in pages {
+                asked = asked.page(page(p));
+            }
+            said(asked.show())?;
+            tx.signature(&account).map_err(|e| e.to_string())
+        }
+        2 => {
+            let text = core::str::from_utf8(&r.data).map_err(|_| "typed data that isn't UTF-8")?;
+            let typed = TypedData::parse(text).map_err(|e| e.to_string())?;
+            let (pages, title, line) = display::typed_review(&typed).map_err(|e| e.to_string())?;
+            let mut asked = Review::new(title).detail(line).page(asked_by).timeout(300);
+            for p in pages {
+                asked = asked.page(page(p));
+            }
+            said(asked.show())?;
+            account.sign_typed(&typed).map(|s| s.to_vec()).map_err(|e| e.to_string())
+        }
+        _ => {
+            // the site isn't known, so a sign-in is for the site it names, which the owner reads
+            let site = display::sign_in_site(&r.data).unwrap_or_default();
+            let mut asked = Review::new("Sign message?").detail("not a transaction").page(asked_by).timeout(120);
+            for p in display::message_pages(&site, &r.data) {
+                asked = asked.page(page(p));
+            }
+            said(asked.show())?;
+            account.sign_message(&r.data).map(|s| s.to_vec()).map_err(|_| "maki couldn't sign it".into())
+        }
+    }
+}
+
+/// Why it didn't sign, in words, from the answer it would have sent.
+fn refusal(a: &Answer) -> String {
+    match a.0.first() {
+        Some(&DENIED) => "you said no".into(),
+        Some(&NO_ANSWER) => "no answer".into(),
+        Some(&LOCKED) => "maki is locked".into(),
+        _ => "too much to show on maki's screen".into(),
+    }
+}
+
+/// A QR code on the whole screen until a button; whether the owner left the app meanwhile.
+fn show_code(text: &str) -> bool {
+    let code = text.to_uppercase();
+    let mut hidden = false;
+    loop {
+        if !hidden {
+            screen::clear(Color::Dark);
+            let side = screen::qr(0, 0, code.as_bytes(), HEIGHT).unwrap_or(0);
+            screen::clear(Color::Dark);
+            screen::qr((WIDTH - side) / 2, (HEIGHT - side) / 2, code.as_bytes(), HEIGHT);
+            screen::present();
+        }
+        match wait(None) {
+            Event::Centre | Event::Left | Event::Right => return false,
+            Event::Hidden => hidden = true,
+            Event::Shown => hidden = false,
+            Event::Exit => return true,
+            _ => {}
+        }
+    }
+}
+
+fn draw_note(note: &str) {
+    screen::clear(Color::Dark);
+    screen::text_centred(30, "Not signed:", Style::Bold, Color::Light);
+    screen::text_centred(52, note, Style::Small, Color::Light);
+    screen::text_centred(80, "centre: back", Style::Small, Color::Light);
+    screen::present();
+}
+
 fn draw(index: u32, as_text: bool) {
     screen::clear(Color::Dark);
     let Ok(account) = Account::new(&HostKeys, index) else {
@@ -263,10 +501,14 @@ fn draw(index: u32, as_text: bool) {
 }
 
 fn main() {
+    let _ = menu(&MENU);
     let (mut index, mut as_text, mut shown) = (0u32, false, true);
     let mut wallet = Wallet::default();
+    let mut note = String::new();
     loop {
-        if shown {
+        if shown && !note.is_empty() {
+            draw_note(&note);
+        } else if shown {
             draw(index, as_text);
         }
         match wait(None) {
@@ -276,6 +518,25 @@ fn main() {
                 let answer = wallet.answer(&m[..n]);
                 let _ = link::reply(&answer.0);
             }
+            Event::Centre | Event::Left | Event::Right if !note.is_empty() => note.clear(),
+            Event::Menu(0) => match hdkey() {
+                Ok(code) => {
+                    if show_code(&code) {
+                        return;
+                    }
+                }
+                Err(_) => note = "maki is locked".into(),
+            },
+            // no cable: MetaMask's request off its screen, signed, and the signature shown back
+            Event::Menu(1) => match scan_request().and_then(|r| sign_request(&r).map(|s| signature_ur(&r.id, &s))) {
+                Ok(code) => {
+                    if show_code(&code) {
+                        return;
+                    }
+                }
+                Err(why) if why == "stopped" => {}
+                Err(why) => note = why,
+            },
             Event::Left => index = index.saturating_sub(1),
             Event::Right => index = (index + 1).min(maki_app::wallet::HARDENED - 1),
             Event::Centre => as_text = !as_text,

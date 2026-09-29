@@ -177,18 +177,31 @@ impl Tx {
     /// What's signed: the Keccak hash of the transaction as it came.
     pub fn sighash(&self) -> [u8; 32] { keccak256(&self.unsigned) }
 
-    /// The signed transaction, ready to broadcast (`eth_sendRawTransaction`).
-    pub fn sign(&self, account: &Account) -> Result<Vec<u8>, Error> {
+    /// r, s and v: v the recovery ID for EIP-1559, EIP-155's chain-bound value for legacy.
+    fn rsv(&self, account: &Account) -> Result<([u8; 32], [u8; 32], u64), Error> {
         self.max_fee()?;
         let (r, s, recid) = account.sign(&self.sighash()).map_err(|_| Error::Key)?;
+        let v = match self.kind {
+            Kind::Eip1559 => recid as u64,
+            Kind::Legacy => self.chain_id.checked_mul(2).and_then(|v| v.checked_add(35 + recid as u64)).ok_or(Error::Fee)?,
+        };
+        Ok((r, s, v))
+    }
+
+    /// The signature alone, as QR-code wallets hand it back (ERC-4527's eth-signature): r, s, then
+    /// v in as few bytes as it takes (one, the parity, for EIP-1559).
+    pub fn signature(&self, account: &Account) -> Result<Vec<u8>, Error> {
+        let (r, s, v) = self.rsv(account)?;
+        let v = v.to_be_bytes();
+        let from = v.iter().position(|&b| b != 0).unwrap_or(7);
+        Ok([&r[..], &s[..], &v[from..]].concat())
+    }
+
+    /// The signed transaction, ready to broadcast (`eth_sendRawTransaction`).
+    pub fn sign(&self, account: &Account) -> Result<Vec<u8>, Error> {
+        let (r, s, v) = self.rsv(account)?;
         let mut payload = self.head.clone();
-        match self.kind {
-            Kind::Eip1559 => rlp::encode_uint(&mut payload, &[recid]),
-            Kind::Legacy => {
-                let v = self.chain_id.checked_mul(2).and_then(|v| v.checked_add(35 + recid as u64)).ok_or(Error::Fee)?;
-                rlp::encode_uint(&mut payload, &v.to_be_bytes());
-            }
-        }
+        rlp::encode_uint(&mut payload, &v.to_be_bytes());
         rlp::encode_uint(&mut payload, &r);
         rlp::encode_uint(&mut payload, &s);
         let mut out = Vec::new();

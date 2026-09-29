@@ -448,6 +448,8 @@ dependencies = [
  "maki-app",
  "maki-eth",
  "maki-hd",
+ "minicbor",
+ "ur",
 ]
 
 [[package]]

@@ -1152,6 +1152,155 @@ fn bitcoin_shows_its_descriptor_for_sparrow_to_scan() {
     );
 }
 
+/// eth-sign-requests as MetaMask's QR-code keyring makes them: made with Keystone's
+/// @keystonehq/bc-ur-registry-eth 0.22.1 (EthSignRequest.constructETHRequest, as
+/// @keystonehq/metamask-airgapped-keyring calls it) for the test phrase's first account, the
+/// transactions with @ethereumjs/tx 10.1.3.
+fn metamask_requests() -> BTreeMap<String, String> {
+    let text = std::fs::read_to_string(format!("{}/../maki-eth/tests/fixtures/metamask-requests.json", env!("CARGO_MANIFEST_DIR"))).unwrap();
+    text.lines()
+        .filter_map(|l| {
+            let (k, v) = l.trim().trim_end_matches(',').split_once(": ")?;
+            Some((k.trim_matches('"').to_string(), v.trim_matches('"').to_string()))
+        })
+        .collect()
+}
+
+/// A UR's CBOR, single-part.
+fn ur_cbor(text: &str) -> Vec<u8> { ur::ur::decode(&text.to_lowercase()).unwrap().1 }
+
+#[test]
+fn ethereum_signs_what_metamask_shows_it_by_qr_code() {
+    let requests = metamask_requests();
+    let keys = maki_hd::seed::SeedKeys::from_seed(&test_seed()).unwrap();
+    let account = maki_eth::Account::new(&keys, 0).unwrap();
+    // what maki's Ethereum code signs for each, on this computer
+    let data = |name: &str| {
+        let cbor = ur_cbor(&requests[name]);
+        let mut d = minicbor::Decoder::new(&cbor);
+        let n = d.map().unwrap().unwrap();
+        let mut out = Vec::new();
+        for _ in 0..n {
+            match d.u32().unwrap() {
+                2 => out = d.bytes().unwrap().to_vec(),
+                _ => d.skip().unwrap(),
+            }
+        }
+        out
+    };
+    let expected = |name: &str| -> Vec<u8> {
+        let d = data(name);
+        match name {
+            "message" => account.sign_message(&d).unwrap().to_vec(),
+            "typed" => account.sign_typed(&maki_eth::TypedData::parse(std::str::from_utf8(&d).unwrap()).unwrap()).unwrap().to_vec(),
+            _ => maki_eth::Tx::parse(&d).unwrap().signature(&account).unwrap(),
+        }
+    };
+    // the eth-signature on maki's screen: its request's ID, and the signature
+    let answered = |scans: Vec<String>| -> (Vec<u8>, Vec<u8>, Record) {
+        let r = run_wallet_scanning("ethereum", vec![Event::Menu(1), Event::Centre], scans, vec![Answer::Yes]);
+        let shown = r.frames.iter().rev().filter_map(read_qr).find(|t| t.starts_with("UR:ETH-SIGNATURE/")).expect("the signature as a QR code");
+        assert!(shown.starts_with("UR:ETH-SIGNATURE/"), "{shown}");
+        let cbor = ur_cbor(&shown);
+        let mut d = minicbor::Decoder::new(&cbor);
+        let (mut id, mut sig) = (Vec::new(), Vec::new());
+        for _ in 0..d.map().unwrap().unwrap() {
+            match d.u32().unwrap() {
+                1 => {
+                    d.tag().unwrap();
+                    id = d.bytes().unwrap().to_vec();
+                }
+                2 => sig = d.bytes().unwrap().to_vec(),
+                _ => d.skip().unwrap(),
+            }
+        }
+        (id, sig, r)
+    };
+    for (name, n, title) in [("message", 1, "Sign message?"), ("typed", 2, "Sign typed data?"), ("eip1559", 3, "Sign and send"), ("legacy", 4, "Sign and send")] {
+        let (id, sig, r) = answered(vec![requests[name].clone()]);
+        // 00000000-0000-4000-8000-00000000000n
+        assert_eq!(id, [&[0u8; 6][..], &[0x40, 0, 0x80], &[0; 6], &[n]].concat(), "{name}: the request's ID back");
+        assert_eq!(sig, expected(name), "{name}");
+        if let Ok(dir) = std::env::var("MAKI_DUMP_QR") {
+            // for checking against MetaMask's own keyring, by hand
+            let shown = r.frames.iter().rev().filter_map(read_qr).find(|t| t.starts_with("UR:ETH-SIGNATURE/")).unwrap();
+            std::fs::write(format!("{dir}/signature-{name}.txt"), shown).unwrap();
+        }
+        assert_eq!(r.reviews[0].pages[0].heading, "Asked by", "{name}");
+        if name != "typed" {
+            assert_eq!(r.reviews[0].question, title, "{name}");
+        }
+    }
+    // an EIP-1559 signature's v is its parity; a legacy one's is EIP-155's (on Ethereum, 37 or 38)
+    assert!(expected("eip1559")[64] <= 1 && expected("eip1559").len() == 65);
+    assert!([37, 38].contains(&expected("legacy")[64]));
+    // typed data in parts, as MetaMask shows a long request
+    let mut encoder = ur::Encoder::new(&ur_cbor(&requests["typed"]), 120, "eth-sign-request").unwrap();
+    let parts: Vec<String> = (0..encoder.fragment_count() + 2).map(|_| encoder.next_part().unwrap().to_uppercase()).collect();
+    assert!(parts.len() > 3);
+    assert_eq!(answered(parts).1, expected("typed"));
+    // for another wallet (its fingerprint), refused before anything's shown
+    let other = requests["message"].to_lowercase();
+    let mut cbor = ur_cbor(&other);
+    let at = cbor.windows(5).position(|w| w == [0x02, 0x1a, 0x73, 0xc5, 0xda]).unwrap();
+    cbor[at + 2] ^= 1;
+    let changed = ur::ur::encode(&cbor, &ur::ur::Type::Custom("eth-sign-request")).to_uppercase();
+    let r = run_wallet_scanning("ethereum", vec![Event::Menu(1), Event::Centre], vec![changed], vec![]);
+    assert!(r.reviews.is_empty());
+}
+
+#[test]
+fn ethereum_shows_its_account_for_metamask_to_add() {
+    let r = run_wallet_scanning("ethereum", vec![Event::Menu(0), Event::Centre], vec![], vec![]);
+    assert_eq!(r.menu, ["Account for MetaMask", "Sign from a QR code"]);
+    let shown = r.frames.iter().rev().filter_map(read_qr).find(|t| t.starts_with("UR:CRYPTO-HDKEY/")).expect("the account as a QR code");
+    assert!(shown.starts_with("UR:CRYPTO-HDKEY/"), "{shown}");
+    let cbor = ur_cbor(&shown);
+    let keys = maki_hd::seed::SeedKeys::from_seed(&test_seed()).unwrap();
+    let public = maki_hd::Keys::public(&keys, &[44 | 0x8000_0000, 60 | 0x8000_0000, 0x8000_0000]).unwrap();
+    let mut d = minicbor::Decoder::new(&cbor);
+    let (mut key, mut chain, mut fingerprint, mut note) = (Vec::new(), Vec::new(), 0u32, String::new());
+    for _ in 0..d.map().unwrap().unwrap() {
+        match d.u32().unwrap() {
+            3 => key = d.bytes().unwrap().to_vec(),
+            4 => chain = d.bytes().unwrap().to_vec(),
+            6 => {
+                d.tag().unwrap();
+                for _ in 0..d.map().unwrap().unwrap() {
+                    match d.u32().unwrap() {
+                        2 => fingerprint = d.u32().unwrap(),
+                        _ => d.skip().unwrap(),
+                    }
+                }
+            }
+            10 => note = d.str().unwrap().to_string(),
+            _ => d.skip().unwrap(),
+        }
+    }
+    assert_eq!((key, chain), (public.key.to_vec(), public.chain_code.to_vec()));
+    assert_eq!(fingerprint, 0x73c5_da0a);
+    assert_eq!(note, "account.standard");
+    if let Ok(dir) = std::env::var("MAKI_DUMP_QR") {
+        // for checking against MetaMask's own keyring, by hand
+        std::fs::write(format!("{dir}/hdkey.txt"), &shown).unwrap();
+    }
+}
+
+/// A wallet app run with these codes for its camera to read, one a scan.
+fn run_wallet_scanning(name: &str, events: Vec<Event>, scans: Vec<String>, answers: Vec<Answer>) -> Record {
+    let bytes = std::fs::read(format!("{}/tests/fixtures/{name}.maki", env!("CARGO_MANIFEST_DIR"))).unwrap();
+    let bundle = maki_bundle::read(&bytes).unwrap();
+    let record = Rc::new(RefCell::new(Record {
+        events: events.into(),
+        qrs: scans.into_iter().collect(),
+        answers: answers.into_iter().collect(),
+        ..Default::default()
+    }));
+    let loaded = load(&bundle.manifest, bundle.code).unwrap();
+    assert_eq!(loaded.run(Box::new(Script(record.clone()))), Stop::Finished);
+    Rc::try_unwrap(record).ok().unwrap().into_inner()
+}
+
 /// A wallet app, run as maki runs it (its manifest's paths and all), on these messages and
 /// answers.
 fn run_wallet(name: &str, inbox: Vec<Vec<u8>>, answers: Vec<Answer>, locked: bool) -> Record {

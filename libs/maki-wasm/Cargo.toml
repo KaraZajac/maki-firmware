@@ -57,3 +57,6 @@ maki-xmr = { path = "../maki-xmr" }
 rqrr = { git = "https://github.com/betrusted-io/rqrr.git", branch = "rv32-opt" }
 # PSBTs over QR codes as wallet software writes and reads them (Blockchain Commons' UR)
 ur = "0.4"
+# MetaMask's QR-code requests (ERC-4527), and what maki's Ethereum code signs for them
+minicbor = { version = "0.19", features = ["alloc"] }
+maki-eth = { path = "../maki-eth" }

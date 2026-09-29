@@ -15,3 +15,7 @@ maki-app = { path = "../../maki-app", default-features = false, features = ["std
 maki-eth = { path = "../../../libs/maki-eth" }
 # what maki's keys say when they can't
 maki-hd = { path = "../../../libs/maki-hd" }
+# QR codes for MetaMask's QR-code wallets (Keystone's protocol, ERC-4527): Blockchain Commons'
+# UR, and the CBOR inside it
+ur = { version = "0.4", default-features = false }
+minicbor = { version = "0.19", features = ["alloc"] }
