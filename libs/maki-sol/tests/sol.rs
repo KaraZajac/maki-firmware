@@ -162,7 +162,7 @@ fn tokens_sent_to_their_owners() {
         [
             p("Wrapped SOL", "brought up to date", &ata(ME, WSOL), ""),
             p("Burn", "1 USDC", &ata(ME, USDC), "Destroyed, from this token account: no one gets them."),
-            p("Close", "a token account", &ata(ME, WSOL), "The SOL it holds for its rent goes to this account.")
+            p("Close", "a token account", &ata(ME, WSOL), "The SOL it holds goes to this account: its rent, or all of it if it's wrapped SOL.")
         ]
     );
     assert_eq!(r.summary, "burns 1 USDC; fee up to 0.000005 SOL");
@@ -178,7 +178,8 @@ fn what_hands_control_over_says_so() {
             p("Approve!", "up to 7 units", DELEGATE, &format!("That address may spend them from token account {}, without asking.", ata(ME, MINT)))
         ]
     );
-    assert_eq!(r.summary, "lets another spend tokens!; fee up to 0.000005 SOL");
+    // the second is of a token maki can't tell: that it can't read it too
+    assert_eq!(r.summary, "lets another spend tokens! And maki can't read all of it; fee up to 0.000005 SOL");
     let r = shown("set-authority");
     assert_eq!(r.pages[0], p("Hands over!", "the account", &format!("of {}\nto {DELEGATE}", ata(ME, USDC)), "Whoever it goes to decides, from then on."));
     assert_eq!(r.summary, "hands control over!; fee up to 0.000005 SOL");
@@ -264,6 +265,31 @@ fn messages_solana_would_refuse_maki_refuses() {
     let lie = [me(), key(DELEGATE), key(RECIPIENT), key(USDC), program::SYSTEM, program::TOKEN, ata_program];
     let lying = Message::parse(&legacy([1, 0, 5], &lie, &[(6, &[0, 1, 2, 3, 4, 5], &[1])])).unwrap();
     assert!(matches!(review(&lying, &me()), Err(Error::Invalid(_))));
+}
+
+#[test]
+fn closing_a_token_account_to_another_is_flagged() {
+    // this account's token account closed, its SOL (all of it, if it's wrapped SOL) to another
+    let keys = [me(), key(&ata(ME, WSOL)), key(RECIPIENT), program::TOKEN];
+    let close = Message::parse(&legacy([1, 0, 1], &keys, &[(3, &[1, 2, 0], &[9])])).unwrap();
+    let r = review(&close, &me()).unwrap();
+    assert_eq!(r.pages[0].prose, format!("The SOL it holds goes to {RECIPIENT}: its rent, or all of it if it's wrapped SOL."));
+    assert_eq!(r.summary, "sends a token account's SOL to another!; fee up to 0.000005 SOL");
+    // and the line under the question, however much there is to warn of, fits maki's screen
+    let most: &[u8] = &[2, 0xff, 0xff, 0xff, 0xff];
+    let price: &[u8] = &[3, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff];
+    let assign: &[u8] = &[[1, 0, 0, 0].as_slice(), &[6; 32]].concat();
+    let keys = [me(), key(&ata(ME, WSOL)), key(RECIPIENT), program::TOKEN, program::COMPUTE_BUDGET, program::SYSTEM, [8; 32]];
+    let everything = Message::parse(&legacy(
+        [1, 0, 4],
+        &keys,
+        &[(4, &[], most), (4, &[], price), (3, &[1, 2, 0], &[9]), (5, &[0], assign), (6, &[0], &[1])],
+    ))
+    .unwrap();
+    let r = review(&everything, &me()).unwrap();
+    assert_eq!(r.summary.len(), display::MAX_SUMMARY);
+    assert!(r.summary.starts_with("sends a token account's SOL to another, hands this account over! And maki can't read"), "{}", r.summary);
+    assert!(r.summary.ends_with('…'));
 }
 
 #[test]

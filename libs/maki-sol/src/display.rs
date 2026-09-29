@@ -50,6 +50,9 @@ impl core::fmt::Display for Error {
     }
 }
 
+/// The longest summary: what maki's review screen takes under its question.
+pub const MAX_SUMMARY: usize = 128;
+
 /// Lamports per signature: Solana's base fee.
 pub const LAMPORTS_PER_SIGNATURE: u64 = 5_000;
 /// Compute units: the most a transaction may ask for, and what each instruction gets when it
@@ -412,12 +415,16 @@ impl Reading<'_> {
                 let account = self.who(account);
                 self.pages.push(page("Burn", amount, account, "Destroyed, from this token account: no one gets them."));
             }
-            // CloseAccount: its SOL goes to an address
+            // CloseAccount: its SOL goes to an address: its rent, or all of it if it's wrapped SOL
             (Some(9), 1) => {
-                let (account, dest) = (a(0)?, a(1)?);
+                let (account, dest, owner) = (a(0)?, a(1)?, a(2)?);
+                if self.is_me(owner) && !self.is_me(dest) {
+                    self.warnings.push("sends a token account's SOL to another");
+                }
                 let dest = self.who(dest);
                 let account = self.who(account);
-                self.pages.push(page("Close", "a token account", account, format!("The SOL it holds for its rent goes to {dest}.")));
+                let prose = format!("The SOL it holds goes to {dest}: its rent, or all of it if it's wrapped SOL.");
+                self.pages.push(page("Close", "a token account", account, prose));
             }
             // SyncNative: wrapped SOL counted again
             (Some(17), 1) => {
@@ -527,9 +534,13 @@ pub fn review(m: &Message, me: &Key) -> Result<Review, Error> {
         r.pages.push(page("Fee paid by", "someone else", address(&payer), format!("Up to {}, not this account's. {how}", sol(max))));
     }
     let what = if !r.warnings.is_empty() {
-        let mut w = r.warnings.clone();
-        w.dedup();
-        format!("{}!", w.join(", "))
+        let mut w: Vec<&str> = Vec::new();
+        for x in &r.warnings {
+            if !w.contains(x) {
+                w.push(x);
+            }
+        }
+        format!("{}!{}", w.join(", "), if r.unreadable { " And maki can't read all of it" } else { "" })
     } else if r.unreadable {
         String::from("maki can't read all of it")
     } else {
@@ -547,7 +558,16 @@ pub fn review(m: &Message, me: &Key) -> Result<Review, Error> {
             said.join(", ")
         }
     };
-    let summary = if payer == *me { format!("{what}; fee up to {}", sol(max)) } else { format!("{what}; another pays the fee") };
+    let mut summary = if payer == *me { format!("{what}; fee up to {}", sol(max)) } else { format!("{what}; another pays the fee") };
+    // the line under the question is short (the pages say it all): cut, if it must be, at a character
+    if summary.len() > MAX_SUMMARY {
+        let mut end = MAX_SUMMARY - '…'.len_utf8();
+        while !summary.is_char_boundary(end) {
+            end -= 1;
+        }
+        summary.truncate(end);
+        summary.push('…');
+    }
     Ok(Review { pages: r.pages, summary })
 }
 
