@@ -462,6 +462,35 @@ fn marble_rolls_the_way_maki_tilts_and_pauses() {
     assert!(none.storage.is_empty());
 }
 
+#[test]
+fn breakout_serves_from_a_paddle_that_follows_the_tilt() {
+    use maki_bundle::Permission;
+    let bytes = std::fs::read(format!("{}/tests/fixtures/breakout.maki", env!("CARGO_MANIFEST_DIR"))).unwrap();
+    let bundle = maki_bundle::read(&bytes).unwrap();
+    let asked: Vec<Permission> = bundle.manifest.permissions.iter().map(|(p, _)| *p).collect();
+    assert_eq!(asked, [Permission::Motion]);
+    let limits = admit(&bundle.manifest, bundle.code).unwrap();
+    let run_with = |motion: Option<[i16; 3]>, events: &[Event]| {
+        let record = Rc::new(RefCell::new(Record { events: events.iter().copied().collect(), motion, ..Default::default() }));
+        assert_eq!(run(bundle.code, Box::new(Script(record.clone())), limits), Stop::Finished);
+        Rc::try_unwrap(record).ok().unwrap().into_inner()
+    };
+    let then = |first: &[Event], n: usize| -> Vec<Event> { first.iter().copied().chain(std::iter::repeat(Event::Timeout).take(n)).collect() };
+    // on the paddle until served, then off it
+    let waiting = run_with(Some([0, 0, 1000]), &then(&[Event::Centre], 10));
+    assert_eq!(waiting.frames[1], waiting.frames[11]);
+    let served = run_with(Some([0, 0, 1000]), &then(&[Event::Centre, Event::Centre], 10));
+    assert_ne!(served.frames[2], served.frames[12]);
+    // tilted one way or the other, the paddle (and the ball on it) goes that way
+    let left = run_with(Some([-400, 0, 900]), &then(&[Event::Centre], 10));
+    let right = run_with(Some([400, 0, 900]), &then(&[Event::Centre], 10));
+    assert_ne!(left.frames[11], right.frames[11]);
+    assert_ne!(left.frames[11], waiting.frames[11]);
+    // without an accelerometer, left and right move it
+    let pressed = run_with(None, &[Event::Centre, Event::Left, Event::Left]);
+    assert_ne!(pressed.frames[1], pressed.frames[3]);
+}
+
 fn words_list() -> Vec<String> {
     std::fs::read_to_string(format!("{}/../../sdk/examples/passphrase/src/words.txt", env!("CARGO_MANIFEST_DIR")))
         .unwrap()

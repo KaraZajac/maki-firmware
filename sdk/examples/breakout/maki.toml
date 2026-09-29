@@ -1,0 +1,13 @@
+id = "com.leviathan.maki.breakout"
+name = "Breakout"
+version = 1
+label = "1.0"
+api = 1
+storage = 1
+memory = 64
+backup = true
+description = "Knock out the bricks with the ball, a paddle below that follows as you tilt maki (or left and right move it). Three balls a game, faster with each wall you clear. Keeps your best score."
+icon = "icon.pbm"
+
+[permissions]
+motion = "To move the paddle as you tilt maki."
