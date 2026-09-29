@@ -123,6 +123,7 @@ members = [
   "libs/precursor-hal",
   "apps-baosec/vault2",
   "apps-baosec/maki-launcher",
+  "apps-baosec/maki-launcher/api-tests",
   "apps-baosec/maki-apps",
   "apps-baosec/maki-app-host",
   "libs/roughtime",

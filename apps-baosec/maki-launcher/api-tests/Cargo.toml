@@ -1,0 +1,19 @@
+[package]
+name = "maki-launcher-api-tests"
+version = "0.1.0"
+edition = "2021"
+description = "The launcher's IPC (src/api.rs) on its own, for its tests: the launcher, built for maki's hardware, doesn't build on a computer"
+license = "MIT OR Apache-2.0"
+publish = false
+
+[lib]
+path = "../src/api.rs"
+
+[dependencies]
+num-derive = { version = "0.4.2", default-features = false }
+num-traits = { version = "0.2.14", default-features = false }
+rkyv = { version = "0.8.8", default-features = false, features = ["std", "alloc"] }
+
+[lints.rust]
+# what only the launcher, or only its clients, use
+dead_code = "allow"

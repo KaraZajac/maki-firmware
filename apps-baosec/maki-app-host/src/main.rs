@@ -625,14 +625,21 @@ fn main() -> ! {
                 }
             }
             Some(HostOp::List) => {
+                let start = {
+                    let buffer = unsafe { Buffer::from_memory_message(msg.body.memory_message().unwrap()) };
+                    buffer.to_original::<AppList, _>().map(|l| l.start as usize).unwrap_or(0)
+                };
                 let keys = maki_keys::Keys::new(&xns).expect("couldn't connect to maki-keys");
                 let list = if keys.status().0 != maki_keys::State::Unlocked {
-                    AppList { apps: Vec::new(), result: RESULT_LOCKED }
+                    AppList { result: RESULT_LOCKED, ..Default::default() }
                 } else {
                     let store = Store::new();
-                    let apps = store
-                        .records()
+                    let records = store.records();
+                    let total = records.len() as u32;
+                    let apps = records
                         .into_iter()
+                        .skip(start)
+                        .take(LIST_PAGE)
                         .map(|(id, r)| AppInfo {
                             used: store.data_used(&id),
                             id,
@@ -647,7 +654,7 @@ fn main() -> ! {
                             storage: r.storage,
                         })
                         .collect();
-                    AppList { apps, result: RESULT_OK }
+                    AppList { start: start as u32, apps, total, result: RESULT_OK }
                 };
                 if let Some(mem) = msg.body.memory_message_mut() {
                     let mut buffer = unsafe { Buffer::from_memory_message_mut(mem) };

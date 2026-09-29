@@ -503,6 +503,53 @@ fn main() -> ! {
         });
     }
 
+    // More apps than one answer to a list holds: built with MAKI_DEMO_MANY, maki-link installs
+    // every WebAssembly example in `libs/maki-wasm/tests/fixtures` (each asks), then lists them,
+    // and asks for the last one as maki desktop's Apps page does, one at a time.
+    if option_env!("MAKI_DEMO_MANY").is_some() {
+        std::thread::spawn(|| {
+            let host = demo_host();
+            let bundles: [(&str, &[u8]); 15] = [
+                ("age", include_bytes!("../../../libs/maki-wasm/tests/fixtures/age.maki")),
+                ("bitcoin", include_bytes!("../../../libs/maki-wasm/tests/fixtures/bitcoin.maki")),
+                ("dice", include_bytes!("../../../libs/maki-wasm/tests/fixtures/dice.maki")),
+                ("ethereum", include_bytes!("../../../libs/maki-wasm/tests/fixtures/ethereum.maki")),
+                ("hello", include_bytes!("../../../libs/maki-wasm/tests/fixtures/hello.maki")),
+                ("monero", include_bytes!("../../../libs/maki-wasm/tests/fixtures/monero.maki")),
+                ("nostr", include_bytes!("../../../libs/maki-wasm/tests/fixtures/nostr.maki")),
+                ("passphrase", include_bytes!("../../../libs/maki-wasm/tests/fixtures/passphrase.maki")),
+                ("sensors", include_bytes!("../../../libs/maki-wasm/tests/fixtures/sensors.maki")),
+                ("signer", include_bytes!("../../../libs/maki-wasm/tests/fixtures/signer.maki")),
+                ("snake", include_bytes!("../../../libs/maki-wasm/tests/fixtures/snake.maki")),
+                ("ssh", include_bytes!("../../../libs/maki-wasm/tests/fixtures/ssh.maki")),
+                ("status", include_bytes!("../../../libs/maki-wasm/tests/fixtures/status.maki")),
+                ("tally", include_bytes!("../../../libs/maki-wasm/tests/fixtures/tally.maki")),
+                ("wifi", include_bytes!("../../../libs/maki-wasm/tests/fixtures/wifi.maki")),
+            ];
+            for (name, bytes) in bundles {
+                let r = demo_install(&host, bytes);
+                log::warn!("demo many install {name}: result {} '{}'", r.result, r.reason);
+            }
+            let list = host.list();
+            log::warn!(
+                "demo many list: result {}, {} of {} apps, as expected: {}",
+                list.result,
+                list.apps.len(),
+                list.total,
+                list.result == app_host::RESULT_OK && list.apps.len() == bundles.len()
+            );
+            let names: Vec<&str> = list.apps.iter().map(|a| a.name.as_str()).collect();
+            log::warn!("demo many names: {names:?}");
+            let xns = xous_names::XousNames::new().unwrap();
+            let (kind, reply) = app_list(app_host::AppHost::new(&xns).ok(), bundles.len() as u32 - 1);
+            log::warn!(
+                "demo many last: reply {kind:#04x}, {} bytes, approved: {}",
+                reply.len(),
+                reply.first() == Some(&(Approval::Approved as u8))
+            );
+        });
+    }
+
     // A native app: built with MAKI_DEMO_NATIVE, maki-link installs the SDK's Hello Native (the
     // Hello example built for maki's processor). Opened, it runs in a process of its own, loaded
     // by the stub and confined before its code runs, and talks to maki's app service.

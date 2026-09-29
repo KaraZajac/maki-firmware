@@ -16,7 +16,8 @@ pub enum HostOp {
     /// Memory message (mutable lend) carrying an `Install`: a piece of a bundle, in order. The
     /// last is answered once the owner decides.
     Install = 1,
-    /// Memory message (mutable lend) carrying an `AppList`, filled in.
+    /// Memory message (mutable lend) carrying an `AppList` with its `start`, filled in: the
+    /// apps from there on, `LIST_PAGE` at most.
     List = 2,
     /// Memory message (mutable lend) carrying a `Remove`, answered once the owner decides.
     Remove = 3,
@@ -83,9 +84,17 @@ pub struct AppInfo {
 
 #[derive(Debug, Clone, Default, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
 pub struct AppList {
+    /// Asked for: the first app wanted, counting from 0 in the host's order (by ID).
+    pub start: u32,
     pub apps: Vec<AppInfo>,
+    /// Set by the host: how many apps there are in all.
+    pub total: u32,
     pub result: u32,
 }
+
+/// The most apps in one answer to `List`. xous-ipc serializes with 256 bytes of scratch space,
+/// and a list takes 20 of them for each app in it: 13 apps couldn't be sent at once.
+pub const LIST_PAGE: usize = 8;
 
 #[derive(Debug, Clone, Default, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
 pub struct Remove {
@@ -161,14 +170,29 @@ impl AppHost {
         buf.to_original::<Install, _>().unwrap_or(failed)
     }
 
+    /// Every installed app, asked for `LIST_PAGE` at a time.
     pub fn list(&self) -> AppList {
-        let failed = AppList { apps: Vec::new(), result: RESULT_FAILED };
-        // room for every app with its icon
-        let mut buf = Buffer::new((MAX_APPS * 768 + 4096).next_multiple_of(4096));
-        if buf.replace(AppList::default()).is_err() || buf.lend_mut(self.conn, HostOp::List.to_u32().unwrap()).is_err() {
-            return failed;
+        let failed = AppList { result: RESULT_FAILED, ..Default::default() };
+        let mut list = AppList { result: RESULT_OK, ..Default::default() };
+        loop {
+            // room for a page of apps with their icons
+            let mut buf = Buffer::new((LIST_PAGE * 768 + 4096).next_multiple_of(4096));
+            let ask = AppList { start: list.apps.len() as u32, ..Default::default() };
+            if buf.replace(ask).is_err() || buf.lend_mut(self.conn, HostOp::List.to_u32().unwrap()).is_err() {
+                return failed;
+            }
+            let Ok(page) = buf.to_original::<AppList, _>() else { return failed };
+            if page.result != RESULT_OK {
+                return page;
+            }
+            let more = !page.apps.is_empty();
+            list.apps.extend(page.apps);
+            list.total = page.total;
+            // all of them, or as many as maki keeps (were apps installed as it went)
+            if !more || list.apps.len() >= page.total as usize || list.apps.len() > MAX_APPS {
+                return list;
+            }
         }
-        buf.to_original::<AppList, _>().unwrap_or(failed)
     }
 
     /// Removes an app and its data, once the owner says so on maki.
@@ -306,7 +330,13 @@ impl Record {
 
 #[cfg(test)]
 mod tests {
-    use super::Record;
+    use core::mem::MaybeUninit;
+
+    use rkyv::rancor::Failure;
+    use rkyv::ser::allocator::SubAllocator;
+    use rkyv::ser::writer::Buffer as Writer;
+
+    use super::*;
 
     #[test]
     fn records_round_trip_and_refuse_what_they_cut() {
@@ -334,5 +364,33 @@ mod tests {
         assert_eq!(Record::decode(&longer), None);
         let plain = Record { icon: None, label: String::new(), ..r };
         assert_eq!(Record::decode(&plain.encode()), Some(plain));
+    }
+
+    /// Whether it serializes as xous-ipc's `Buffer::replace` does it: with 256 bytes of scratch.
+    fn goes_through_ipc(list: &AppList) -> bool {
+        let mut out = vec![0u8; 64 * 1024];
+        let mut scratch = [MaybeUninit::<u8>::uninit(); 256];
+        rkyv::api::low::to_bytes_in_with_alloc::<_, _, Failure>(
+            list,
+            Writer::from(&mut out[..]),
+            SubAllocator::new(&mut scratch),
+        )
+        .is_ok()
+    }
+
+    #[test]
+    fn a_page_of_apps_goes_through_ipc_and_all_of_them_wouldnt() {
+        let app = AppInfo {
+            id: "com.leviathan.maki.passphrase".into(),
+            name: "Passphrase".into(),
+            label: "Leviathan Security".into(),
+            developer: vec![7; 32],
+            icon: vec![0x5555_5555; 32],
+            ..Default::default()
+        };
+        let list = |n| AppList { apps: vec![app.clone(); n], total: MAX_APPS as u32, ..Default::default() };
+        assert!(goes_through_ipc(&list(LIST_PAGE)));
+        // why they're paged
+        assert!(!goes_through_ipc(&list(MAX_APPS)));
     }
 }

@@ -11,7 +11,7 @@ use std::collections::VecDeque;
 use blitstr2::GlyphStyle;
 use xous_ipc::Buffer;
 
-use crate::api::{ANSWER_ALLOWED, ANSWER_DENIED, ANSWER_TIMED_OUT, ASK_APP_SIDELOADED, AskRequest};
+use crate::api::{ANSWER_ALLOWED, ANSWER_DENIED, ANSWER_TIMED_OUT, ASK_APP_SIDELOADED, AskRequest, Page};
 use crate::ui::{H, Key, LINE, SMALL_LINE, Screen, W};
 
 /// An ask shows its site in fixed-width type (8 pixels a character), 15 characters to a line,
@@ -105,13 +105,13 @@ fn mono_lines(text: &str) -> Vec<String> {
 }
 
 impl Stop {
-    /// The stops of an ask, in order.
-    fn of(req: &AskRequest, screen: &Screen) -> Vec<Stop> {
+    /// The stops of an ask with `pages` and `choices`, in order.
+    fn of(pages: &[Page], choices: usize, screen: &Screen) -> Vec<Stop> {
         let mut stops = Vec::new();
         // the space for text between the heading (or the value) and the bottom line
         let top = screen.bar + 4;
         let bottom = H - SMALL_LINE - 2;
-        for page in &req.pages {
+        for page in pages {
             let mut rows: Vec<Row> = mono_lines(&page.mono).into_iter().map(Row::Mono).collect();
             if !page.prose.is_empty() {
                 if !rows.is_empty() {
@@ -140,10 +140,10 @@ impl Stop {
             let value = if n == 1 { page.value.clone() } else { String::new() };
             stops.push(Stop::Page { heading, value, rows: screen_rows });
         }
-        if req.choices.is_empty() {
+        if choices == 0 {
             stops.push(Stop::Yes);
         } else {
-            stops.extend((0..req.choices.len()).map(Stop::Choice));
+            stops.extend((0..choices).map(Stop::Choice));
         }
         stops.push(Stop::No);
         stops
@@ -154,6 +154,8 @@ pub(crate) struct Prompt {
     /// the asker's message, held until it's answered: the asker stays blocked until then
     msg: xous::MessageEnvelope,
     req: AskRequest,
+    /// its choices, unpacked
+    choices: Vec<String>,
     stops: Vec<Stop>,
     selected: usize,
     /// ticktimer milliseconds when it gives up. A deadline rather than a count of ticks: ticks
@@ -231,7 +233,7 @@ impl Prompt {
 
         screen.status_bar(&countdown, linked);
         screen.time_left(left_ms, total_ms);
-        let n = self.req.choices.len();
+        let n = self.choices.len();
         let site_lines = if n > 0 { SITE_LINES - 1 } else { SITE_LINES };
         let site = maki_proto::site::lines(&self.req.subject, SITE_WIDTH, site_lines).join("\n");
         screen.text(y, LINE * site_lines as isize + 2, GlyphStyle::Monospace, false, false, &site);
@@ -241,7 +243,7 @@ impl Prompt {
             Stop::Choice(i) => {
                 let heading = format!("{} {}/{}", self.req.question, i + 1, n);
                 screen.text(y, LINE, GlyphStyle::Regular, false, false, &heading);
-                screen.text(y + LINE, LINE, GlyphStyle::Bold, false, false, &self.req.choices[i]);
+                screen.text(y + LINE, LINE, GlyphStyle::Bold, false, false, &self.choices[i]);
                 screen.action_bar("use this", true);
             }
             Stop::No if n > 0 => {
@@ -282,13 +284,15 @@ impl Asking {
         if self.current.is_none() {
             if let Some((msg, req)) = self.queue.pop_front() {
                 let now = self.tt.elapsed_ms();
-                let stops = Stop::of(&req, screen);
+                let choices = req.choices();
+                let stops = Stop::of(&req.pages(), choices.len(), screen);
                 log::info!("showing the ask from {} ({} stops)", req.subject, stops.len());
                 let mut prompt = Prompt {
                     msg,
                     deadline_ms: now + req.timeout_s.max(1) as u64 * 1000,
                     shown_ms: now,
                     req,
+                    choices,
                     stops,
                     selected: 0,
                     redrawn: false,

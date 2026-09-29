@@ -46,6 +46,10 @@ pub(crate) enum LauncherOp {
 
 /// A decision for the owner, which the launcher shows over whatever is on screen. The app in
 /// front is put in the background while it shows, and brought back after.
+///
+/// Its lists travel packed, a string each (`pack_choices`, `pack_pages`): xous-ipc serializes
+/// with 256 bytes of scratch space, and a list takes room there for every entry, so a review of
+/// 25 pages (a Monero wallet's backup words) couldn't be sent. A string takes none.
 #[derive(Debug, Clone, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
 pub struct AskRequest {
     /// Who is asking, shown largest: a site's hostname. A long one is broken at dots, and if it
@@ -55,11 +59,11 @@ pub struct AskRequest {
     pub question: String,
     /// What it's about, one line (a username). Not shown when there are choices.
     pub detail: String,
-    /// Alternatives to pick from; empty for a plain allow or deny.
-    pub choices: Vec<String>,
+    /// Alternatives to pick from, packed; empty for a plain allow or deny.
+    pub choices: String,
     /// What there is to check before deciding (a transaction's payments, an address), gone
-    /// through with left and right before the answers.
-    pub pages: Vec<Page>,
+    /// through with left and right before the answers; packed.
+    pub pages: String,
     /// The answers' labels, or empty for "allow" and "deny".
     pub yes: String,
     pub no: String,
@@ -81,7 +85,7 @@ pub const ASK_APP_SIDELOADED: u8 = 2;
 
 /// A page of an ask. The launcher breaks one that doesn't fit onto more screens, repeating the
 /// heading, so nothing on it is ever cut.
-#[derive(Debug, Clone, Default, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Page {
     /// a few words, at the top: "Send 1 of 2"
     pub heading: String,
@@ -91,6 +95,63 @@ pub struct Page {
     pub mono: String,
     /// in maki's small type, words wrapped to fit, after `mono`: what something means, in words
     pub prose: String,
+}
+
+/// Starts each entry of a packed list.
+const ENTRY: char = '\u{1e}';
+/// Separates the parts of a packed page.
+const PART: char = '\u{1f}';
+
+/// Text into a packed list, without the separators (which would show as nothing anyway).
+fn pack_text(out: &mut String, text: &str) {
+    out.extend(text.chars().map(|c| if c == ENTRY || c == PART { ' ' } else { c }));
+}
+
+/// `AskRequest::choices`, packed.
+#[allow(dead_code)] // the client side's (lib.rs)
+pub fn pack_choices(choices: &[String]) -> String {
+    let mut out = String::new();
+    for choice in choices {
+        out.push(ENTRY);
+        pack_text(&mut out, choice);
+    }
+    out
+}
+
+/// `AskRequest::pages`, packed.
+#[allow(dead_code)] // the client side's (lib.rs)
+pub fn pack_pages(pages: &[Page]) -> String {
+    let mut out = String::new();
+    for page in pages {
+        out.push(ENTRY);
+        for (i, text) in [&page.heading, &page.value, &page.mono, &page.prose].into_iter().enumerate() {
+            if i > 0 {
+                out.push(PART);
+            }
+            pack_text(&mut out, text);
+        }
+    }
+    out
+}
+
+impl AskRequest {
+    /// Its choices, unpacked.
+    #[allow(dead_code)] // the launcher's (main.rs)
+    pub fn choices(&self) -> Vec<String> { self.choices.split(ENTRY).skip(1).map(String::from).collect() }
+
+    /// Its pages, unpacked.
+    #[allow(dead_code)] // the launcher's (main.rs)
+    pub fn pages(&self) -> Vec<Page> {
+        self.pages
+            .split(ENTRY)
+            .skip(1)
+            .map(|packed| {
+                let mut parts = packed.split(PART).map(String::from);
+                let mut part = || parts.next().unwrap_or_default();
+                Page { heading: part(), value: part(), mono: part(), prose: part() }
+            })
+            .collect()
+    }
 }
 
 /// The owner's decision on an `AskRequest`.
@@ -133,4 +194,78 @@ pub struct AppRegistration {
 #[derive(Debug, Clone, Default, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
 pub struct AppMenu {
     pub items: Vec<String>,
+}
+
+#[cfg(test)]
+mod tests {
+    use core::mem::MaybeUninit;
+
+    use rkyv::rancor::Failure;
+    use rkyv::ser::allocator::SubAllocator;
+    use rkyv::ser::writer::Buffer as Writer;
+
+    use super::*;
+
+    fn asking(choices: &[String], pages: &[Page]) -> AskRequest {
+        AskRequest {
+            subject: "Monero".into(),
+            question: "Wrote them down?".into(),
+            detail: "25 words, in order".into(),
+            choices: pack_choices(choices),
+            pages: pack_pages(pages),
+            yes: "done".into(),
+            no: "close".into(),
+            timeout_s: 900,
+            app: ASK_APP_STORE,
+            answer: ANSWER_TIMED_OUT,
+            choice: 0,
+        }
+    }
+
+    fn words() -> Vec<Page> {
+        (1..=25)
+            .map(|i| Page {
+                heading: format!("Word {i} of 25"),
+                value: "tavern".into(),
+                mono: String::new(),
+                prose: "Write it down, in order. Keep it off computers.".into(),
+            })
+            .collect()
+    }
+
+    #[test]
+    fn lists_unpack_as_they_were_packed() {
+        let choices = vec!["alice".to_string(), String::new(), "bob@example.com".into()];
+        let req = asking(&choices, &words());
+        assert_eq!(req.pages(), words());
+        assert_eq!(req.choices(), choices);
+        let none = asking(&[], &[]);
+        assert!(none.pages().is_empty() && none.choices().is_empty());
+        // an empty choice is still a choice, and an empty page still a page
+        assert_eq!(asking(&[String::new()], &[]).choices(), vec![String::new()]);
+        assert_eq!(asking(&[], &[Page::default()]).pages(), vec![Page::default()]);
+    }
+
+    #[test]
+    fn the_separators_in_text_make_nothing_more() {
+        let sneaky = format!("a{ENTRY}b{PART}c");
+        let req = asking(&[sneaky.clone()], &[Page { heading: sneaky, ..Default::default() }]);
+        assert_eq!(req.choices(), vec!["a b c".to_string()]);
+        assert_eq!(req.pages(), vec![Page { heading: "a b c".into(), ..Default::default() }]);
+    }
+
+    /// As xous-ipc's `Buffer::replace` serializes: 256 bytes of scratch space, which a list of
+    /// 25 pages outgrew (16 was the most).
+    #[test]
+    fn a_long_review_goes_through_ipc() {
+        let req = asking(&vec!["a login".to_string(); 100], &[words(), words(), words(), words()].concat());
+        let mut out = vec![0u8; 64 * 1024];
+        let mut scratch = [MaybeUninit::<u8>::uninit(); 256];
+        let serialized = rkyv::api::low::to_bytes_in_with_alloc::<_, _, Failure>(
+            &req,
+            Writer::from(&mut out[..]),
+            SubAllocator::new(&mut scratch),
+        );
+        assert!(serialized.is_ok());
+    }
 }

@@ -95,8 +95,8 @@ impl Launcher {
             subject: subject.into(),
             question: question.into(),
             detail: detail.into(),
-            choices: choices.to_vec(),
-            pages: Vec::new(),
+            choices: pack_choices(choices),
+            pages: String::new(),
             yes: String::new(),
             no: String::new(),
             timeout_s,
@@ -123,8 +123,8 @@ impl Launcher {
             subject: name.into(),
             question: question.into(),
             detail: detail.into(),
-            choices: Vec::new(),
-            pages: Vec::new(),
+            choices: String::new(),
+            pages: String::new(),
             yes: yes.into(),
             no: no.into(),
             timeout_s,
@@ -153,8 +153,8 @@ impl Launcher {
             subject: name.into(),
             question: question.into(),
             detail: detail.into(),
-            choices: Vec::new(),
-            pages,
+            choices: String::new(),
+            pages: pack_pages(&pages),
             yes: yes.into(),
             no: no.into(),
             timeout_s,
@@ -181,8 +181,8 @@ impl Launcher {
             subject: subject.into(),
             question: question.into(),
             detail: detail.into(),
-            choices: Vec::new(),
-            pages,
+            choices: String::new(),
+            pages: pack_pages(&pages),
             yes: yes.into(),
             no: no.into(),
             timeout_s,
@@ -195,8 +195,7 @@ impl Launcher {
     fn send_ask(&self, request: AskRequest) -> Result<Answer, xous::Error> {
         // `into_buf` would size the buffer by the struct, one page, which a review with many
         // pages outgrows: room for the text, plus its bookkeeping
-        let text: usize = request.pages.iter().map(|p| p.heading.len() + p.value.len() + p.mono.len() + p.prose.len() + 64).sum::<usize>()
-            + request.choices.iter().map(|c| c.len() + 16).sum::<usize>();
+        let text = request.pages.len() + request.choices.len();
         let mut buf = Buffer::new((4096 + text).next_multiple_of(4096));
         buf.replace(request).or(Err(xous::Error::InternalError))?;
         buf.lend_mut(self.conn, LauncherOp::Ask.to_u32().unwrap())?;

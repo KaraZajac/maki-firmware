@@ -5444,6 +5444,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "maki-launcher-api-tests"
+version = "0.1.0"
+dependencies = [
+ "num-derive 0.4.2",
+ "num-traits",
+ "rkyv 0.8.8",
+]
+
+[[package]]
 name = "maki-link"
 version = "0.1.0"
 dependencies = [
