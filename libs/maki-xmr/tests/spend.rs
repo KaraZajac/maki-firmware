@@ -403,3 +403,35 @@ fn key_images_come_with_what_proves_them() {
         assert_eq!(me.key_image_proof(&tx_key, 2, major, minor, &out.key, &[0; 32]), None);
     }
 }
+
+/// The request the emulator's wallet demo has maki sign (MAKI_DEMO_WALLET, in maki-link), and one
+/// of its outputs for a key image: the test phrase's, in made-up rings, the same every time.
+/// `MAKI_WRITE_FIXTURES=1` writes them again.
+#[test]
+fn the_emulator_s_request_is_the_test_phrase_s_to_sign() {
+    let mut random = Random(0xab4d_0071);
+    let me = wallet();
+    let them = Keys::from_spend(random.scalar());
+    let inputs = vec![input(&mut random, &me, 0, 2_000_000_000_000, false), input(&mut random, &me, 1, 750_000_000_000, true)];
+    let request = Request {
+        network: Network::Mainnet,
+        account: 0,
+        fee: 30_720_000,
+        change: 2_750_000_000_000 - 1_500_000_000_000 - 30_720_000,
+        payments: vec![payment(&address_of(&them, 0, 0), 1_500_000_000_000)],
+        inputs,
+    };
+    let first = &request.inputs[0];
+    let output = [&first.tx_key[..], &first.index.to_le_bytes(), &0u32.to_le_bytes(), &first.subaddress.to_le_bytes(), &first.ring[first.real].key]
+        .concat();
+    let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures");
+    if std::env::var("MAKI_WRITE_FIXTURES").is_ok() {
+        std::fs::create_dir_all(dir).unwrap();
+        std::fs::write(format!("{dir}/abandon-request.bin"), request.to_bytes()).unwrap();
+        std::fs::write(format!("{dir}/abandon-output.bin"), &output).unwrap();
+    }
+    assert_eq!(std::fs::read(format!("{dir}/abandon-request.bin")).unwrap(), request.to_bytes());
+    assert_eq!(std::fs::read(format!("{dir}/abandon-output.bin")).unwrap(), output);
+    let signed = spend::sign(&me, &request, &[0; 32]).unwrap();
+    check(&request, &signed, &[(&them, 0, 0, 1_500_000_000_000), (&me, 0, 0, request.change)]);
+}

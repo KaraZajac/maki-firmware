@@ -760,6 +760,28 @@ fn main() -> ! {
                     texts(&a).first().map(String::as_str) == Some(expected)
                 );
             }
+            // then as maki desktop spends: the view key, once the owner lets it watch (the test
+            // phrase's, as every Monero wallet makes it from the spend key); an output's key
+            // image; and a transaction (two of the wallet's outputs, 1.5 XMR paid, the change
+            // back) made and signed by maki
+            const VIEW_KEY: [u8; 32] = [
+                0x0f, 0x3f, 0xe2, 0x5d, 0x0c, 0x6d, 0x4c, 0x94, 0xdd, 0xe0, 0xc0, 0xbc, 0xc2, 0x14, 0xb2, 0x33, 0xe9,
+                0xc7, 0x29, 0x27, 0xf8, 0x13, 0x72, 0x8b, 0x0f, 0x01, 0xf2, 0x8f, 0x9d, 0x5e, 0x12, 0x01,
+            ];
+            let a = ask(XMR, vec![b'W', 0]);
+            log::warn!("demo wallet xmr watch: status {:?}, the view key as expected: {}", a.first(), a.ends_with(&VIEW_KEY));
+            let output: &[u8] = include_bytes!("../../../libs/maki-xmr/tests/fixtures/abandon-output.bin");
+            let a = ask(XMR, [&[b'K', 1][..], output].concat());
+            log::warn!("demo wallet xmr key image: status {:?}, {} bytes", a.first(), a.len());
+            let request: &[u8] = include_bytes!("../../../libs/maki-xmr/tests/fixtures/abandon-request.bin");
+            let a = pieces(XMR, &[b'S', 0], &[], request);
+            let why = if a.first() == Some(&5) { texts(&a) } else { Vec::new() };
+            log::warn!("demo wallet xmr sign: status {:?} {why:?}", a.first());
+            if let Some(s) = signed(XMR, &a) {
+                // the transaction's length, then it: version 2, two inputs
+                let tx = s.get(4..).unwrap_or_default();
+                log::warn!("demo wallet xmr signed: {} bytes, a transaction of two inputs: {}", s.len(), tx.starts_with(&[2, 0, 2]));
+            }
         });
     }
 
