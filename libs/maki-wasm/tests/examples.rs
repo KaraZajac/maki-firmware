@@ -491,6 +491,64 @@ fn breakout_serves_from_a_paddle_that_follows_the_tilt() {
     assert_ne!(pressed.frames[1], pressed.frames[3]);
 }
 
+#[test]
+fn minisign_signs_a_hash_and_its_own_trusted_comment_once_asked() {
+    use ed25519_dalek::{Signature, SigningKey, Verifier};
+    let bytes = std::fs::read(format!("{}/tests/fixtures/minisign.maki", env!("CARGO_MANIFEST_DIR"))).unwrap();
+    let bundle = maki_bundle::read(&bytes).unwrap();
+    let limits = admit(&bundle.manifest, bundle.code).unwrap();
+    // every label's secret is [7; 32] here: the key, and the ID from its own label
+    let public = SigningKey::from_bytes(&[7; 32]).verifying_key();
+    let hash = [0x5au8; 64];
+    let sign = |name: &str, comment: &str| {
+        let mut m = vec![b'S'];
+        m.extend_from_slice(&hash);
+        m.extend_from_slice(&1_234_567u64.to_le_bytes());
+        m.push(name.len() as u8);
+        m.extend_from_slice(name.as_bytes());
+        m.extend_from_slice(&(comment.len() as u16).to_le_bytes());
+        m.extend_from_slice(comment.as_bytes());
+        m
+    };
+    let inbox = vec![b"P".to_vec(), sign("maki-0.2.0.tar.gz", ""), sign("notes.txt", "release 0.2"), sign("other.bin", ""), sign("../etc/passwd", "")];
+    let record = Rc::new(RefCell::new(Record {
+        events: std::iter::repeat(Event::Message).take(inbox.len()).collect(),
+        inbox: inbox.into_iter().collect(),
+        answers: [Answer::Yes, Answer::Yes, Answer::No].into_iter().collect(),
+        ..Default::default()
+    }));
+    assert_eq!(run(bundle.code, Box::new(Script(record.clone())), limits), Stop::Finished);
+    let r = record.borrow();
+    // the public key and its ID
+    assert_eq!(r.replies[0][0], 0);
+    assert_eq!(&r.replies[0][1..33], public.as_bytes());
+    assert_eq!(&r.replies[0][33..], &[7; 8]);
+    // signed: the hash, then the signature with the trusted comment, as minisign checks them
+    let check = |reply: &[u8]| -> String {
+        assert_eq!(reply[0], 0, "{reply:?}");
+        assert_eq!(&reply[1..9], &[7; 8]);
+        let sig = Signature::from_slice(&reply[9..73]).unwrap();
+        public.verify(&hash, &sig).unwrap();
+        let n = u16::from_le_bytes([reply[73], reply[74]]) as usize;
+        let comment = std::str::from_utf8(&reply[75..75 + n]).unwrap().to_string();
+        let global = Signature::from_slice(&reply[75 + n..]).unwrap();
+        public.verify(&[&reply[9..73], comment.as_bytes()].concat(), &global).unwrap();
+        comment
+    };
+    // maki's own comment (no clock here, so no timestamp), or the signer's
+    assert_eq!(check(&r.replies[1]), "file:maki-0.2.0.tar.gz\thashed");
+    assert_eq!(check(&r.replies[2]), "release 0.2");
+    // what the owner read first
+    assert_eq!(r.asks[0].question, "Sign maki-0.2.0.tar.gz?");
+    assert_eq!(r.asks[0].detail, "1.2 MB, BLAKE2b 5a5a5a5a5a5a...");
+    assert_eq!(r.asks[1].detail, "1.2 MB, BLAKE2b 5a5a5a5a5a5a..., comment: release 0.2");
+    // a no is a no, and a name with a path isn't asked about at all
+    assert_eq!(r.replies[3], [1]);
+    assert_eq!(r.replies[4], [4]);
+    assert_eq!(r.asks.len(), 3);
+    assert_eq!(r.storage.get("signed").unwrap(), &2u32.to_le_bytes());
+}
+
 fn words_list() -> Vec<String> {
     std::fs::read_to_string(format!("{}/../../sdk/examples/passphrase/src/words.txt", env!("CARGO_MANIFEST_DIR")))
         .unwrap()
