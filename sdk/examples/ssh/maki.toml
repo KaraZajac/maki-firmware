@@ -1,12 +1,12 @@
 id = "com.leviathan.maki.ssh"
 name = "SSH"
-version = 2
-label = "1.1"
+version = 3
+label = "1.2"
 api = 1
 storage = 1
 memory = 64
 backup = false
-description = "An SSH key from your recovery phrase, for ssh and git through maki desktop's SSH agent. Every sign-in and signature waits for your yes on maki."
+description = "An SSH key from your recovery phrase, for ssh and git through maki desktop's SSH agent, and a certificate authority's if you turn it on. Every sign-in, certificate and signature waits for your yes on maki, a commit's with its subject and author."
 icon = "icon.pbm"
 
 [permissions]

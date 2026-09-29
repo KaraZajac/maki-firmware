@@ -72,7 +72,8 @@ impl Platform for Script {
         r.asks.push(ask.clone());
         r.answers.pop_front().unwrap_or(Answer::NoAnswer)
     }
-    fn app_secret(&mut self, _: &str) -> Option<[u8; 32]> { Some([7; 32]) }
+    // the same for every label but the SSH app's certificate authority's, which must differ
+    fn app_secret(&mut self, label: &str) -> Option<[u8; 32]> { Some(if label == "ssh-ca" { [9; 32] } else { [7; 32] }) }
     fn type_text(&mut self, text: &str) -> bool {
         self.0.borrow_mut().typed.push(text.into());
         true
@@ -547,6 +548,177 @@ fn minisign_signs_a_hash_and_its_own_trusted_comment_once_asked() {
     assert_eq!(r.replies[4], [4]);
     assert_eq!(r.asks.len(), 3);
     assert_eq!(r.storage.get("signed").unwrap(), &2u32.to_le_bytes());
+}
+
+#[test]
+fn the_ssh_app_signs_certificates_with_its_ca_key_once_that_is_on() {
+    use ed25519_dalek::{Signature, SigningKey, Verifier};
+    use sha2::{Digest, Sha256};
+    let bytes = std::fs::read(format!("{}/tests/fixtures/ssh.maki", env!("CARGO_MANIFEST_DIR"))).unwrap();
+    let bundle = maki_bundle::read(&bytes).unwrap();
+    let limits = admit(&bundle.manifest, bundle.code).unwrap();
+    let blob_of = |k: &SigningKey| {
+        let mut b = Vec::new();
+        ssh_string(&mut b, b"ssh-ed25519");
+        ssh_string(&mut b, k.verifying_key().as_bytes());
+        b
+    };
+    let (user, ca) = (SigningKey::from_bytes(&[7; 32]), SigningKey::from_bytes(&[9; 32]));
+    let (user_blob, ca_blob) = (blob_of(&user), blob_of(&ca));
+    // a user certificate for someone's key, for kara and root, until 1 Jan 2027, signed by the CA
+    let cert = |signer: &[u8], principals: &[&str], options: &[u8]| {
+        let mut c = Vec::new();
+        ssh_string(&mut c, b"ssh-ed25519-cert-v01@openssh.com");
+        ssh_string(&mut c, &[1; 32]);
+        ssh_string(&mut c, &[5; 32]);
+        c.extend_from_slice(&7u64.to_be_bytes());
+        c.extend_from_slice(&1u32.to_be_bytes());
+        ssh_string(&mut c, b"laptop");
+        let mut p = Vec::new();
+        for name in principals {
+            ssh_string(&mut p, name.as_bytes());
+        }
+        ssh_string(&mut c, &p);
+        c.extend_from_slice(&0u64.to_be_bytes());
+        c.extend_from_slice(&1_798_761_600u64.to_be_bytes());
+        ssh_string(&mut c, options);
+        ssh_string(&mut c, b"");
+        ssh_string(&mut c, b"");
+        ssh_string(&mut c, signer);
+        c
+    };
+    let sign = |key: &[u8], data: &[u8]| {
+        let mut body = Vec::new();
+        ssh_string(&mut body, key);
+        ssh_string(&mut body, data);
+        body.extend_from_slice(&0u32.to_be_bytes());
+        agent(3, 13, &body)
+    };
+    let mut forced = Vec::new();
+    ssh_string(&mut forced, b"force-command");
+    ssh_string(&mut forced, b"\0\0\0\x04true");
+    let inbox = vec![
+        // before the CA key is on: it isn't offered, and doesn't sign
+        agent(3, 11, &[]),
+        sign(&ca_blob, &cert(&ca_blob, &["kara", "root"], b"")),
+        agent(3, 11, &[]),
+        sign(&ca_blob, &cert(&ca_blob, &["kara", "root"], b"")),
+        sign(&ca_blob, &cert(&ca_blob, &[], &forced)),
+        // not certificates, or not the CA's: refused without asking
+        sign(&ca_blob, b"SSHSIG anything"),
+        sign(&ca_blob, &cert(&user_blob, &["kara"], b"")),
+    ];
+    let record = Rc::new(RefCell::new(Record {
+        events: [Event::Message, Event::Message, Event::Menu(1)].into_iter().chain(std::iter::repeat(Event::Message).take(5)).collect(),
+        inbox: inbox.into_iter().collect(),
+        answers: [Answer::Yes, Answer::Yes].into_iter().collect(),
+        ..Default::default()
+    }));
+    assert_eq!(run(bundle.code, Box::new(Script(record.clone())), limits), Stop::Finished);
+    let r = record.borrow();
+    assert_eq!(r.menu, ["Show the key", "Show the CA key", "Stop the CA key"]);
+    assert_eq!(r.storage["ca"], 1u32.to_le_bytes());
+    // off: one key; on: the CA's too, named apart
+    assert_eq!(&r.replies[0][..5], &[12, 0, 0, 0, 1]);
+    assert_eq!(r.replies[1], [5]);
+    assert_eq!(&r.replies[2][..5], &[12, 0, 0, 0, 2]);
+    let (_, rest) = read_string(&r.replies[2][5..]);
+    let (_, rest) = read_string(rest);
+    let (listed, rest) = read_string(rest);
+    assert_eq!(listed, &ca_blob[..]);
+    assert_eq!(read_string(rest).0, b"maki CA");
+    // signed with the CA's key, once the owner read it
+    let verify = |answer: &[u8], data: &[u8]| {
+        assert_eq!(answer[0], 14, "{answer:?}");
+        let (sig_blob, _) = read_string(&answer[1..]);
+        let (_, rest) = read_string(sig_blob);
+        ca.verifying_key().verify(data, &Signature::from_slice(read_string(rest).0).unwrap()).unwrap();
+    };
+    verify(&r.replies[3], &cert(&ca_blob, &["kara", "root"], b""));
+    assert_eq!(r.asks[0].question, "Sign a user certificate?");
+    let key_fp = {
+        let mut b = Vec::new();
+        ssh_string(&mut b, b"ssh-ed25519");
+        ssh_string(&mut b, &[5; 32]);
+        format!("SHA256:{}", b64(&Sha256::digest(&b)))
+    };
+    assert_eq!(r.asks[0].detail, format!("for kara,root (laptop), until 1 Jan 2027, key {}", &key_fp[..19]));
+    // no principals is anyone at all, and restrictions are said
+    verify(&r.replies[4], &cert(&ca_blob, &[], &forced));
+    assert!(r.asks[1].detail.starts_with("for EVERY user (laptop), until 1 Jan 2027, restricted, key"), "{}", r.asks[1].detail);
+    assert_eq!(r.replies[5..], [vec![5], vec![5]]);
+    assert_eq!(r.asks.len(), 2);
+}
+
+#[test]
+fn the_ssh_app_signs_a_commit_it_was_sent_whole_showing_what_it_is() {
+    use ed25519_dalek::{Signature, SigningKey, Verifier};
+    use sha2::Digest;
+    let bytes = std::fs::read(format!("{}/tests/fixtures/ssh.maki", env!("CARGO_MANIFEST_DIR"))).unwrap();
+    let bundle = maki_bundle::read(&bytes).unwrap();
+    let limits = admit(&bundle.manifest, bundle.code).unwrap();
+    let public = SigningKey::from_bytes(&[7; 32]).verifying_key();
+    let commit = format!(
+        "tree {}\nparent {}\nauthor Kara Zajac <kara@soulstone.org> 1790000000 -0400\ncommitter Kara Zajac <kara@soulstone.org> 1790000000 -0400\n\nFix the fee's rounding\n\n{}",
+        "a".repeat(40),
+        "b".repeat(40),
+        "A long body. ".repeat(500)
+    );
+    let tag = "object 0123456789012345678901234567890123456789\ntype commit\ntag v1.0\ntagger Kara Zajac <kara@soulstone.org> 1790000000 -0400\n\nmaki 1.0\n";
+    // the pieces maki-ssh-keygen sends: the namespace, the whole length, where each starts
+    let pieces = |namespace: &str, whole: &[u8], size: usize| -> Vec<Vec<u8>> {
+        whole
+            .chunks(size)
+            .enumerate()
+            .map(|(i, piece)| {
+                let mut body = Vec::new();
+                ssh_string(&mut body, namespace.as_bytes());
+                body.extend_from_slice(&(whole.len() as u32).to_be_bytes());
+                body.extend_from_slice(&((i * size) as u32).to_be_bytes());
+                body.extend_from_slice(piece);
+                agent(0, 240, &body)
+            })
+            .collect()
+    };
+    let mut inbox = pieces("git", commit.as_bytes(), 3000);
+    let n = inbox.len();
+    inbox.extend(pieces("git", tag.as_bytes(), 3000));
+    // a piece out of its place ends it
+    let mut wrong = pieces("git", tag.as_bytes(), 40);
+    wrong.remove(1);
+    inbox.extend(wrong.into_iter().take(2));
+    let record = Rc::new(RefCell::new(Record {
+        events: std::iter::repeat(Event::Message).take(inbox.len()).collect(),
+        inbox: inbox.into_iter().collect(),
+        answers: [Answer::Yes, Answer::Yes].into_iter().collect(),
+        ..Default::default()
+    }));
+    assert_eq!(run(bundle.code, Box::new(Script(record.clone())), limits), Stop::Finished);
+    let r = record.borrow();
+    // each piece but the last taken; the last signed, as ssh-keygen -Y sign signs
+    for reply in &r.replies[..n - 1] {
+        assert_eq!(reply, &[6]);
+    }
+    let sshsig = |message: &[u8]| {
+        let mut d = b"SSHSIG".to_vec();
+        ssh_string(&mut d, b"git");
+        ssh_string(&mut d, b"");
+        ssh_string(&mut d, b"sha512");
+        ssh_string(&mut d, &sha2::Sha512::digest(message));
+        d
+    };
+    let verify = |answer: &[u8], data: &[u8]| {
+        assert_eq!(answer[0], 14, "{answer:?}");
+        let (sig_blob, _) = read_string(&answer[1..]);
+        let (_, rest) = read_string(sig_blob);
+        public.verify(data, &Signature::from_slice(read_string(rest).0).unwrap()).unwrap();
+    };
+    verify(&r.replies[n - 1], &sshsig(commit.as_bytes()));
+    assert_eq!((r.asks[0].question.as_str(), r.asks[0].detail.as_str()), ("Sign this commit?", "\"Fix the fee's rounding\" by Kara Zajac"));
+    verify(&r.replies[n], &sshsig(tag.as_bytes()));
+    assert_eq!((r.asks[1].question.as_str(), r.asks[1].detail.as_str()), ("Sign tag v1.0?", "\"maki 1.0\" by Kara Zajac"));
+    assert_eq!(r.replies[n + 1..], [vec![6], vec![5]]);
+    assert_eq!(r.asks.len(), 2);
 }
 
 fn words_list() -> Vec<String> {

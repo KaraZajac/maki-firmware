@@ -12,7 +12,9 @@ This directory has the Rust crate apps are written with (`maki-app`), twenty-one
 - **Hello**, **Dice** and **Tally**: a screen, the buttons, storage and randomness.
 - **Signer** and **Sensors**, which use permissions: asking the owner, keys of their own, the
   camera and the accelerometer.
-- **SSH**: maki's SSH key, which answers maki desktop's SSH agent (the link permission).
+- **SSH**: maki's SSH key, which answers maki desktop's SSH agent (the link permission), and
+  git's commits sent whole by maki desktop's `maki-ssh-keygen`, shown by subject and author before
+  it signs; and a certificate authority's key, turned on from its menu, for `ssh-keygen -s -U`.
 - **Nostr**: your Nostr key, which sites use through the maki extension's `window.nostr`
   (NIP-07): maki asks before a site sees it and shows each event before signing it with the key
   it holds (host API 2's Schnorr keys). Opened, it shows the npub as a QR code.

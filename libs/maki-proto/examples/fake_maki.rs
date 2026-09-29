@@ -656,6 +656,13 @@ fn main() {
         let (s, secret) = pair.split_once('=').expect("--totp SITE=BASE32");
         store.lock().unwrap().totp.push((s.to_string(), base32(secret).expect("bad base32")));
     }
+    // an app's storage as its owner left it (a setting from its menu, say): APP:KEY=HEX
+    for set in args.windows(2).filter(|w| w[0] == "--storage").map(|w| &w[1]) {
+        let (app, rest) = set.split_once(':').expect("--storage APP:KEY=HEX");
+        let (key, value) = rest.split_once('=').expect("--storage APP:KEY=HEX");
+        let value = (0..value.len()).step_by(2).map(|i| u8::from_str_radix(&value[i..i + 2], 16).expect("--storage: hex")).collect();
+        store.lock().unwrap().app_data.entry(app.into()).or_default().insert(key.into(), value);
+    }
     // apps installed before this start, as if the owner had said yes then: checked as ever
     for path in args.windows(2).filter(|w| w[0] == "--app").map(|w| &w[1]) {
         let bundle = std::fs::read(path).unwrap_or_else(|e| panic!("--app {path}: {e}"));
