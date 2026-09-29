@@ -509,18 +509,26 @@ fn main() -> ! {
     if option_env!("MAKI_DEMO_MANY").is_some() {
         std::thread::spawn(|| {
             let host = demo_host();
-            let bundles: [(&str, &[u8]); 15] = [
+            let bundles: [(&str, &[u8]); 23] = [
                 ("age", include_bytes!("../../../libs/maki-wasm/tests/fixtures/age.maki")),
                 ("bitcoin", include_bytes!("../../../libs/maki-wasm/tests/fixtures/bitcoin.maki")),
+                ("breakout", include_bytes!("../../../libs/maki-wasm/tests/fixtures/breakout.maki")),
+                ("contacts", include_bytes!("../../../libs/maki-wasm/tests/fixtures/contacts.maki")),
                 ("dice", include_bytes!("../../../libs/maki-wasm/tests/fixtures/dice.maki")),
                 ("ethereum", include_bytes!("../../../libs/maki-wasm/tests/fixtures/ethereum.maki")),
                 ("hello", include_bytes!("../../../libs/maki-wasm/tests/fixtures/hello.maki")),
+                ("marble", include_bytes!("../../../libs/maki-wasm/tests/fixtures/marble.maki")),
+                ("minisign", include_bytes!("../../../libs/maki-wasm/tests/fixtures/minisign.maki")),
                 ("monero", include_bytes!("../../../libs/maki-wasm/tests/fixtures/monero.maki")),
                 ("nostr", include_bytes!("../../../libs/maki-wasm/tests/fixtures/nostr.maki")),
+                ("notes", include_bytes!("../../../libs/maki-wasm/tests/fixtures/notes.maki")),
+                ("openpgp", include_bytes!("../../../libs/maki-wasm/tests/fixtures/openpgp.maki")),
                 ("passphrase", include_bytes!("../../../libs/maki-wasm/tests/fixtures/passphrase.maki")),
+                ("scanner", include_bytes!("../../../libs/maki-wasm/tests/fixtures/scanner.maki")),
                 ("sensors", include_bytes!("../../../libs/maki-wasm/tests/fixtures/sensors.maki")),
                 ("signer", include_bytes!("../../../libs/maki-wasm/tests/fixtures/signer.maki")),
                 ("snake", include_bytes!("../../../libs/maki-wasm/tests/fixtures/snake.maki")),
+                ("solana", include_bytes!("../../../libs/maki-wasm/tests/fixtures/solana.maki")),
                 ("ssh", include_bytes!("../../../libs/maki-wasm/tests/fixtures/ssh.maki")),
                 ("status", include_bytes!("../../../libs/maki-wasm/tests/fixtures/status.maki")),
                 ("tally", include_bytes!("../../../libs/maki-wasm/tests/fixtures/tally.maki")),
@@ -615,25 +623,29 @@ fn main() -> ! {
     }
 
     // The wallets: built with MAKI_DEMO_WALLET, once maki has its PIN and phrase, maki-link
-    // installs the SDK's Bitcoin, Ethereum and Monero apps (each asks, with a page for each
+    // installs the SDK's Bitcoin, Ethereum, Monero and Solana apps (each asks, with a page for each
     // permission; the wallet's names the accounts it may sign for), then does what maki desktop
     // does with them: shares the Bitcoin account, shows address #0 to compare, has the fixture PSBT
     // reviewed and signed and checks it against the one maki's wallet code makes on a computer,
     // then the same for the taproot account; then connects a site, demo.maki, to the Ethereum
     // app, and has it sign a message, a transaction (0.05 ETH on Ethereum) and typed data (a
     // permit to spend 1 USDC), each checked the same way; then the Monero app shows three of its
-    // addresses to compare, checked against Ledger's and monero-python's. The fixtures belong to
-    // the BIP39 test phrase: restore that at setup. It logs `demo wallet ...` lines.
+    // addresses to compare, checked against Ledger's and monero-python's, and spends; then the
+    // Solana app connects demo.maki and signs a USDC payment, checked against web3.js's
+    // signature. The fixtures belong to the BIP39 test phrase: restore that at setup. It logs
+    // `demo wallet ...` lines.
     if option_env!("MAKI_DEMO_WALLET").is_some() {
         std::thread::spawn(|| {
             const BTC: &str = "com.leviathan.maki.bitcoin";
             const ETH: &str = "com.leviathan.maki.ethereum";
             let host = demo_host();
             const XMR: &str = "com.leviathan.maki.monero";
-            let bundles: [(&str, &[u8]); 3] = [
+            const SOL: &str = "com.leviathan.maki.solana";
+            let bundles: [(&str, &[u8]); 4] = [
                 ("bitcoin", include_bytes!("../../../libs/maki-wasm/tests/fixtures/bitcoin.maki")),
                 ("ethereum", include_bytes!("../../../libs/maki-wasm/tests/fixtures/ethereum.maki")),
                 ("monero", include_bytes!("../../../libs/maki-wasm/tests/fixtures/monero.maki")),
+                ("solana", include_bytes!("../../../libs/maki-wasm/tests/fixtures/solana.maki")),
             ];
             for (name, bytes) in bundles {
                 let r = demo_install(&host, bytes);
@@ -782,6 +794,21 @@ fn main() -> ! {
                 let tx = s.get(4..).unwrap_or_default();
                 log::warn!("demo wallet xmr signed: {} bytes, a transaction of two inputs: {}", s.len(), tx.starts_with(&[2, 0, 2]));
             }
+
+            // Solana: the account Phantom makes from the test phrase (SLIP-10's Ed25519 key at
+            // m/44'/501'/0'/0'), connected to demo.maki, and a USDC payment web3.js made, read,
+            // shown and signed as web3.js signs it
+            const PHANTOM: [u8; 32] = [
+                0xf0, 0x36, 0x27, 0x62, 0x46, 0xa7, 0x5b, 0x9d, 0xe3, 0x34, 0x9e, 0xd4, 0x2b, 0x15, 0xe2, 0x32, 0xf6,
+                0x51, 0x8f, 0xc2, 0x0f, 0x5f, 0xcd, 0x4f, 0x1d, 0x64, 0xe8, 0x1f, 0x9b, 0xd2, 0x58, 0xf7,
+            ];
+            let a = ask(SOL, [head(b'A'), site.clone()].concat());
+            log::warn!("demo wallet sol account: status {:?}, Phantom's: {}", a.first(), a.get(1..) == Some(&PHANTOM[..]));
+            let usdc: &[u8] = include_bytes!("../../../libs/maki-sol/tests/fixtures/usdc.bin");
+            let usdc_sig: &[u8] = include_bytes!("../../../libs/maki-sol/tests/fixtures/usdc.sig");
+            let a = ask(SOL, [head(b'T'), site.clone(), usdc.to_vec()].concat());
+            let why = if a.first() == Some(&5) { texts(&a) } else { Vec::new() };
+            log::warn!("demo wallet sol sign: status {:?} {why:?}, as web3.js signs it: {}", a.first(), a.get(1..) == Some(usdc_sig));
         });
     }
 
