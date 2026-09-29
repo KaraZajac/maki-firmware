@@ -9,6 +9,7 @@
 //! opened (its key is gone), and its name mustn't collide with the new one.
 
 mod passkeys;
+mod xmr_bench;
 
 use std::io::{Read, Write};
 use std::sync::atomic::Ordering;
@@ -577,6 +578,9 @@ fn main() -> ! {
     log_server::init_wait().unwrap();
     log::set_max_level(log::LevelFilter::Info);
     log::info!("maki-keys PID is {}", xous::process::id());
+    if option_env!("MAKI_DEMO_XMR_BENCH").is_some() {
+        xmr_bench::spawn();
+    }
 
     let xns = xous_names::XousNames::new().unwrap();
     let sid = xns.register_name(SERVER_NAME_KEYS, None).expect("can't register server");

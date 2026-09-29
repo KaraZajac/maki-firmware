@@ -760,8 +760,10 @@ dependencies = [
 name = "maki-xmr"
 version = "0.1.0"
 dependencies = [
+ "crypto-bigint",
  "curve25519-dalek-bao1x",
  "sha3",
+ "subtle",
  "zeroize",
 ]
 

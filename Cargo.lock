@@ -5392,6 +5392,7 @@ dependencies = [
  "maki-launcher",
  "maki-proto",
  "maki-seed",
+ "maki-xmr",
  "num-derive 0.4.2",
  "num-traits",
  "pbkdf2",

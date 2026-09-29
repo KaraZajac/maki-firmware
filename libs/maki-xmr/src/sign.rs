@@ -12,10 +12,12 @@ use alloc::vec::Vec;
 
 use crypto_bigint::modular::constant_mod::{Residue, ResidueParams};
 use crypto_bigint::{const_residue, impl_modulus, Encoding, U256};
-use curve25519_dalek::constants::ED25519_BASEPOINT_POINT as G;
-use curve25519_dalek::edwards::{CompressedEdwardsY, EdwardsPoint};
+/// The curve's points and scalars, as this module takes and gives them, and its generator G.
+pub use curve25519_dalek::constants::ED25519_BASEPOINT_POINT as G;
+use curve25519_dalek::edwards::CompressedEdwardsY;
+pub use curve25519_dalek::edwards::EdwardsPoint;
 use curve25519_dalek::montgomery::MontgomeryPoint;
-use curve25519_dalek::scalar::Scalar;
+pub use curve25519_dalek::scalar::Scalar;
 use curve25519_dalek::traits::MultiscalarMul;
 use sha3::{Digest, Keccak256, Keccak512};
 use subtle::{Choice, ConditionallySelectable, ConstantTimeEq};

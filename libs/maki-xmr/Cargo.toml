@@ -28,3 +28,7 @@ monero = "0.22"
 # monero-oxide's CLSAG verifier, to check the signatures maki makes
 monero-clsag = "0.1.0"
 monero-ed25519 = "0.1.0"
+
+[[example]]
+name = "bench"
+required-features = ["keys"]

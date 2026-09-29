@@ -24,6 +24,8 @@ aes-gcm-siv = { version = "0.11.1", default-features = false, features = ["alloc
 zeroize = "1.8.1"
 maki-seed = { path = "../../libs/maki-seed" }
 maki-hd = { path = "../../libs/maki-hd", features = ["seed"] }
+# Monero's spending: key images, outputs and signatures
+maki-xmr = { path = "../../libs/maki-xmr", features = ["keys"] }
 maki-fido = { path = "../../libs/maki-fido" }
 maki-app-host-api = { path = "../../libs/maki-app-host-api" }
 maki-launcher = { path = "../../apps-baosec/maki-launcher" }
