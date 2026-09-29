@@ -710,7 +710,7 @@ impl Platform for Device {
         let asked = self.ctx.launcher.review(
             coin,
             "Show backup words?",
-            "anyone who sees them can spend",
+            "keep them secret",
             Vec::new(),
             "show",
             "don't",
@@ -733,7 +733,8 @@ impl Platform for Device {
             .split(|b| *b == b' ')
             .enumerate()
             .map(|(i, w)| maki_launcher::Page {
-                heading: format!("Word {} of {n}", i + 1),
+                // "Word 10 of 25" is more than the bar holds
+                heading: format!("Word {}/{n}", i + 1),
                 value: String::from_utf8_lossy(w).into_owned(),
                 mono: String::new(),
                 prose: "Write it down, in order. Keep it off computers.".into(),
