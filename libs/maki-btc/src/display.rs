@@ -66,7 +66,11 @@ impl Review {
             pages.push(Page { heading, value: amount(o.amount, self.network), mono: o.address.clone() });
         }
         for o in self.outputs.iter().filter(|o| o.change) {
-            pages.push(Page { heading: String::from("Change"), value: amount(o.amount, self.network), mono: String::from("back to you") });
+            let back = match &self.wallet {
+                Some(wallet) => format!("back to {wallet}"),
+                None => String::from("back to you"),
+            };
+            pages.push(Page { heading: String::from("Change"), value: amount(o.amount, self.network), mono: back });
         }
         pages.push(Page {
             heading: String::from(if self.fee_is_high() { "High fee!" } else { "Fee" }),

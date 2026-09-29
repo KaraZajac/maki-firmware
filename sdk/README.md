@@ -60,7 +60,11 @@ This directory has the Rust crate apps are written with (`maki-app`), twenty-sev
   yes. maki desktop, wallet software and sites talk to them over the link (PROTOCOL.md, "The
   wallets"). Opened, each shows an address as a QR code. Bitcoin signs with no cable too: it reads
   a PSBT off wallet software's screen (a UR `crypto-psbt` in parts, as Sparrow shows them) and
-  shows the signed one back the same way, and shows its descriptor for Sparrow to scan. Ethereum
+  shows the signed one back the same way, and shows its descriptor for Sparrow to scan. And
+  multisig wallets (`maki-btc`'s `multisig`, P2WSH): its key for one (BIP48's), a wallet added
+  once its owner has gone through every key on maki (from maki desktop, or its descriptor read off
+  the coordinator's screen), then what spends from it signed, checked against the wallet as
+  added: its scripts rebuilt from its keys, change only where it's the wallet's. Ethereum
   is a QR-code wallet for MetaMask (Keystone's protocol, ERC-4527): its account as a UR
   `crypto-hdkey` for MetaMask to add, and MetaMask's `eth-sign-request`s read off its screen, gone
   through on maki and answered with an `eth-signature`.

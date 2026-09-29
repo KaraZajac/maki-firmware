@@ -254,6 +254,10 @@ signs.
 | `D` `network:u8` `account:u8` `change:u8` `index:u32` | `status` `address:str16` |
 | `P` `network:u8` `total:u32` `offset:u32` `piece` (at most 256 KiB in all) | 6, or `status` `signed:u32`, or 5 `reason:str16` |
 | `G` `offset:u32` | `status` `total:u32` `offset:u32` `piece` |
+| `K` `network:u8` | `status` `key:str16` |
+| `M` `network:u8` `name:str16` `wallet:str16` | `status` `id` (4 bytes) `name:str16`, or 5 `reason:str16` |
+| `W` | `status` `count:u8`, then each: `id` (4 bytes) `network:u8` `threshold:u8` `keys:u8` `name:str16` |
+| `E` `id` (4 bytes) `change:u8` `index:u32` | `status` `address:str16` |
 
 - **`A`** hands out an account's public key once the owner agrees on maki ("Share account? view
   only"): for native SegWit, a `zpub` (`vpub` on the test networks) and an output descriptor with
@@ -295,6 +299,30 @@ this wallet's change chain; anything else is shown as a payment), and the fee wi
 (called out when over a tenth of what's sent); then "sign" or "reject". A yes lets the app have
 one signature for each input, within two minutes. ECDSA signatures are deterministic (RFC 6979)
 and low-S; taproot's take fresh randomness from maki's TRNG, as BIP340 recommends.
+
+**Bitcoin multisig**: wallets whose coins take k of n keys' signatures, maki's among them, native
+SegWit (P2WSH, `wsh(sortedmulti(…))` or `wsh(multi(…))`, up to 15 keys), as Sparrow, Nunchuk,
+Specter, Coldcard and Bitcoin Core make them. maki's key for them is BIP48's:
+`m/48'/0'/0'/2'` (`m/48'/1'/0'/2'` on the test networks).
+
+- **`K`** hands out that key once the owner agrees ("Share multisig key?"), with its origin, as a
+  coordinator takes a cosigner's: `[73c5da0a/48h/0h/0h/2h]Zpub…` (`Vpub` on the test networks).
+- **`M`** adds a wallet: its descriptor (BIP380, its checksum checked if it has one; each key with
+  its origin, and `/<0;1>/*`, or a chain's own `/0/*` or `/1/*`) or the multisig file Coldcard
+  takes (`Name:`, `Policy: k of n`, `Derivation:`, `Format: P2WSH`, then `FINGERPRINT: xpub` a
+  line), with `name` for it if the text has none. Exactly one of its keys must be maki's: its
+  fingerprint, at a BIP48 P2WSH path, the key maki makes there. The owner goes through it on maki,
+  what it is, then every key's fingerprint (maki's marked) and xpub, and says "add" or "don't";
+  it's kept with the app's data (in maki's backups). `id` is its descriptor's SHA-256, the first
+  4 bytes: the same wallet has the same one however it came, and adding it again asks nothing.
+- **`W`** lists the wallets added; **`E`** puts one's address on maki's screen, as `D` does.
+- **`P`** signs a PSBT spending from a wallet added, as any other, with a partial signature for
+  each input by maki's key (the others' partial signatures are left as they are): every input
+  must be the wallet's, its script rebuilt from the wallet's keys at the place maki's derivation
+  names (never the PSBT's witness script, which must agree), paying to that script's P2WSH, with
+  the whole transaction it spends; change is only an output paying the wallet's own change chain
+  there. The owner sees which wallet first ("From"), then the payments, the change ("back to"
+  it) and the fee. A PSBT from a wallet not added is refused.
 
 **Ethereum** keeps an account from the same phrase, the standard way (`m/44'/60'/0'/0/index`,
 BIP44, as MetaMask and Ledger make it; `index` 0 is the first account). Requests come from sites,

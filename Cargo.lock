@@ -5338,6 +5338,8 @@ version = "0.1.0"
 dependencies = [
  "bech32",
  "bitcoin",
+ "hmac 0.12.1",
+ "k256",
  "maki-hd",
  "maki-seed",
  "miniscript",

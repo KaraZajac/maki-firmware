@@ -34,6 +34,8 @@ pub enum Error {
     NegativeFee,
     /// An amount beyond the 21 million bitcoin there will ever be.
     Amount,
+    /// A multisig wallet maki won't take, and why.
+    Multisig(&'static str),
 }
 
 impl core::fmt::Display for Error {
@@ -58,6 +60,7 @@ impl core::fmt::Display for Error {
             Error::ScriptPath(i) => write!(f, "input {} spends a taproot script, and maki signs with its key alone", i),
             Error::NegativeFee => write!(f, "the outputs pay more than the inputs hold"),
             Error::Amount => write!(f, "an amount is beyond 21 million bitcoin"),
+            Error::Multisig(why) => write!(f, "{}", why),
         }
     }
 }
@@ -65,7 +68,7 @@ impl core::fmt::Display for Error {
 /// Satoshis in 21 million bitcoin: no amount can be larger.
 pub const MAX_MONEY: u64 = 21_000_000 * 100_000_000;
 
-fn total(mut amounts: impl Iterator<Item = u64>) -> Result<u64, Error> {
+pub(crate) fn total(mut amounts: impl Iterator<Item = u64>) -> Result<u64, Error> {
     amounts.try_fold(0u64, |sum, a| sum.checked_add(a).filter(|&s| a <= MAX_MONEY && s <= MAX_MONEY)).ok_or(Error::Amount)
 }
 
@@ -210,6 +213,8 @@ impl<'k> Account<'k> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Review {
     pub network: Network,
+    /// the multisig wallet it spends from, by name; None for maki's own accounts
+    pub wallet: Option<String>,
     /// every output, in order; change is marked, everything else is a payment
     pub outputs: Vec<Output>,
     pub fee: u64,
@@ -242,7 +247,7 @@ struct Spend {
 }
 
 /// The output a previous transaction's `vout` is, if its txid is the one spent.
-fn previous_output(bytes: &[u8], txid: &[u8; 32], vout: u32) -> Option<TxOut> {
+pub(crate) fn previous_output(bytes: &[u8], txid: &[u8; 32], vout: u32) -> Option<TxOut> {
     let prev = Tx::parse(bytes).ok()?;
     if prev.txid() != *txid {
         return None;
@@ -251,7 +256,7 @@ fn previous_output(bytes: &[u8], txid: &[u8; 32], vout: u32) -> Option<TxOut> {
 }
 
 /// A witness UTXO (an amount, then a script).
-fn witness_utxo(bytes: &[u8]) -> Option<TxOut> {
+pub(crate) fn witness_utxo(bytes: &[u8]) -> Option<TxOut> {
     let mut c = Cursor::new(bytes);
     let value = u64::from_le_bytes(c.take(8).ok()?.try_into().unwrap());
     let script = c.bytes(10_000).ok()?.to_vec();
@@ -392,7 +397,7 @@ fn check(psbt: &Psbt, accounts: &[Account]) -> Result<(Review, Vec<Spend>), Erro
         })
         .sum();
     let weight = psbt.tx.serialize().len() as u64 * 4 + 2 + witnesses;
-    let review = Review { network, outputs, fee, vbytes: weight.div_ceil(4), inputs: spends.len() };
+    let review = Review { network, wallet: None, outputs, fee, vbytes: weight.div_ceil(4), inputs: spends.len() };
     Ok((review, spends))
 }
 
@@ -433,6 +438,16 @@ fn taproot_sighash(tx: &Tx, i: usize, spent: &[TxOut], hash_type: u8) -> [u8; 32
 
 /// BIP143: the digest a P2WPKH input signs, SIGHASH_ALL.
 fn sighash(tx: &Tx, i: usize, public_key: &[u8; 33], amount: u64) -> [u8; 32] {
+    let mut script_code = Vec::with_capacity(25);
+    script_code.extend_from_slice(&[0x76, 0xa9, 0x14]);
+    script_code.extend_from_slice(&hash160(public_key));
+    script_code.extend_from_slice(&[0x88, 0xac]);
+    segwit_sighash(tx, i, &script_code, amount)
+}
+
+/// BIP143's digest, SIGHASH_ALL, for an input whose script code is `script_code`: P2WPKH's
+/// pay-to-key-hash, or a P2WSH input's witness script.
+pub(crate) fn segwit_sighash(tx: &Tx, i: usize, script_code: &[u8], amount: u64) -> [u8; 32] {
     let mut prevouts = Vec::new();
     let mut sequences = Vec::new();
     for input in &tx.inputs {
@@ -445,19 +460,14 @@ fn sighash(tx: &Tx, i: usize, public_key: &[u8; 33], amount: u64) -> [u8; 32] {
         o.write(&mut outputs);
     }
     let input = &tx.inputs[i];
-    let mut script_code = Vec::with_capacity(26);
-    script_code.extend_from_slice(&[0x76, 0xa9, 0x14]);
-    script_code.extend_from_slice(&hash160(public_key));
-    script_code.extend_from_slice(&[0x88, 0xac]);
-
-    let mut pre = Vec::with_capacity(160);
+    let mut pre = Vec::with_capacity(160 + script_code.len());
     pre.extend_from_slice(&(tx.version as u32).to_le_bytes());
     pre.extend_from_slice(&sha256d(&prevouts));
     pre.extend_from_slice(&sha256d(&sequences));
     pre.extend_from_slice(&input.prev_txid);
     pre.extend_from_slice(&input.prev_vout.to_le_bytes());
     write_varint(&mut pre, script_code.len() as u64);
-    pre.extend_from_slice(&script_code);
+    pre.extend_from_slice(script_code);
     pre.extend_from_slice(&amount.to_le_bytes());
     pre.extend_from_slice(&input.sequence.to_le_bytes());
     pre.extend_from_slice(&sha256d(&outputs));
@@ -468,7 +478,7 @@ fn sighash(tx: &Tx, i: usize, public_key: &[u8; 33], amount: u64) -> [u8; 32] {
 
 /// DER, as Bitcoin wants an ECDSA signature (r and s, 32 bytes each): two positive integers, no
 /// padding beyond one zero.
-fn der(sig: &[u8; 64]) -> Vec<u8> {
+pub(crate) fn der(sig: &[u8; 64]) -> Vec<u8> {
     let (r, s) = (&sig[..32], &sig[32..]);
     let int = |b: &[u8]| -> Vec<u8> {
         let b = &b[b.iter().position(|&x| x != 0).unwrap_or(b.len() - 1)..];

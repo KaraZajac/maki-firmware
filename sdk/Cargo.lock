@@ -753,6 +753,8 @@ name = "maki-btc"
 version = "0.1.0"
 dependencies = [
  "bech32",
+ "hmac",
+ "k256",
  "maki-hd",
  "ripemd",
  "sha2",

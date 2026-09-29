@@ -1,0 +1,10 @@
+# Coldcard Multisig setup file (created by Sparrow)
+#
+Name: Family vault
+Policy: 2 of 3
+Derivation: m/48'/1'/0'/2'
+Format: P2WSH
+
+73C5DA0A: Vpub5n95dMZrDHj6SeBgJ1oz4Fae2N2eJNuWK3VTKDb2dzGpMFLUHLmtyDfen7AaQxwQ5mZnMyXdVrkEaoMLVTH8FmVBRVWPGFYWhmtDUGehGmq
+0EBCE71A: Vpub5nUpNTfDL7HNy8RjxB91h2TPQ3qdVC4mKKbGaDRFnAC7mSqyvt3CyA6B7qbtAeu14CM1DBKr7YSAAtmxMCq4BMyUjgJhbLczwzsU9fwqNkX
+08ADC525: Vpub5m3XbinDDTEWKPiA2zWLbCvFqNHkMkrzPxdJUHGtFuUNC91tb2LaQkWp5h91YCneya9uB8H68KcStVrDepTXTiLd5k4MromS6N9a1gNboru

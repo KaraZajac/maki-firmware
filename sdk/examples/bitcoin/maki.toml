@@ -1,13 +1,13 @@
 id = "com.leviathan.maki.bitcoin"
 name = "Bitcoin"
-version = 2
-label = "1.1"
+version = 3
+label = "1.2"
 api = 3
-storage = 1
+storage = 32
 memory = 1024
 backup = true
 icon = "icon.pbm"
-description = "Your Bitcoin wallet, from maki's recovery phrase: native SegWit and taproot accounts for Sparrow, Bitcoin Core and maki desktop, by cable or QR codes alone, and every payment, the change and the fee shown on maki before it signs."
+description = "Your Bitcoin wallet, from maki's recovery phrase: native SegWit and taproot accounts, and a key for multisig wallets, for Sparrow, Bitcoin Core and maki desktop, by cable or QR codes alone; every payment, the change and the fee shown on maki before it signs."
 
 [permissions]
 camera = "To read transactions off your wallet software's screen, to sign with no cable."
@@ -15,4 +15,4 @@ link = "So maki desktop and your wallet software can ask for your account, addre
 wallet = "To sign the transactions you approve on maki's screen, and nothing else."
 
 [wallet]
-paths = ["m/84'/0'", "m/86'/0'", "m/84'/1'", "m/86'/1'"]
+paths = ["m/84'/0'", "m/86'/0'", "m/48'/0'", "m/84'/1'", "m/86'/1'", "m/48'/1'"]

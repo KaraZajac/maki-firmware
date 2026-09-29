@@ -204,6 +204,15 @@ opt-level = 3
 opt-level = 3
 [profile.dev.package.sha2]
 opt-level = 3
+# the app host's interpreter: apps run as fast in tests and the fake maki as they do on maki
+[profile.dev.package.wasmi]
+opt-level = 3
+[profile.dev.package.wasmi_core]
+opt-level = 3
+[profile.dev.package.wasmi_ir]
+opt-level = 3
+[profile.dev.package.wasmi_collections]
+opt-level = 3
 
 [profile.release]
 codegen-units = 1  # 1 better optimizations

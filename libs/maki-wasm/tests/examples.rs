@@ -1369,7 +1369,7 @@ fn bitcoin_signs_a_psbt_read_off_a_screen_and_shows_it_back() {
     let loaded = load(&bundle.manifest, bundle.code).unwrap();
     assert_eq!(loaded.run(Box::new(Script(record.clone()))), Stop::Finished);
     let r = record.borrow();
-    assert_eq!(r.menu, ["Taproot or SegWit", "Bitcoin or testnet", "Account key", "Sign from a QR code"]);
+    assert_eq!(r.menu, ["Taproot or SegWit", "Bitcoin or testnet", "Account key", "Sign from a QR code", "Multisig key", "Add a multisig"]);
     assert_eq!(r.reviews[0].question, "Sign and spend");
     // read off maki's screen as the wallet's camera would, the signed PSBT: the same bytes as ever
     let mut decoder = ur::Decoder::default();
@@ -1672,6 +1672,92 @@ fn bitcoin_signs_what_the_owner_reviewed_as_maki_always_has() {
     // what isn't a PSBT
     let r = run_wallet("bitcoin", psbt_messages(0, b"not a psbt", 0), vec![], false);
     assert!(texts(&r.replies[0])[0].starts_with("not a PSBT maki can read"));
+}
+
+/// A string16, as the Bitcoin app's messages have them.
+fn str16(out: &mut Vec<u8>, s: &str) {
+    out.extend_from_slice(&(s.len() as u16).to_le_bytes());
+    out.extend_from_slice(s.as_bytes());
+}
+
+#[test]
+fn bitcoin_adds_a_multisig_wallet_its_owner_went_through_and_signs_for_it() {
+    let descriptor = std::fs::read_to_string(format!("{BTC_FIXTURES}/multisig.txt")).unwrap();
+    let coldcard = std::fs::read_to_string(format!("{BTC_FIXTURES}/multisig-coldcard.txt")).unwrap();
+    let unsigned = std::fs::read(format!("{BTC_FIXTURES}/multisig-unsigned.psbt")).unwrap();
+    let signed = std::fs::read(format!("{BTC_FIXTURES}/multisig-signed.psbt")).unwrap();
+    let register = |text: &str| {
+        let mut m = vec![b'M', 1];
+        str16(&mut m, "vault");
+        str16(&mut m, text);
+        m
+    };
+    // maki's key for it, as Sparrow scans a cosigner's; then the wallet, gone through and added;
+    // its first address, compared on maki's screen
+    use sha2::{Digest, Sha256};
+    let id: Vec<u8> = Sha256::digest(descriptor.as_bytes())[..4].to_vec();
+    let mut inbox = vec![vec![b'K', 1], register(&descriptor), vec![b'W'], [&[b'E'][..], &id, &[0, 0, 0, 0, 0]].concat()];
+    inbox.extend(psbt_messages(1, &unsigned, 1));
+    let r = run_wallet("bitcoin", inbox.clone(), vec![Answer::Yes; 4], false);
+    assert_eq!(r.replies[0][0], 0);
+    let key = &texts(&r.replies[0])[0];
+    assert!(key.starts_with("[73c5da0a/48h/1h/0h/2h]Vpub5n95dMZrDHj6"), "{key}");
+    assert_eq!(r.reviews[0].question, "Share multisig key?");
+    let added = &r.reviews[1];
+    assert_eq!((added.question.as_str(), added.detail.as_str()), ("Add this multisig?", "vault, 2 of 3"));
+    let headings: Vec<&str> = added.pages.iter().map(|p| p.heading.as_str()).collect();
+    assert_eq!(headings, ["Wallet", "Key 1/3", "Key 2/3", "Key 3/3"]);
+    assert_eq!(added.pages[1].value, "73C5DA0A (maki)");
+    assert_eq!(added.pages[2].value, "0EBCE71A");
+    assert!(added.pages[3].mono.starts_with("tpubDEBbc4DHf8iY"), "{}", added.pages[3].mono);
+    assert_eq!(r.replies[1][1..5], id[..], "its ID: its descriptor's hash");
+    assert_eq!((r.replies[1][0], texts(&r.replies[1][4..])), (0, vec!["vault".to_string()]));
+    assert!(r.storage.contains_key(&format!("ms{}", id.iter().map(|b| format!("{b:02x}")).collect::<String>())));
+    // listed: its ID, the test networks, 2 of 3, its name
+    assert_eq!(&r.replies[2][..9], &[&[0u8, 1][..], &id, &[1, 2, 3]].concat()[..]);
+    let address = &texts(&r.replies[3])[0];
+    assert!(address.starts_with("tb1q") && address.len() == 62, "{address}");
+    assert_eq!((r.reviews[2].detail.as_str(), r.reviews[2].pages[0].heading.as_str()), ("vault", "Receive #0"));
+    // and a PSBT spending from it: where it's from first, then as any other; signed as maki-btc signs
+    let pieces = unsigned.len().div_ceil(4000);
+    let done = &r.replies[4 + pieces - 1];
+    assert_eq!(done[0], 0, "{:?}", texts(done));
+    assert_eq!(fetched(&r.replies[4 + pieces..]), signed);
+    let review = &r.reviews[3];
+    assert_eq!((review.pages[0].heading.as_str(), review.pages[0].value.as_str()), ("From", "vault"));
+    assert!(review.pages.iter().any(|p| p.heading == "Change" && p.mono == "back to vault (2 of 3)"), "{:?}", review.pages);
+
+    // the same wallet from Coldcard's file (Sparrow's export), named by it; asked about once
+    let r = run_wallet("bitcoin", vec![register(&coldcard), register(&descriptor)], vec![Answer::Yes], false);
+    assert_eq!(texts(&r.replies[0][4..]), ["Family vault"]);
+    assert_eq!(r.replies[0][1..5], id[..], "the same wallet, however it came");
+    assert_eq!(r.replies[1][0], 0);
+    assert_eq!(r.reviews.len(), 1, "already added: not asked again");
+
+    // not added: a PSBT from it isn't signed; a no adds nothing; a wallet without maki's key isn't taken
+    let r = run_wallet("bitcoin", psbt_messages(1, &unsigned, 0), vec![Answer::Yes], false);
+    assert!(texts(r.replies.last().unwrap())[0].contains("add it on maki first"), "{:?}", texts(r.replies.last().unwrap()));
+    assert!(r.reviews.is_empty());
+    let r = run_wallet("bitcoin", vec![register(&descriptor), vec![b'W']], vec![Answer::No], false);
+    assert_eq!((r.replies[0].as_slice(), r.replies[1].as_slice()), (&[1u8][..], &[0u8, 0][..]));
+    let strangers = descriptor.replace("73c5da0a/", "73c5da0b/");
+    let r = run_wallet("bitcoin", vec![register(strangers.split('#').next().unwrap())], vec![Answer::Yes], false);
+    assert_eq!(r.replies[0][0], 5);
+    assert!(texts(&r.replies[0])[0].contains("isn't one of its keys"), "{:?}", texts(&r.replies[0]));
+    assert!(r.reviews.is_empty());
+}
+
+#[test]
+fn bitcoin_adds_a_multisig_off_the_coordinators_screen_and_shows_its_key_for_it() {
+    let coldcard = std::fs::read_to_string(format!("{BTC_FIXTURES}/multisig-coldcard.txt")).unwrap();
+    // the menu's Network (to testnet), then Add a multisig, reading Sparrow's file as text
+    let events = vec![Event::Menu(1), Event::Menu(5), Event::Centre, Event::Menu(4)];
+    let r = run_wallet_scanning("bitcoin", events, vec![coldcard], vec![Answer::Yes]);
+    assert_eq!(r.reviews[0].question, "Add this multisig?");
+    assert!(r.storage.keys().any(|k| k.starts_with("ms")));
+    // Multisig key: maki's key for one, as a QR code
+    let code = read_qr(r.frames.last().unwrap()).unwrap();
+    assert!(code.starts_with("[73c5da0a/48h/1h/0h/2h]Vpub"), "{code}");
 }
 
 const ETH_FIXTURES: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../maki-eth/tests/fixtures");

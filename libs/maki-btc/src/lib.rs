@@ -15,6 +15,10 @@
 //!   else is shown as a payment, with its full address;
 //! - the fee is what the inputs hold minus what the outputs pay, and must not be negative;
 //! - only SIGHASH_ALL is signed.
+//!
+//! And multisig wallets with maki's key among theirs (`multisig`: native SegWit, BIP48), once the
+//! owner has registered one on maki: what spends from it is checked against the wallet as
+//! registered, never against what the PSBT says the wallet is.
 
 #![no_std]
 extern crate alloc;
@@ -23,10 +27,12 @@ pub mod address;
 pub mod bip32;
 pub mod display;
 mod hash;
+pub mod multisig;
 pub mod psbt;
 pub mod taproot;
 pub mod tx;
 pub mod wallet;
 
 pub use address::Network;
+pub use multisig::{Multisig, Signer};
 pub use wallet::{Account, Kind, Output, Review};
