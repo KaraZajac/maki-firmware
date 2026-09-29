@@ -406,6 +406,13 @@ fn lent(session: &mut Session, id: usize, request: &[u8], last_log: &mut String)
                 _ => (maki_wasm::INVALID, vec![]),
             }
         }
+        service::ASK_REVIEW => {
+            let timeout = request.get(..4).map(|b| i32::from_le_bytes(b.try_into().unwrap())).unwrap_or(0);
+            match request.get(4..).map(core::str::from_utf8) {
+                Some(Ok(text)) => (session.ask_review(text, timeout), vec![]),
+                _ => (maki_wasm::INVALID, vec![]),
+            }
+        }
         service::KEY_SECRET | service::KEY_PUBLIC => match text() {
             Some(label) => {
                 let key = if id == service::KEY_SECRET { session.key_secret(label) } else { session.key_public(label) };

@@ -553,6 +553,122 @@ fn the_eight_ball_answers_a_shake_or_a_press_but_not_a_bump() {
     assert_eq!(&none.frames[4], answer);
 }
 
+/// A command for the Sudo app to approve, as maki desktop's sudo plugin sends it (after its `R`).
+#[allow(clippy::too_many_arguments)]
+fn sudo_request(nonce: u8, runas: &[u8], group: &[u8], tty: &[u8], sudoedit: u8, command: &[u8], argv: &[&[u8]], env: &[&[u8]]) -> Vec<u8> {
+    let s8 = |out: &mut Vec<u8>, b: &[u8]| {
+        out.push(b.len() as u8);
+        out.extend(b);
+    };
+    let s16 = |out: &mut Vec<u8>, b: &[u8]| {
+        out.extend((b.len() as u16).to_le_bytes());
+        out.extend(b);
+    };
+    let mut out = vec![nonce; 32];
+    for part in [&b"laptop"[..], b"kara", runas, group] {
+        s8(&mut out, part);
+    }
+    s16(&mut out, b"/home/kara");
+    s16(&mut out, b"");
+    s8(&mut out, tty);
+    out.extend([sudoedit.min(1), sudoedit]);
+    s16(&mut out, command);
+    for list in [argv, env] {
+        out.push(list.len() as u8);
+        for item in list {
+            s16(&mut out, item);
+        }
+    }
+    out
+}
+
+#[test]
+fn sudo_shows_each_command_whole_and_signs_the_request_once_asked() {
+    use ed25519_dalek::{Signature, SigningKey, Verifier};
+    let key = SigningKey::from_bytes(&[7; 32]).verifying_key();
+    let signed = |body: &[u8]| [&b"maki sudo approval\0"[..], body].concat();
+    let asked = |messages: &[Vec<u8>], answers: &[Answer]| {
+        let record = Rc::new(RefCell::new(Record {
+            events: messages.iter().map(|_| Event::Message).collect(),
+            inbox: messages.iter().cloned().collect(),
+            answers: answers.iter().copied().collect(),
+            ..Default::default()
+        }));
+        let bytes = std::fs::read(format!("{}/tests/fixtures/sudo.maki", env!("CARGO_MANIFEST_DIR"))).unwrap();
+        let bundle = maki_bundle::read(&bytes).unwrap();
+        assert_eq!(bundle.manifest.api, 7);
+        let limits = admit(&bundle.manifest, bundle.code).unwrap();
+        assert_eq!(run(bundle.code, Box::new(Script(record.clone())), limits), Stop::Finished);
+        Rc::try_unwrap(record).ok().unwrap().into_inner()
+    };
+    let r = |body: &[u8]| [&b"R"[..], body].concat();
+
+    // its key, for the plugin's key file
+    let got = asked(&[b"P".to_vec()], &[]);
+    assert_eq!(got.replies[0], [&[0u8][..], key.as_bytes()].concat());
+
+    // a command, shown whole, and signed with the request once the owner says yes
+    let plain = sudo_request(1, b"root", b"", b"/dev/pts/3", 0, b"/usr/bin/systemctl", &[b"systemctl", b"restart", b"nginx"], &[]);
+    let got = asked(&[r(&plain)], &[Answer::Yes]);
+    let review = &got.reviews[0];
+    assert_eq!((review.question.as_str(), review.detail.as_str()), ("Run it as root?", "sudo on laptop"));
+    assert_eq!((review.yes.as_str(), review.no.as_str(), review.timeout_s), ("run", "deny", 60));
+    assert_eq!(
+        review.pages,
+        [
+            Page { heading: "Command".into(), value: "systemctl".into(), mono: "/usr/bin/systemctl restart nginx".into(), prose: String::new() },
+            Page { heading: "Asked by".into(), value: "kara".into(), prose: "on laptop, in /home/kara, at /dev/pts/3".into(), ..Page::default() },
+        ]
+    );
+    assert_eq!((got.replies[0][0], got.replies[0].len()), (0, 65));
+    let signature = Signature::from_slice(&got.replies[0][1..]).unwrap();
+    key.verify(&signed(&plain), &signature).unwrap();
+    // it's of that request: another nonce, another command, and it isn't
+    let other = sudo_request(2, b"root", b"", b"/dev/pts/3", 0, b"/usr/bin/systemctl", &[b"systemctl", b"restart", b"nginx"], &[]);
+    assert!(key.verify(&signed(&other), &signature).is_err());
+    assert_eq!(got.storage["approved"], 1u32.to_le_bytes());
+
+    // what it's given to run with; anything that isn't plain, quoted as a shell would take it
+    // back; and what a login shell's told it's called
+    let preload = sudo_request(3, b"root", b"", b"", 0, b"/usr/bin/true", &[b"true"], &[b"LD_PRELOAD=/tmp/x.so"]);
+    let odd = sudo_request(4, b"root", b"wheel", b"", 0, b"/usr/bin/rm", &[b"rm", b"-rf", b"it's here", b"a\nb\xc3\xa9", b""], &[]);
+    let shell = sudo_request(5, b"postgres", b"", b"", 0, b"/bin/bash", &[b"-bash"], &[]);
+    let edit = sudo_request(6, b"root", b"", b"", 2, b"/usr/bin/vi", &[b"vi", b"--", b"/etc/hosts", b"/etc/my file"], &[]);
+    let got = asked(&[r(&preload), r(&odd), r(&shell), r(&edit)], &[Answer::Yes, Answer::No, Answer::NoAnswer, Answer::Yes]);
+    assert_eq!(got.reviews[0].pages[1], Page { heading: "Given".into(), mono: "LD_PRELOAD=/tmp/x.so".into(), prose: "set for it, beyond what every command gets".into(), ..Page::default() });
+    assert_eq!(got.reviews[1].pages[0].mono, r#"/usr/bin/rm -rf 'it'\''s here' $'a\nb\xc3\xa9' ''"#);
+    assert_eq!(got.reviews[1].pages[1].prose, "on laptop, in /home/kara; with the group wheel");
+    assert_eq!(got.reviews[2].question, "Run it as postgres?");
+    assert_eq!(got.reviews[2].pages[0].prose, "It's told it's called -bash.");
+    assert_eq!((got.reviews[3].question.as_str(), got.reviews[3].yes.as_str()), ("Edit as root?", "edit"));
+    assert_eq!(got.reviews[3].pages[0], Page { heading: "Edit".into(), mono: "/etc/hosts\n'/etc/my file'".into(), prose: "Copied for kara to edit with vi, then back.".into(), ..Page::default() });
+    // a yes, a no, no answer, a yes
+    assert_eq!(got.replies.iter().map(|a| a[0]).collect::<Vec<_>>(), [0, 1, 2, 0]);
+    key.verify(&signed(&preload), &Signature::from_slice(&got.replies[0][1..]).unwrap()).unwrap();
+    key.verify(&signed(&edit), &Signature::from_slice(&got.replies[3][1..]).unwrap()).unwrap();
+    assert_eq!(got.replies[1].len(), 1);
+
+    // what it can't read, or can't show whole, it turns down without asking
+    let mut long = vec![&b"rm"[..]];
+    long.extend(std::iter::repeat_n(&[1u8; 10][..], 250));
+    let too_long = sudo_request(7, b"root", b"", b"", 0, b"/usr/bin/rm", &long, &[]);
+    let mut trailing = plain.clone();
+    trailing.push(0);
+    let bad = [
+        r(&too_long),
+        r(&trailing),
+        r(&plain[..plain.len() - 1]),
+        r(&sudo_request(8, b"root", b"", b"", 0, b"/usr/bin/true", &[], &[])),
+        r(&sudo_request(8, b"", b"", b"", 0, b"/usr/bin/true", &[b"true"], &[])),
+        r(&sudo_request(8, b"root", b"", b"", 1, b"/usr/bin/vi", &[b"vi"], &[])),
+        b"Q".to_vec(),
+        b"PP".to_vec(),
+    ];
+    let got = asked(&bad, &[Answer::Yes; 8]);
+    assert!(got.reviews.is_empty(), "{:?}", got.reviews);
+    assert!(got.replies.iter().all(|a| a[..] == [4]), "{:?}", got.replies);
+}
+
 #[test]
 fn minisign_signs_a_hash_and_its_own_trusted_comment_once_asked() {
     use ed25519_dalek::{Signature, SigningKey, Verifier};

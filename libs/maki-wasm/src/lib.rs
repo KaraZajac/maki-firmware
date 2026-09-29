@@ -21,7 +21,7 @@ pub use session::{Session, REFUSED};
 use wasmi::{Caller, Config, Engine, Error, Extern, Linker, Memory, Module, Store, StoreLimits, StoreLimitsBuilder};
 
 /// The functions this host offers apps.
-pub const API_VERSION: u16 = 6;
+pub const API_VERSION: u16 = 7;
 
 /// Functions that came after host API 1, and with which: an app calling one says that API or later.
 pub const SINCE: &[(&str, u16)] = &[
@@ -39,6 +39,7 @@ pub const SINCE: &[(&str, u16)] = &[
     ("wallet_monero_key_image", 5),
     ("wallet_monero_sign", 5),
     ("wallet_sign_ed25519", 6),
+    ("ask_review", 7),
 ];
 
 /// What maki's functions return for failures they report (rather than stopping the app).
@@ -122,6 +123,7 @@ pub const ALLOWANCE_MS: u64 = 120_000;
 /// maki's functions that need a permission, and which.
 pub const GATED: &[(&str, Permission)] = &[
     ("ask", Permission::Ask),
+    ("ask_review", Permission::Ask),
     ("key_secret", Permission::Keys),
     ("key_public", Permission::Keys),
     ("key_sign", Permission::Keys),
@@ -195,8 +197,9 @@ pub struct Ask {
     pub timeout_s: u32,
 }
 
-/// What a wallet app shows the owner on maki's own review screen, a page at a time, before its
-/// question: the pages are the app's words, headed with its name.
+/// What an app shows the owner on maki's own review screen, a page at a time, before its question:
+/// a wallet app's before it signs (`wallet_review`), or any app's with the ask permission
+/// (`ask_review`, host API 7). The pages are the app's words, headed with its name.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Review {
     pub question: String,
@@ -698,6 +701,21 @@ fn link(linker: &mut Linker<State>) -> Result<(), Error> {
         c.set_fuel(fuel)?;
         Ok(answer)
     })?;
+    linker.func_wrap(
+        M,
+        "ask_review",
+        |mut c: Caller<'_, State>, tptr: i32, tlen: i32, timeout_s: i32| -> Result<i32, Error> {
+            permitted(&c, Permission::Ask, "ask_review")?;
+            if tlen as u32 as usize > MAX_REVIEW {
+                return Ok(TOO_BIG);
+            }
+            let text = read_str(&c, tptr, tlen, MAX_REVIEW, "ask_review")?;
+            let answer = c.data_mut().session.ask_review(&text, timeout_s);
+            let fuel = c.data().session.limits.fuel;
+            c.set_fuel(fuel)?;
+            Ok(answer)
+        },
+    )?;
     linker.func_wrap(
         M,
         "key_secret",

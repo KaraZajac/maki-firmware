@@ -6,7 +6,7 @@ you can install"). Anyone can build one and sideload it through maki desktop; ma
 owner what it is, where it's from and what it may do before installing it, and a sideloaded
 app carries a mark in maki's top bar for as long as it's installed.
 
-This directory has the Rust crate apps are written with (`maki-app`), twenty-six examples, and the
+This directory has the Rust crate apps are written with (`maki-app`), twenty-seven examples, and the
 `maki` tool that packs, signs, checks and simulates them. The examples:
 
 - **Hello**, **Dice** and **Tally**: a screen, the buttons, storage and randomness.
@@ -47,6 +47,11 @@ This directory has the Rust crate apps are written with (`maki-app`), twenty-six
 - **Magic 8-Ball**: ask a question and shake maki (the motion permission, read every 40 ms), and
   one of the classic twenty answers floats up in its triangle; a bump isn't a shake, and a button
   press does too.
+- **Sudo**: each command sudo runs waits for a yes on maki (host API 7's `AskPages`): maki
+  desktop's sudo plugin asks it once sudoers says yes, with the whole command, and it shows the
+  command line (quoted as a shell would take it back), what it's given to run with beyond what
+  every command gets, and who asked where, then signs the request with its key (the keys
+  permission), which the plugin checks against the key root keeps.
 - **Status**: a sign readable across the room, in big letters it draws itself with `blit`, which
   software on the computer can set (the link permission).
 - **Bitcoin** and **Ethereum**: maki's wallets, in the maki store (host API 3's wallet
@@ -176,7 +181,10 @@ function whose permission it didn't ask for):
 - **`ask`**: `Ask::new("Sign in?").detail("as kara").answers("sign", "cancel").show()` puts the
   question on maki's own ask screen, under the app's bar, and waits: `Yes`, `No`, or `NoAnswer`
   if the owner lets it time out (30 s unless `.timeout(s)` says, up to 120). The app gets
-  `Hidden` and `Shown` around it.
+  `Hidden` and `Shown` around it. Host API 7 adds `AskPages`, for what an ask's line can't hold:
+  pages first on maki's review screen, as a wallet's review has them, then the question (120 s
+  unless it says, up to 300), and a yes that allows no signatures. It builds in bytes the app
+  lends it (a static for a big one: an app's stack is 16 KiB); `api = 7` in `maki.toml`.
 - **`keys`**: secrets of the app's own from maki's recovery phrase, named by a label (up to 32
   bytes): `keys::secret(label)` (32 bytes), or the Ed25519 key made from it, which maki holds and
   signs with, `keys::public_key(label)` and `keys::sign(label, message)`. Different for every

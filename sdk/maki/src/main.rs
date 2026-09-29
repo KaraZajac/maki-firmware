@@ -51,8 +51,8 @@ maki: make apps for maki
       Run it as maki would. Without --press, in this terminal: arrow keys, enter for the
       centre, m for the menu (left and right together), q to leave; y or n answers an ask,
       and a scan takes what you type. With --press, the presses in order, then Exit (yes or
-      no answers an ask, msg:TEXT sends a message, qr:TEXT is the next scan, tilt:X;Y;Z moves
-      the accelerometer); --shot saves the last frame, --frames every frame. A scripted run
+      no answers an ask, msg:TEXT sends a message, hex:BYTES one of any bytes, qr:TEXT is the
+      next scan, tilt:X;Y;Z moves the accelerometer); --shot saves the last frame, --frames every frame. A scripted run
       keeps time of its own: only a timeout lets time pass, the whole of the wait it ends, so
       timeout*60 in an app that waits a second is a minute. Apps' keys come from the BIP39
       test phrase, never anything real.

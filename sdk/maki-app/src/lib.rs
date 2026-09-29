@@ -75,6 +75,7 @@ mod sys {
         pub fn log(ptr: *const u8, len: usize);
         pub fn abort(ptr: *const u8, len: usize) -> !;
         pub fn ask(ptr: *const u8, len: usize, timeout_s: i32) -> i32;
+        pub fn ask_review(ptr: *const u8, len: usize, timeout_s: i32) -> i32;
         pub fn key_secret(lptr: *const u8, llen: usize, out: *mut u8) -> i32;
         pub fn key_public(lptr: *const u8, llen: usize, out: *mut u8) -> i32;
         pub fn key_sign(lptr: *const u8, llen: usize, mptr: *const u8, mlen: usize, out: *mut u8) -> i32;
@@ -364,6 +365,87 @@ impl<'a> Ask<'a> {
             return Err(Error::TooBig);
         }
         let code = unsafe { sys::ask(text.as_str().as_ptr(), text.len(), self.timeout_s.min(i32::MAX as u32) as i32) };
+        result(code).map(|a| match a {
+            0 => Answer::Yes,
+            1 => Answer::No,
+            _ => Answer::NoAnswer,
+        })
+    }
+}
+
+/// A question for the owner on maki's review screen, after pages of what it's about (the `ask`
+/// permission, host API 7: say `api = 7` in maki.toml), for what an ask's line can't hold: a
+/// whole command line, say. The pages go by a page at a time under the app's bar, as a wallet's
+/// review does, then the question; a yes allows no signatures (the app does what it asked
+/// about). It builds in bytes the app lends it, with no allocator: a static for a big one, since
+/// an app's stack is 16 KiB.
+///
+/// ```ignore
+/// let mut text = [0u8; 1024];
+/// let mut review = AskPages::new(&mut text, "Run it as root?", "sudo on laptop", "run", "deny");
+/// review.page("Command", "", "/usr/bin/systemctl restart nginx", "");
+/// review.page("Asked by", "kara", "", "in /home/kara");
+/// let answer = review.timeout(60).show();
+/// ```
+pub struct AskPages<'a> {
+    text: &'a mut [u8],
+    len: usize,
+    over: bool,
+    timeout_s: u32,
+}
+
+impl<'a> AskPages<'a> {
+    /// In `text`, which must hold all of it: the question (up to 64 bytes), a line more about it
+    /// (up to 128; may be empty), and the answers' labels (up to 16 bytes each; empty for
+    /// "allow" and "deny").
+    pub fn new(text: &'a mut [u8], question: &str, detail: &str, yes: &str, no: &str) -> Self {
+        let mut pages = AskPages { text, len: 0, over: false, timeout_s: 0 };
+        for (i, part) in [question, detail, yes, no].iter().enumerate() {
+            if i > 0 {
+                pages.put("\n");
+            }
+            pages.put(part);
+        }
+        pages
+    }
+
+    fn put(&mut self, s: &str) {
+        match self.text.get_mut(self.len..self.len + s.len()) {
+            Some(room) => {
+                room.copy_from_slice(s.as_bytes());
+                self.len += s.len();
+            }
+            None => self.over = true,
+        }
+    }
+
+    /// A page: its heading (a few words at the top, up to 32 bytes), its value (the thing to
+    /// check, in bold, up to 128), fixed-width text (across as many lines as it takes, up to 4096)
+    /// and prose (small words, wrapped, up to 4096). All but the heading may be empty; only the
+    /// last two may have newlines.
+    pub fn page(&mut self, heading: &str, value: &str, mono: &str, prose: &str) -> &mut Self {
+        for (sep, part) in [("\x1e", heading), ("\x1f", value), ("\x1f", mono), ("\x1f", prose)] {
+            self.put(sep);
+            self.put(part);
+        }
+        self
+    }
+
+    /// How long the owner has, 5 to 300 seconds (120 if not given).
+    pub fn timeout(&mut self, seconds: u32) -> &mut Self {
+        self.timeout_s = seconds;
+        self
+    }
+
+    /// Shows it and waits. `Error::TooBig` if it didn't fit its bytes or maki's limits,
+    /// `Error::Invalid` for text too long for maki's screen, or with control characters where they
+    /// can't be.
+    pub fn show(&self) -> Result<Answer, Error> {
+        if self.over {
+            return Err(Error::TooBig);
+        }
+        // whole strs, one after another: UTF-8
+        let code = unsafe { sys::ask_review(self.text.as_ptr(), self.len, self.timeout_s.min(i32::MAX as u32) as i32) };
         result(code).map(|a| match a {
             0 => Answer::Yes,
             1 => Answer::No,

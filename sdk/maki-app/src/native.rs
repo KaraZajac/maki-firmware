@@ -199,6 +199,12 @@ pub unsafe fn ask(ptr: *const u8, len: usize, timeout_s: i32) -> i32 {
     payload.extend_from_slice(slice(ptr, len));
     request(service::ASK, &payload, 0).0
 }
+pub unsafe fn ask_review(ptr: *const u8, len: usize, timeout_s: i32) -> i32 {
+    let mut payload = Vec::with_capacity(4 + len);
+    payload.extend_from_slice(&timeout_s.to_le_bytes());
+    payload.extend_from_slice(slice(ptr, len));
+    request(service::ASK_REVIEW, &payload, 0).0
+}
 unsafe fn key(op: usize, lptr: *const u8, llen: usize, out: *mut u8) -> i32 {
     let (status, got) = request(op, slice(lptr, llen), 32);
     if status == 0 && got.len() == 32 {

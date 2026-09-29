@@ -108,6 +108,7 @@ pub fn parse_presses(s: &str) -> Result<Vec<Press>, String> {
             "yes" => Press::Answer(Answer::Yes),
             "no" => Press::Answer(Answer::No),
             m if m.starts_with("msg:") => Press::Message(m[4..].as_bytes().to_vec()),
+            h if h.starts_with("hex:") => Press::Message(from_hex(&h[4..]).ok_or_else(|| format!("hex:BYTES in hex, not {h}"))?),
             q if q.starts_with("qr:") => Press::Qr(q[3..].to_string()),
             t if t.starts_with("tilt:") => Press::Tilt(parse_xyz(&t[5..]).ok_or_else(|| format!("tilt:X;Y;Z in milli-g, not {t}"))?),
             m if m.starts_with("menu:") => {
@@ -115,7 +116,7 @@ pub fn parse_presses(s: &str) -> Result<Vec<Press>, String> {
             }
             other => {
                 return Err(format!(
-                    "no press \"{other}\": left, right, centre, timeout, menu:N, exit, yes or no for an ask, msg:TEXT for a message, qr:TEXT for a scan, tilt:X;Y;Z"
+                    "no press \"{other}\": left, right, centre, timeout, menu:N, exit, yes or no for an ask, msg:TEXT or hex:BYTES for a message, qr:TEXT for a scan, tilt:X;Y;Z"
                 ))
             }
         };
@@ -125,6 +126,14 @@ pub fn parse_presses(s: &str) -> Result<Vec<Press>, String> {
 }
 
 /// "X;Y;Z", milli-g (semicolons: the presses are comma-separated).
+/// Bytes from hex, two digits each.
+fn from_hex(h: &str) -> Option<Vec<u8>> {
+    if h.len() % 2 != 0 {
+        return None;
+    }
+    (0..h.len()).step_by(2).map(|i| u8::from_str_radix(h.get(i..i + 2)?, 16).ok()).collect()
+}
+
 pub fn parse_xyz(s: &str) -> Option<[i16; 3]> {
     let v: Vec<i16> = s.split([';', ',']).map(|p| p.trim().parse().ok()).collect::<Option<_>>()?;
     v.try_into().ok()

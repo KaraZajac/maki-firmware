@@ -168,6 +168,27 @@ impl Session {
         self.platform.ask(&ask).code()
     }
 
+    /// The ask permission (host API 7): a question on maki's review screen after pages of what
+    /// it's about (the text as `wallet_review` takes it, see `parse_review`), for what an ask's
+    /// line can't hold: a whole command line, say. Its answers are "allow" and "deny" unless the
+    /// app names them, and a yes allows no signatures. 0 yes, 1 no, 2 no answer.
+    pub fn ask_review(&mut self, text: &str, timeout_s: i32) -> i32 {
+        if let Err(e) = self.needs(Permission::Ask) {
+            return e;
+        }
+        if text.len() > MAX_REVIEW {
+            return TOO_BIG;
+        }
+        let Some(mut review) = parse_review(text, timeout_s) else { return INVALID };
+        if review.yes.is_empty() {
+            review.yes = "allow".into();
+        }
+        if review.no.is_empty() {
+            review.no = "deny".into();
+        }
+        self.platform.review(&review).code()
+    }
+
     fn label_ok(label: &str) -> bool { label.len() <= MAX_LABEL && !label.chars().any(|ch| ch.is_control()) }
 
     /// The keys permission: the app's 32-byte secret for a label.

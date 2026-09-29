@@ -600,6 +600,7 @@ fn gated_functions_need_their_permission() {
     use maki_bundle::Permission;
     let signatures = [
         ("ask", "(param i32 i32 i32) (result i32)"),
+        ("ask_review", "(param i32 i32 i32) (result i32)"),
         ("key_secret", "(param i32 i32 i32) (result i32)"),
         ("key_public", "(param i32 i32 i32) (result i32)"),
         ("key_sign", "(param i32 i32 i32 i32 i32) (result i32)"),
@@ -972,6 +973,45 @@ fn a_signature_needs_a_yes_to_a_review_on_makis_screen() {
     assert_eq!(s.wallet_review(REVIEW, 3, 0), 0);
     assert_eq!(s.wallet_sign(&p, &[1; 31], WALLET_SIGN_ECDSA), Err(INVALID));
     assert_eq!(s.wallet_sign(&p, &digest, WALLET_PUBLIC), Err(INVALID));
+}
+
+#[test]
+fn any_app_that_may_ask_can_ask_after_pages_but_a_yes_signs_nothing() {
+    use maki_bundle::Permission;
+    let text = "Run it as root?\nsudo on laptop\x1eCommand\x1f\x1f/usr/bin/systemctl restart nginx\x1eAsked by\x1fkara\x1f\x1fin /home/kara";
+    // an app with the ask permission, and no wallet
+    let record = Rc::new(RefCell::new(Record::default()));
+    let mut s = Session::new(Box::new(Script(record.clone())), with(&[Permission::Ask]));
+    record.borrow_mut().answers.extend([Answer::Yes, Answer::No]);
+    assert_eq!(s.ask_review(text, 0), 0);
+    assert_eq!(s.ask_review(text, 9999), 1);
+    assert_eq!(s.ask_review(text, 0), 2);
+    let reviews = record.borrow().reviews.clone();
+    assert_eq!((reviews[0].question.as_str(), reviews[0].detail.as_str()), ("Run it as root?", "sudo on laptop"));
+    assert_eq!(
+        reviews[0].pages,
+        [
+            Page { heading: "Command".into(), mono: "/usr/bin/systemctl restart nginx".into(), ..Page::default() },
+            Page { heading: "Asked by".into(), value: "kara".into(), prose: "in /home/kara".into(), ..Page::default() },
+        ]
+    );
+    // an ask's answers unless the app names its own, and a review's time
+    assert_eq!((reviews[0].yes.as_str(), reviews[0].no.as_str()), ("allow", "deny"));
+    assert_eq!((reviews[0].timeout_s, reviews[1].timeout_s), (REVIEW_TIMEOUT_S, MAX_REVIEW_TIMEOUT_S));
+    record.borrow_mut().answers.push_back(Answer::Yes);
+    assert_eq!(s.ask_review("Run it?\n\nrun\ndon't\x1eCommand\x1f\x1fls", 60), 0);
+    let last = record.borrow().reviews.last().unwrap().clone();
+    assert_eq!((last.yes.as_str(), last.no.as_str(), last.timeout_s), ("run", "don't", 60));
+    // what doesn't fit a review doesn't fit here either, and needs the permission
+    assert_eq!(s.ask_review("Run?\x1e \x1fno heading", 0), INVALID);
+    assert_eq!(s.ask_review(&"x".repeat(MAX_REVIEW + 1), 0), TOO_BIG);
+    let mut none = Session::new(Box::new(Script(Rc::new(RefCell::new(Record::default())))), with(&[Permission::Keys]));
+    assert_eq!(none.ask_review(text, 0), REFUSED);
+    // a wallet app's yes to one allows no signature
+    let (mut s, record) = wallet_session(&["m/84'/0'"], &[Permission::Wallet, Permission::Ask]);
+    record.borrow_mut().answers.push_back(Answer::Yes);
+    assert_eq!(s.ask_review(REVIEW, 0), 0);
+    assert_eq!(s.wallet_sign(&path("m/84'/0'/0'/0/0"), &[7; 32], WALLET_SIGN_ECDSA), Err(REFUSED));
 }
 
 #[test]

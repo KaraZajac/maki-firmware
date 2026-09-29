@@ -1,0 +1,15 @@
+id = "com.leviathan.maki.sudo"
+name = "Sudo"
+version = 1
+label = "1.0"
+api = 7
+storage = 1
+memory = 64
+backup = false
+description = "Every command sudo runs waits for your yes on maki, which shows it whole: the command line, what it's given to run with, and who asked where. maki desktop's sudo plugin asks once sudoers says yes, and checks maki's signature: nothing on your computer can say yes for you, even with your password."
+icon = "icon.pbm"
+
+[permissions]
+ask = "To show you each command sudo would run, and ask you."
+keys = "For the key your computer's sudo checks your yes with, from your recovery phrase."
+link = "To hear from maki desktop's sudo plugin, which asks it about each command."
