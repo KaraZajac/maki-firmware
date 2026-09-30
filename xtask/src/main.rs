@@ -864,6 +864,29 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
 
+        // maki's boot1 for the DC34 badge: boot1-lite, plus the `thirdparty` provisioning stub
+        // (fills the collateral key slots and sets OEM mode) and a key manifest with no Baochip
+        // keys, counter-signed by its own slot 0. In the emulator this uses the test keys
+        // (`--fake-pubkeys` + devkey/testing.key), which is enough to show boot0 preserving
+        // collateral; a real release build swaps in maki's own key block and a hardware
+        // counter-signature. See scratch/collateral-plan.md and README-baochip.md.
+        Some("maki-boot1-lite") => {
+            let sigblock_size = bao1x_api::signatures::SIGBLOCK_LEN;
+            update_flash_origin(
+                "bao1x-boot/boot1/src/platform/bao1x/link.x",
+                (bao1x_api::BOOT1_START + sigblock_size + STATICS_LEN) as u32,
+            )?;
+            builder
+                .set_baremetal(true)
+                .target_baremetal_bao1x("bao1x-boot1")
+                .add_loader_feature("oem-baosec-lite")
+                .add_loader_feature("thirdparty")
+                .set_sigblock_size(sigblock_size);
+            // maki's boot1 always carries a non-Baochip manifest; the test keys stand in until
+            // the real key block and a hardware counter-signature replace them.
+            builder.set_thirdparty_test(true);
+        }
+
         Some("bao1x-alt-boot1-lite") => {
             let sigblock_size = bao1x_api::signatures::SIGBLOCK_LEN;
             update_flash_origin(
