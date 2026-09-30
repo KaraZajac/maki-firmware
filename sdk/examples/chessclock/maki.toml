@@ -1,0 +1,9 @@
+id = "com.leviathan.maki.chessclock"
+name = "Chess Clock"
+version = 1
+label = "1.0"
+api = 8
+storage = 1
+memory = 64
+backup = true
+description = "A game clock for two, for chess, Go and Scrabble: each player presses their side's button, with increments, delays, stages and byo-yomi, and each time turned to face its player across the table."

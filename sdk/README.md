@@ -6,13 +6,16 @@ you can install"). Anyone can build one and sideload it through maki desktop; ma
 owner what it is, where it's from and what it may do before installing it, and a sideloaded
 app carries a mark in maki's top bar for as long as it's installed.
 
-This directory has the Rust crate apps are written with (`maki-app`), thirty examples, and
+This directory has the Rust crate apps are written with (`maki-app`), thirty-one examples, and
 the `maki` tool that packs, signs, checks and simulates them. The examples:
 
 - **Hello**, **Dice** and **Tally**: a screen, the buttons, storage and randomness. Dice takes the
   die from the jog dial on maki's side (host API 8): 3d6, 1d20, as players say them.
 - **Life**, a life counter for Magic and other games, 2 to 6 players: `segments` digits turned to
   face across the table, poison and commander damage, a history to undo from.
+- **Chess Clock**, a game clock for two, each player pressing their own side's button: increments,
+  Bronstein and US delays, stages, byo-yomi, Scrabble's time over, each time turned to face its
+  player; presses count from when they were made, not when maki heard them.
 - **Initiative**, beside Dice at the table: a fight's turn order and hit points, the centre
   passing the turn and the jog dial taking damage off whoever's picked or healing them; someone
   new is added on a form of digit wheels, and the table is kept.

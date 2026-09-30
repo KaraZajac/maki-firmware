@@ -479,6 +479,81 @@ fn life_keeps_poison_and_commander_damage_which_takes_life() {
     assert!(g.changes.is_empty());
 }
 
+/// The Chess Clock's game as it keeps it: each side's main time, moves and periods left, whose
+/// clock was paused (and how far into its turn), and whose flag fell.
+fn clock_game(storage: &BTreeMap<String, Vec<u8>>) -> ([(i64, u32, u32); 2], Option<(u8, i64)>, Option<u8>) {
+    let b = &storage["game"];
+    let side = |i: usize| {
+        let at = 17 + i * 25;
+        (
+            i64::from_le_bytes(b[at..at + 8].try_into().unwrap()),
+            u32::from_le_bytes(b[at + 8..at + 12].try_into().unwrap()),
+            u32::from_le_bytes(b[at + 12..at + 16].try_into().unwrap()),
+        )
+    };
+    let paused = (b[67] < 2).then(|| (b[67], i64::from_le_bytes(b[68..76].try_into().unwrap())));
+    ([side(0), side(1)], paused, (b[76] < 2).then_some(b[76]))
+}
+
+/// A clock run: `ticks` of 50 ms between the presses, maki's clock running.
+fn clock_run(storage: BTreeMap<String, Vec<u8>>, script: &[(Event, usize)]) -> Record {
+    let mut events = vec![];
+    for &(e, ticks) in script {
+        events.push(e);
+        events.extend(std::iter::repeat_n(Event::Timeout, ticks));
+    }
+    let record = Record { events: events.into(), storage, clock: true, ..Default::default() };
+    run_record("chessclock", record).1
+}
+
+#[test]
+fn the_chess_clock_counts_moves_from_when_they_were_made() {
+    use Event::*;
+    // 5+3 blitz, the list's pick to start with: left's press starts right's clock; 5 s on, right
+    // moves. maki heard the press 160 ms after it was made, so right used 4.84 s, and got 3 back
+    let r = clock_run(BTreeMap::new(), &[(Left, 100), (Right, 0)]);
+    let (sides, paused, flag) = clock_game(&r.storage);
+    assert_eq!((sides[1].0, sides[1].1), (300_000 - 4840 + 3000, 1));
+    // left's clock ran from the press as made; leaving paused it
+    assert_eq!((paused, flag), (Some((0, 160)), None));
+}
+
+#[test]
+fn the_chess_clocks_flag_falls_only_once_no_press_can_be_on_its_way() {
+    use Event::*;
+    // 1+0 bullet (up five from 5+3): right's minute is gone at 60 s
+    let bullet = [(Up, 0), (Up, 0), (Up, 0), (Up, 0), (Up, 0)];
+    // a press heard 100 ms past zero was made before it: it counts
+    let mut script = bullet.to_vec();
+    script.extend([(Left, 1202), (Right, 0)]);
+    let (sides, _, flag) = clock_game(&clock_run(BTreeMap::new(), &script).storage);
+    assert_eq!((flag, sides[1].1), (None, 1));
+    // one not heard by 160 ms past zero wasn't: right's flag falls, both clocks stop
+    let mut script = bullet.to_vec();
+    script.extend([(Left, 1204), (Right, 20)]);
+    let (sides, paused, flag) = clock_game(&clock_run(BTreeMap::new(), &script).storage);
+    assert_eq!((flag, sides[1].1, paused), (Some(1), 0, None));
+}
+
+#[test]
+fn the_chess_clock_keeps_byo_yomi_and_the_hourglass() {
+    use Event::*;
+    // your own: a minute, then 3 periods of 10 s; right takes 75 s: one period gone, 2 left
+    let mut settings = vec![19u8, 1, 5];
+    for v in [60u32, 10, 3, 0] {
+        settings.extend(v.to_le_bytes());
+    }
+    let storage = BTreeMap::from([("settings".to_string(), settings)]);
+    let r = clock_run(storage, &[(Left, 1503), (Right, 0)]);
+    let (sides, _, flag) = clock_game(&r.storage);
+    assert_eq!((sides[1].0, sides[1].2, flag), (0, 2, None));
+    // the hourglass (the list's last): what right takes goes to left
+    let down = std::iter::repeat_n((Down, 0), 13);
+    let script: Vec<(Event, usize)> = down.chain([(Left, 200), (Right, 0)]).collect();
+    let (sides, _, _) = clock_game(&clock_run(BTreeMap::new(), &script).storage);
+    assert_eq!((sides[0].0, sides[1].0), (60_000 + 9840, 60_000 - 9840));
+}
+
 #[test]
 fn tally_counts_and_keeps_the_count() {
     let (stop, r) =
