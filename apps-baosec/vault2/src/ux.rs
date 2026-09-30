@@ -13,11 +13,6 @@ use xous::CID;
 use crate::storage::Manager;
 use crate::*;
 
-const FAST_SCROLL_DELAY_MS: u64 = 1300;
-const KEYUP_DELAY_MS: u64 = 100;
-/// How many elements to skip through on fast scroll
-const PAGE_INCREMENT: usize = 6;
-
 pub const DEFAULT_FONT: GlyphStyle = GlyphStyle::Regular;
 pub const FONT_LIST: [&'static str; 6] = ["regular", "tall", "mono", "bold", "large", "small"];
 pub fn name_to_style(name: &str) -> Option<GlyphStyle> {
@@ -56,19 +51,9 @@ pub enum NavDir {
 /// Centralizes tunable UI parameters for TOTP
 struct TotpLayout {}
 impl TotpLayout {
-    pub fn totp_box() -> RoundedRectangle {
-        RoundedRectangle::new(Rectangle::new(Point::new(0, 0), Point::new(127, 40)), 0)
-    }
-
-    /// Vertical margin for the font because the centering algorithm also aligns-top, and we want a little
-    /// more verticale space for aesthetic reasons than the centering algorithm gives by default.
-    pub fn totp_font_vmargin() -> Point { Point::new(0, 4) }
-
     pub fn totp_margin() -> Point { Point::new(10, 0) }
 
     pub fn totp_font() -> GlyphStyle { GlyphStyle::ExtraLarge }
-
-    pub fn timer_box() -> Rectangle { Rectangle::new(Point::new(0, 40), Point::new(127, 50)) }
 
     pub fn list_box() -> Rectangle { Rectangle::new(Point::new(0, 50), Point::new(127, 127)) }
 
@@ -92,9 +77,6 @@ pub struct VaultUi {
     storage_manager: Manager,
 
     usb_dev: usb_bao1x::UsbHid,
-    last_key_time: u64,
-    start_hold_time: u64,
-    tt: ticktimer_server::Ticktimer,
 
     /// maki launcher focus; the vault draws only while in front
     focused: bool,
@@ -118,8 +100,6 @@ impl VaultUi {
             .style(TotpLayout::list_font());
         totp_list.set_autoflush(false);
 
-        let tt = ticktimer_server::Ticktimer::new().unwrap();
-        let now = tt.elapsed_ms();
         let gfx = Gfx::new(&xns).unwrap();
         let style = DEFAULT_FONT;
         let glyph_height = gfx.glyph_height_hint(style).unwrap() as isize;
@@ -137,9 +117,6 @@ impl VaultUi {
             style,
             storage_manager: Manager::new(xns),
             usb_dev: usb_bao1x::UsbHid::new(),
-            tt,
-            last_key_time: now,
-            start_hold_time: now,
             focused: false,
             carousel: 0,
         }
@@ -413,16 +390,6 @@ impl VaultUi {
         tv.margin = Point::new(3, 0);
         write!(tv, "{}", action).ok();
         self.gfx.draw_textview(&mut tv).ok();
-    }
-
-    /// Returns `true` if in longpress state. Only call this once per key hit input.
-    pub(crate) fn manage_longpress(&mut self) -> bool {
-        let now = self.tt.elapsed_ms();
-        if now - self.last_key_time > KEYUP_DELAY_MS {
-            self.start_hold_time = now;
-        }
-        self.last_key_time = now;
-        now - self.start_hold_time > FAST_SCROLL_DELAY_MS
     }
 
     /// Left (`Up`) and right (`Down`) go through the entries, round and round; `Autotype` types
