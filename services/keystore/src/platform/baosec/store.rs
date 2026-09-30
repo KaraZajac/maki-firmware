@@ -263,24 +263,27 @@ impl KeyStore {
         // into "can only erase it". See scratch/collateral-plan.md and README-baochip.md.
         //
         // Only the SECRET slots (261..263) are mixed in — never the public evidence slot 264.
-        // The binding activates only when real collateral is present: on a badge whose boot0 hasn't
-        // been updated, or before maki's boot1 has provisioned it, the slots read erased/zero and
-        // the key is derived exactly as before, so existing setups keep working until maki's boot1
-        // is in place (at which point the key changes once — a backup/restore migration, tracked
-        // separately). Off by default; enable with the `collateral-keys` feature.
+        // maki's boot1 provisions the collateral slots before this runs, so under the intended
+        // configuration they are always present here. If they read erased/zero, this build is not
+        // running on maki's boot1 (an un-updated boot0, or foreign firmware that wiped them), so we
+        // FAIL CLOSED: leave the master key underived, so nothing decrypts or is written. maki has
+        // no users and no data on any chip yet, so there is nothing to migrate — a chip that ends
+        // up here just sets up from scratch once it is running maki's boot1. Off by default; enable
+        // with the `collateral-keys` feature.
         #[cfg(feature = "collateral-keys")]
         {
             let collateral = self.slot_mgr.read(&COLLATERAL_SECRET).unwrap();
             let absent = collateral.iter().all(|&b| b == 0 || b == bao1x_hal::ERASE_VALUE);
             if absent {
-                log::warn!(
-                    "{}COLLATERAL.ABSENT,{}: master key not bound to collateral (needs maki's boot1)",
+                log::error!(
+                    "{}COLLATERAL.ABSENT,{}: refusing to derive the master key — this build needs \
+                     maki's boot1 to provision the collateral keys. Storage stays locked.",
                     BOOKEND_START, BOOKEND_END
                 );
-            } else {
-                ikm.extend_from_slice(collateral);
-                log::info!("{}COLLATERAL.BOUND,{}", BOOKEND_START, BOOKEND_END);
+                return; // fail closed: master_key stays None, every key op returns UseBeforeInit
             }
+            ikm.extend_from_slice(collateral);
+            log::info!("{}COLLATERAL.BOUND,{}", BOOKEND_START, BOOKEND_END);
         }
 
         // add salt

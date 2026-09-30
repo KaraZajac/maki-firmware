@@ -150,7 +150,9 @@ hazardous-debug = []
 # maki: bind the storage master key to the chip's `collateral` secret slots, which Baochip's boot0
 # preserves only for maki's counter-signed boot1 and erases for other firmware. Off by default; a
 # badge reflashed with other firmware then derives a different key and can't read maki's data.
-# Enabling it changes the master key once (a backup/restore migration). See scratch/collateral-plan.md.
+# Fails closed if the collateral slots are absent (not running maki's boot1): the master key is
+# left underived and storage stays locked. No migration — maki has no users/data yet, so a chip
+# just sets up from scratch under maki's boot1. See scratch/collateral-plan.md.
 collateral-keys = []
 
 default = []
