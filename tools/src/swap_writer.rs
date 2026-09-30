@@ -169,6 +169,7 @@ impl SwapWriter {
             function,
             anti_rollback_manual,
             false,
+            crate::sign_image::Countersign::Slot0, // swap carries no manifest appendix; mode is moot
             load_pq_key_bytes(pq_private_key)
                 .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?,
         )

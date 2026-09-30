@@ -26,6 +26,33 @@ fn needs_manifest_appendix(function_code: FunctionCode) -> bool {
     matches!(function_code, FunctionCode::Boot1 | FunctionCode::UpdatedBoot1)
 }
 
+/// How the stand-in counter-signature is applied to a `--fake-pubkeys` boot1, for testing boot0's
+/// mutual-distrust policy in the emulator. Real releases counter-sign with `fido-signer` instead.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Countersign {
+    /// Counter-sign with the test key, whose public key is manifest slot 0. boot0 preserves
+    /// collateral (this is what a legitimate maki boot1 does).
+    Slot0,
+    /// No valid counter-signature (a zeroed appendix). boot0 should erase collateral.
+    None,
+    /// Counter-sign with the test key placed at manifest slot 3 (the developer slot). boot0
+    /// verifies it but treats a slot-3 signature as developer intent and should erase collateral.
+    Slot3,
+}
+
+impl Countersign {
+    /// Resolve the mode from a CLI value or the MAKI_COUNTERSIGN env var (test knob); Slot0 default.
+    pub fn resolve(cli: Option<&str>) -> Result<Countersign, String> {
+        let v = cli.map(|s| s.to_string()).or_else(|| std::env::var("MAKI_COUNTERSIGN").ok());
+        match v.as_deref() {
+            None | Some("slot0") => Ok(Countersign::Slot0),
+            Some("none") => Ok(Countersign::None),
+            Some("slot3") => Ok(Countersign::Slot3),
+            Some(other) => Err(format!("unknown counter-sign mode {other:?} (slot0|none|slot3)")),
+        }
+    }
+}
+
 use ed25519_dalek::pkcs8::DecodePrivateKey;
 use ed25519_dalek::{DigestSigner, SigningKey};
 use pkcs8::PrivateKeyInfo;
@@ -177,6 +204,7 @@ pub fn sign_image<P: AsRef<Path>>(
     function_code: Option<&str>,
     anti_rollback_manual: Option<usize>,
     fake_pubkeys: bool,
+    countersign: Countersign,
     pq_private_key: Option<([u8; 64], Option<P>)>,
 ) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
     let mut dest_file = vec![];
@@ -376,9 +404,11 @@ pub fn sign_image<P: AsRef<Path>>(
                     .map_err(|e| format!("{}", e))?;
                 let derived_public_key = sk.public_key();
 
-                // replace 0-slot with the derived public key of the test third party signer
-                header.sealed_data.pubkeys[0].pk.copy_from_slice(derived_public_key.as_ref());
-                header.sealed_data.pubkeys[0].tag = *b"tpk0";
+                // Place the test third-party public key in the manifest slot the counter-signature
+                // will be checked against: slot 0 normally, slot 3 for the slot-3 negative control.
+                let tp_slot = if countersign == Countersign::Slot3 { 3 } else { 0 };
+                header.sealed_data.pubkeys[tp_slot].pk.copy_from_slice(derived_public_key.as_ref());
+                header.sealed_data.pubkeys[tp_slot].tag = if tp_slot == 3 { *b"tpk3" } else { *b"tpk0" };
 
                 // fake keys also always includes fake PQ keys
                 header.sealed_data.pq_enabled = 0xA0A0_5555; // any non-0 value works, but more distance from 0 is stronger
@@ -500,7 +530,11 @@ pub fn sign_image<P: AsRef<Path>>(
                 }
 
                 let mut appendix = [0u8; MANIFEST_APPENDIX_LEN];
-                if let Ok(ref csk) = SigningKey::from_pkcs8_der(&testing_pem.contents) {
+                if countersign == Countersign::None {
+                    // Negative control: leave the appendix zeroed, so boot0 finds no valid
+                    // counter-signature and should erase the collateral keys.
+                    println!("No counter-signature (test): leaving the appendix zeroed");
+                } else if let Ok(ref csk) = SigningKey::from_pkcs8_der(&testing_pem.contents) {
                     // Stand-in counter-signature. This emulates a third party applying their
                     // secret key to a third-party image. Of course, this is a fake key, and
                     // should not be used for anything real.
@@ -512,7 +546,8 @@ pub fn sign_image<P: AsRef<Path>>(
                     h.update(&header.signature);
                     let csig = csk.sign_digest(h).to_bytes();
                     appendix[..SIGNATURE_LENGTH].copy_from_slice(&csig);
-                    println!("Applied a stand-in counter-signature from fake manifest slot 0");
+                    let slot = if countersign == Countersign::Slot3 { 3 } else { 0 };
+                    println!("Applied a stand-in counter-signature from fake manifest slot {slot}");
                 }
                 dest_file.write_all(&appendix)?;
             }
@@ -553,6 +588,7 @@ pub fn sign_file<S, T, P>(
     function_code: Option<&str>,
     arb_override: Option<usize>,
     fake_pubkeys: bool,
+    countersign: Countersign,
     pq_private_key: Option<(P, Option<P>)>,
 ) -> Result<(), Box<dyn std::error::Error>>
 where
@@ -577,6 +613,7 @@ where
         function_code,
         arb_override,
         fake_pubkeys,
+        countersign,
         load_pq_key_bytes(pq_private_key)?,
     )?;
     dest_file.write_all(&result)?;

@@ -132,6 +132,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .required(false)
         )
         .arg(
+            Arg::with_name("countersign-mode")
+            .long("countersign-mode")
+            .takes_value(true)
+            .possible_values(&["slot0", "none", "slot3"])
+            .help("Test knob for the boot1 counter-signature (with --fake-pubkeys): slot0 = valid (boot0 preserves collateral), none = no signature, slot3 = signed from the developer slot (both should erase). Also settable via MAKI_COUNTERSIGN.")
+            .required(false)
+        )
+        .arg(
             Arg::with_name("git-describe")
             .long("git-describe")
             .takes_value(true)
@@ -177,6 +185,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let sig_length = usize::from_str_radix(matches.value_of("sig-length").unwrap_or("4096"), 10)
         .expect("sig-length should be a decimal number");
+    let countersign = xous_tools::sign_image::Countersign::resolve(matches.value_of("countersign-mode"))?;
     // Sign the loader, if an output file was specified
     if let Some(loader_output) = matches.value_of("loader-output") {
         let loader_key = matches.value_of("loader-key").expect("no loader key specified");
@@ -209,6 +218,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             matches.value_of("function-code"),
             arb_override.map(|x| x as usize),
             matches.is_present("fake-pubkeys"),
+            countersign,
             pq_args,
         )?;
 
@@ -254,6 +264,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             Some(matches.value_of("function-code").unwrap_or("kernel")),
             arb_override.map(|x| x as usize),
             matches.is_present("fake-pubkeys"),
+            countersign,
             pq_args,
         )?;
 
