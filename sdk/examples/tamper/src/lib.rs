@@ -16,9 +16,10 @@ use std::fmt::Write;
 
 use maki_app::*;
 
-/// The code's length; a gap this long ends a try; tries before the lockout, and how long.
+/// The code's length; a gap this long ends a try (pressed by feel on a dark screen: time to find
+/// the next key); tries before the lockout, and how long.
 const CODE_LEN: usize = 5;
-const TRY_GAP_MS: u64 = 3000;
+const TRY_GAP_MS: u64 = 5000;
 const TRIES: u32 = 3;
 const LOCKOUT_MS: u64 = 600_000;
 /// Before arming: time to put maki down, then this still.

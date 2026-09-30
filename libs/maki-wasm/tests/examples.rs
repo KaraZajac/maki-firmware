@@ -719,15 +719,15 @@ fn the_tamper_log_logs_a_move_and_the_code_disarms_it() {
 fn the_tamper_log_logs_the_menu_wrong_codes_and_the_app_closed() {
     use Event::*;
     let mut events = tamper_arming();
-    // maki's menu opened; three wrong tries, 4 s apart, lock the code: the right one then isn't
+    // maki's menu opened; three wrong tries, 6 s apart, lock the code: the right one then isn't
     // taken; the app's closed
     events.push(Hidden);
     for _ in 0..3 {
         events.extend([Up, Up, Up, Up, Up]);
-        events.extend([Timeout; 100]);
+        events.extend([Timeout; 150]);
     }
     events.extend(TAMPER_CODE);
-    events.extend([Timeout; 100]);
+    events.extend([Timeout; 150]);
     let record =
         Record { events: events.into(), motion: Some([0, 0, 1000]), clock: true, ..Default::default() };
     let (_, r) = run_record("tamper", record);
