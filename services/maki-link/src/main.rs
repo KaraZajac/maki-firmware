@@ -812,6 +812,88 @@ fn main() -> ! {
         });
     }
 
+    // This session's apps: built with MAKI_DEMO_SUDO, once maki has its PIN and phrase, maki-link
+    // installs the Sudo and Bitcoin apps, then does what maki desktop's sudo plugin and its Bitcoin
+    // page do: asks about a command (with an LD_PRELOAD set on its command line, which maki
+    // shows), adds the fixture multisig wallet (libs/maki-btc/tests/fixtures: 2 of 3, maki's key
+    // among them), and has its PSBT signed, checked against maki-btc's signature.
+    if option_env!("MAKI_DEMO_SUDO").is_some() {
+        std::thread::spawn(|| {
+            const SUDO: &str = "com.leviathan.maki.sudo";
+            const BTC: &str = "com.leviathan.maki.bitcoin";
+            let host = demo_host();
+            let bundles: [(&str, &[u8]); 2] = [
+                ("sudo", include_bytes!("../../../libs/maki-wasm/tests/fixtures/sudo.maki")),
+                ("bitcoin", include_bytes!("../../../libs/maki-wasm/tests/fixtures/bitcoin.maki")),
+            ];
+            for (name, bytes) in bundles {
+                let r = demo_install(&host, bytes);
+                log::warn!("demo sudo install {name}: result {} '{}'", r.result, r.reason);
+            }
+            let ask = |id: &str, m: Vec<u8>| {
+                let r = host.message(id, m);
+                if r.result == app_host::RESULT_OK { r.answer } else { vec![0xf0 | r.result as u8] }
+            };
+            // the sudo plugin's request: a nonce, who asks where, the command, its arguments and
+            // what it's given (the SDK's examples/sudo has the layout)
+            let mut r = vec![b'R'];
+            r.extend_from_slice(&[0x5a; 32]);
+            for s in [&b"laptop"[..], b"kara", b"root", b""] {
+                r.push(s.len() as u8);
+                r.extend_from_slice(s);
+            }
+            for s in [&b"/home/kara"[..], b""] {
+                r.extend_from_slice(&(s.len() as u16).to_le_bytes());
+                r.extend_from_slice(s);
+            }
+            r.push(10);
+            r.extend_from_slice(b"/dev/pts/3");
+            r.extend_from_slice(&[0, 0]);
+            let command: &[u8] = b"/usr/bin/systemctl";
+            r.extend_from_slice(&(command.len() as u16).to_le_bytes());
+            r.extend_from_slice(command);
+            let argv: [&[u8]; 3] = [b"systemctl", b"restart", b"nginx"];
+            let env: [&[u8]; 1] = [b"LD_PRELOAD=/tmp/evil.so"];
+            for list in [&argv[..], &env[..]] {
+                r.push(list.len() as u8);
+                for item in list {
+                    r.extend_from_slice(&(item.len() as u16).to_le_bytes());
+                    r.extend_from_slice(item);
+                }
+            }
+            let a = ask(SUDO, r);
+            log::warn!("demo sudo approve: status {:?}, signed: {}", a.first(), a.len() == 65);
+            // the multisig wallet, added once the owner has gone through its keys
+            let descriptor: &[u8] = include_bytes!("../../../libs/maki-btc/tests/fixtures/multisig.txt");
+            let mut m = vec![b'M', 1];
+            for s in [&b"Family vault"[..], descriptor] {
+                m.extend_from_slice(&(s.len() as u16).to_le_bytes());
+                m.extend_from_slice(s);
+            }
+            let a = ask(BTC, m);
+            log::warn!("demo sudo multisig add: status {:?}", a.first());
+            let unsigned: &[u8] = include_bytes!("../../../libs/maki-btc/tests/fixtures/multisig-unsigned.psbt");
+            let expected: &[u8] = include_bytes!("../../../libs/maki-btc/tests/fixtures/multisig-signed.psbt");
+            let mut p = vec![b'P', 1];
+            p.extend_from_slice(&(unsigned.len() as u32).to_le_bytes());
+            p.extend_from_slice(&0u32.to_le_bytes());
+            p.extend_from_slice(unsigned);
+            let a = ask(BTC, p);
+            let mut signed = Vec::new();
+            if let [0, n @ ..] = a.as_slice() {
+                let total = u32::from_le_bytes(n[..4].try_into().unwrap_or([0; 4])) as usize;
+                while signed.len() < total {
+                    let g = ask(BTC, [&[b'G'][..], &(signed.len() as u32).to_le_bytes()].concat());
+                    if g.len() <= 9 || g[0] != 0 {
+                        break;
+                    }
+                    signed.extend_from_slice(&g[9..]);
+                }
+            }
+            log::warn!("demo sudo multisig sign: status {:?}, as expected: {}", a.first(), signed == expected);
+        });
+    }
+
     // The clock: built with MAKI_DEMO_CLOCK, maki-link sets maki's clock at boot to a fixed
     // evening, as maki desktop would (Sunday 27 September 2026, 22:38 at UTC-4), and calls it
     // verified: the bar's clock and the screensaver have a time to show.
