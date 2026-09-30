@@ -1,6 +1,7 @@
-//! Snake, with maki's three buttons: left turns the snake anticlockwise, right clockwise, the
-//! centre pauses. Each thing it eats makes it longer and a little faster; a wall or its own
-//! tail ends the game. Two quick presses make a U-turn. Keeps the best score.
+//! Snake, steered the way it's to go: the jog dial on maki's side up or down, left or right with
+//! the buttons. The centre pauses. Each thing it eats makes it longer and a little faster; a wall
+//! or its own tail ends the game. Two quick presses make a U-turn (up then left, going right).
+//! Keeps the best score.
 
 #![no_std]
 
@@ -19,7 +20,7 @@ const CELLS: usize = (COLS * ROWS) as usize;
 const SLOWEST: u64 = 190;
 const FASTEST: u64 = 75;
 const FASTER: u64 = 4;
-/// Turns pressed ahead of the steps that make them.
+/// Ways pressed ahead of the steps that take them.
 const AHEAD: usize = 2;
 
 /// A cell of the field: a byte each way keeps a whole snake small (an app's stack is 16 KiB).
@@ -33,7 +34,7 @@ impl Cell {
     fn index(self) -> usize { self.y as usize * COLS as usize + self.x as usize }
 }
 
-/// Up, right, down, left: a right turn is the next, a left the one before.
+/// Up, right, down, left (0 to 3): straight back is two on.
 const HEADINGS: [(i32, i32); 4] = [(0, -1), (1, 0), (0, 1), (-1, 0)];
 
 struct Game {
@@ -43,7 +44,7 @@ struct Game {
     len: usize,
     taken: [bool; CELLS],
     heading: usize,
-    turns: [i8; AHEAD],
+    turns: [u8; AHEAD],
     queued: usize,
     food: Cell,
     eaten: u32,
@@ -102,16 +103,19 @@ impl Game {
         }
     }
 
-    fn turn(&mut self, way: i8) {
-        if self.queued < AHEAD {
-            self.turns[self.queued] = way;
+    /// The way pressed, after any pressed ahead of it: none if it's the way the snake will be going
+    /// already, or straight back into itself.
+    fn steer(&mut self, way: usize) {
+        let going = if self.queued > 0 { self.turns[self.queued - 1] as usize } else { self.heading };
+        if self.queued < AHEAD && way != going && way != (going + 2) % 4 {
+            self.turns[self.queued] = way as u8;
             self.queued += 1;
         }
     }
 
     fn step(&mut self) -> Step {
         if self.queued > 0 {
-            self.heading = (self.heading as i32 + 4 + self.turns[0] as i32) as usize % 4;
+            self.heading = self.turns[0] as usize;
             self.turns.copy_within(1.., 0);
             self.queued -= 1;
         }
@@ -189,12 +193,13 @@ fn title(best: u32) {
     }
     screen::fill_rect(79, 44, 5, 4, Color::Light);
     screen::rect(92, 44, 4, 4, Color::Light);
-    screen::text_centred(58, "left, right: turn", Style::Small, Color::Light);
-    screen::text_centred(71, "centre: play", Style::Small, Color::Light);
+    screen::text_centred(56, "steer with the dial", Style::Small, Color::Light);
+    screen::text_centred(67, "and left and right", Style::Small, Color::Light);
+    screen::text_centred(80, "centre: play", Style::Small, Color::Light);
     if best > 0 {
         let mut line = Buf::<24>::new();
         let _ = write!(line, "best {best}");
-        screen::text_centred(90, line.as_str(), Style::Small, Color::Light);
+        screen::text_centred(96, line.as_str(), Style::Small, Color::Light);
     }
     screen::present();
 }
@@ -234,8 +239,10 @@ fn play(best: u32) -> Option<u32> {
                 // behind (a busy moment): carry on from now rather than rushing to catch up
                 next = next.max(millis());
             }
-            Event::Left if !paused => g.turn(-1),
-            Event::Right if !paused => g.turn(1),
+            Event::Up if !paused => g.steer(0),
+            Event::Right if !paused => g.steer(1),
+            Event::Down if !paused => g.steer(2),
+            Event::Left if !paused => g.steer(3),
             Event::Centre => {
                 paused = !paused;
                 next = millis() + g.speed();

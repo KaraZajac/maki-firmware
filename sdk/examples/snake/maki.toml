@@ -1,9 +1,9 @@
 id = "com.leviathan.maki.snake"
 name = "Snake"
-version = 1
-label = "1.0"
-api = 1
+version = 2
+label = "2.0"
+api = 8
 storage = 1
 memory = 64
 backup = true
-description = "The snake game, with maki's three buttons: left and right turn it, the centre pauses. Eat to grow; walls and your own tail end it. Keeps your best score."
+description = "The snake game, steered the way it's to go: the jog dial on maki's side for up and down, the buttons for left and right. Eat to grow; walls and your own tail end it. Keeps your best score."

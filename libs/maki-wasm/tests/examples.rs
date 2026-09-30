@@ -1417,7 +1417,7 @@ fn snake_eats_grows_and_ends_at_the_wall() {
     // snake starts heading right from 7 across, 12 down: right to 25, up to the top, and on
     let mut events = vec![Event::Centre];
     events.extend([Event::Timeout; 18]);
-    events.push(Event::Left);
+    events.push(Event::Up);
     events.extend([Event::Timeout; 13]);
     let (stop, r) = run_fixture("snake", &events, BTreeMap::new());
     assert_eq!(stop, Stop::Finished);
@@ -1439,6 +1439,25 @@ fn snake_eats_grows_and_ends_at_the_wall() {
     events.extend([Event::Timeout; 25]);
     let (_, r) = run_fixture("snake", &events, BTreeMap::new());
     assert!(!r.storage.contains_key("best"));
+}
+
+#[test]
+fn snake_goes_the_way_pressed_but_never_straight_back() {
+    // going right, head at 10 across: left (straight back) is no turn; two on, down then left
+    // make a U-turn onto the row below, and it's still going
+    let mut events = vec![Event::Centre];
+    events.extend([Event::Timeout; 3]);
+    events.push(Event::Left);
+    events.extend([Event::Timeout; 2]);
+    events.extend([Event::Down, Event::Left]);
+    events.extend([Event::Timeout; 4]);
+    let (stop, r) = run_fixture("snake", &events, BTreeMap::new());
+    assert_eq!(stop, Stop::Finished);
+    // the last frame of play: all four cells on row 13, 9 to 12 across, none left on row 12
+    let last = &r.frames[r.frames.len() - 1];
+    let cell = |x: i32, y: i32| last.get(2 + x * 4, 13 + y * 4);
+    assert!((9..=12).all(|x| cell(x, 13)));
+    assert!(!cell(8, 13) && !cell(13, 13) && (4..=13).all(|x| !cell(x, 12)));
 }
 
 #[test]
