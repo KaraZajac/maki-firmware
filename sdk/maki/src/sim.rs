@@ -107,7 +107,7 @@ pub fn parse_presses(s: &str) -> Result<Vec<Press>, String> {
             "exit" => Press::Event(Event::Exit),
             "yes" => Press::Answer(Answer::Yes),
             "no" => Press::Answer(Answer::No),
-            m if m.starts_with("msg:") => Press::Message(m[4..].as_bytes().to_vec()),
+            m if m.starts_with("msg:") => Press::Message(m.as_bytes()[4..].to_vec()),
             h if h.starts_with("hex:") => Press::Message(from_hex(&h[4..]).ok_or_else(|| format!("hex:BYTES in hex, not {h}"))?),
             q if q.starts_with("qr:") => Press::Qr(q[3..].to_string()),
             t if t.starts_with("tilt:") => Press::Tilt(parse_xyz(&t[5..]).ok_or_else(|| format!("tilt:X;Y;Z in milli-g, not {t}"))?),
@@ -128,7 +128,7 @@ pub fn parse_presses(s: &str) -> Result<Vec<Press>, String> {
 /// "X;Y;Z", milli-g (semicolons: the presses are comma-separated).
 /// Bytes from hex, two digits each.
 fn from_hex(h: &str) -> Option<Vec<u8>> {
-    if h.len() % 2 != 0 {
+    if !h.len().is_multiple_of(2) {
         return None;
     }
     (0..h.len()).step_by(2).map(|i| u8::from_str_radix(h.get(i..i + 2)?, 16).ok()).collect()
@@ -214,9 +214,9 @@ impl Shared {
     fn draw_terminal(&self, footer: &str) {
         let s = self.screen();
         let mut out = String::from("\x1b[H");
-        for y in (0..WIDTH).step_by(2) {
-            for x in 0..WIDTH {
-                out.push(match (s[y][x], s[y + 1][x]) {
+        for rows in s.chunks_exact(2) {
+            for (&top, &bottom) in rows[0].iter().zip(&rows[1]) {
+                out.push(match (top, bottom) {
                     (true, true) => '█',
                     (true, false) => '▀',
                     (false, true) => '▄',

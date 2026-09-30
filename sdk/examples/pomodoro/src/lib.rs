@@ -363,7 +363,7 @@ impl Timer {
             }
             State::Over { phase, since } => {
                 let t = now - since;
-                let light = if t < FLASHING { t / FLASH % 2 == 0 } else { (t - FLASHING) % BLINK < BLINK_ON };
+                let light = if t < FLASHING { (t / FLASH).is_multiple_of(2) } else { (t - FLASHING) % BLINK < BLINK_ON };
                 Look { pie: if phase == Phase::Focus { 0 } else { TURN }, light, ..plain }
             }
         }

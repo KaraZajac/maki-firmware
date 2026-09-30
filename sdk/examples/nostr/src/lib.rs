@@ -241,7 +241,7 @@ fn answer(msg: &[u8], out: &mut [u8; 97]) -> usize {
                 return 1;
             };
             // tags as JSON writes them: an array (of arrays of strings), nothing around it
-            if !(tags.starts_with('[') && tags.ends_with(']')) || !r.0.is_empty() {
+            if !tags.starts_with('[') || !tags.ends_with(']') || !r.0.is_empty() {
                 out[0] = BAD;
                 return 1;
             }

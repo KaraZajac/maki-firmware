@@ -16,8 +16,7 @@ const R: i32 = 30;
 fn draw(tilt: Option<(i16, i16, i16)>, scanned: &str) {
     screen::clear(Color::Dark);
     // the level: a circle, a cross, and the bubble, which floats to the high side
-    for a in 0..64 {
-        let (s, c) = SIN_COS[a];
+    for &(s, c) in &SIN_COS {
         screen::pixel(CX + (R * c) / 100, CY + (R * s) / 100, Color::Light);
     }
     screen::line(CX - 4, CY, CX + 4, CY, Color::Light);

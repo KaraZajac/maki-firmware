@@ -456,7 +456,7 @@ fn main() {
                 let mut answer = Reply { bytes: [0; 80], len: 0 };
                 let at = SIGNED.len() - 1;
                 match link::read(&mut message[at..]) {
-                    Some(n) if n >= 1 && n <= MOST => app.handle(message, n, &mut answer),
+                    Some(n) if (1..=MOST).contains(&n) => app.handle(message, n, &mut answer),
                     _ => answer.push(BAD),
                 }
                 let _ = link::reply(&answer.bytes[..answer.len]);

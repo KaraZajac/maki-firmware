@@ -15,9 +15,8 @@ fn main() {
         let _ = core::fmt::Write::write_fmt(&mut up, format_args!("up {} s", (millis() - started) / 1000));
         screen::text_centred(66, up.as_str(), Style::Small, Color::Light);
         screen::present();
-        match wait(Some(1000)) {
-            Event::Exit => return,
-            _ => {}
+        if wait(Some(1000)) == Event::Exit {
+            return;
         }
     }
 }

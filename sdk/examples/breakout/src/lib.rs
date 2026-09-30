@@ -162,18 +162,15 @@ impl Game {
         for _ in 0..n {
             let x = self.x + self.vx / n;
             let (px, py) = (x.div_euclid(ONE), self.y.div_euclid(ONE));
-            if px < 0 || px + BALL > WIDTH {
-                self.vx = -self.vx;
-            } else if self.knock(px, py) {
+            // off a wall, or else a brick: knock takes the brick out, so it's only asked past the walls
+            if px < 0 || px + BALL > WIDTH || self.knock(px, py) {
                 self.vx = -self.vx;
             } else {
                 self.x = x;
             }
             let y = self.y + self.vy / n;
             let (px, py) = (self.x.div_euclid(ONE), y.div_euclid(ONE));
-            if py < CEILING {
-                self.vy = -self.vy;
-            } else if self.knock(px, py) {
+            if py < CEILING || self.knock(px, py) {
                 self.vy = -self.vy;
             } else if self.vy > 0 && py + BALL >= PADDLE_Y && py + BALL <= PADDLE_Y + PADDLE_H && px + BALL > self.paddle && px < self.paddle + PADDLE_W {
                 // off the paddle: straight up from its middle, more to the side towards its ends

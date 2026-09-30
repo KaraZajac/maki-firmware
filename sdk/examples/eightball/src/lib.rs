@@ -139,7 +139,7 @@ fn main() {
                 let (x, y, z) = motion::read().unwrap_or((0, 0, 1000));
                 let (x, y, z) = (x as i32, y as i32, z as i32);
                 let size2 = x * x + y * y + z * z;
-                if size2 > (1000 + SHAKEN) * (1000 + SHAKEN) || size2 < (1000 - SHAKEN) * (1000 - SHAKEN) {
+                if !((1000 - SHAKEN).pow(2)..=(1000 + SHAKEN).pow(2)).contains(&size2) {
                     shaken += 1;
                     still = 0;
                     false

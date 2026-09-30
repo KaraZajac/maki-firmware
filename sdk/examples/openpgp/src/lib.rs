@@ -176,7 +176,7 @@ fn certify(keys: &Keys, uid: &str) -> Option<(Vec<u8>, Vec<u8>)> {
 /// AES key unwrap (RFC 3394), as RFC 6637 wraps a session key.
 fn unwrap(kek: &[u8; 32], wrapped: &[u8]) -> Option<Vec<u8>> {
     use aes::cipher::{BlockDecrypt, KeyInit};
-    if wrapped.len() % 8 != 0 || wrapped.len() < 24 {
+    if !wrapped.len().is_multiple_of(8) || wrapped.len() < 24 {
         return None;
     }
     let n = wrapped.len() / 8 - 1;
@@ -241,7 +241,8 @@ fn open(keys: &Keys, point_wrapped: &[u8]) -> Option<Vec<u8>> {
     let m = &m[..m.len() - pad];
     let (key, sum) = m.get(1..m.len().checked_sub(2)?).zip(m.get(m.len() - 2..))?;
     let check = key.iter().fold(0u16, |s, &b| s.wrapping_add(b as u16));
-    (check.to_be_bytes() == sum && matches!(m[0], 7 | 8 | 9)).then(|| m[..m.len() - 2].to_vec())
+    // 7 to 9: AES-128, -192 or -256
+    (check.to_be_bytes() == sum && matches!(m[0], 7..=9)).then(|| m[..m.len() - 2].to_vec())
 }
 
 /// A header line's value in a git object, before the message.
