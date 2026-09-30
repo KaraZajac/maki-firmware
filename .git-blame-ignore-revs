@@ -1,0 +1,5 @@
+# Formatting-only commits, for `git blame` to look past. GitHub's blame view reads this file;
+# locally: git config blame.ignoreRevsFile .git-blame-ignore-revs
+
+# maki's code (its crates, the SDK, its edits in upstream files) formatted with rustfmt.toml
+1ed878ab0418668ff1a8e5d9afe584795220224f
