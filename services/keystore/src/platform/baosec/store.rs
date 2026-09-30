@@ -15,11 +15,9 @@ use bao1x_hal::board::{BOOKEND_END, BOOKEND_START};
 use bao1x_hal::udma::FLASH_SECTOR_LEN;
 use bao1x_hal::{
     acram::{OneWayCounter, SlotManager},
-    board::{CHAFF_KEYS, COLLATERAL_ERASURE_ALIAS, NUISANCE_KEYS_0, NUISANCE_KEYS_1, ROOT_SEED, THE_FLAG_1},
+    board::{CHAFF_KEYS, COLLATERAL_SECRET, NUISANCE_KEYS_0, NUISANCE_KEYS_1, ROOT_SEED, THE_FLAG_1},
     rram::Reram,
 };
-#[cfg(feature = "collateral-keys")]
-use bao1x_hal::board::COLLATERAL_SECRET;
 use hkdf::Hkdf;
 use keystore_api::KeyWrapper;
 use rand::prelude::*;
@@ -145,10 +143,14 @@ impl KeyStore {
 
     /// returns `true` if collateral is erased
     pub fn is_collateral_erased(&mut self) -> bool {
-        let collateral = self.slot_mgr.read(&COLLATERAL_ERASURE_ALIAS).unwrap();
-        let check_val = vec![bao1x_hal::ERASE_VALUE; COLLATERAL_ERASURE_ALIAS.len() * SLOT_ELEMENT_LEN_BYTES];
-        // log::info!("collateral: {:x?}", &collateral);
-        // log::info!("check_val: {:x?}", &check_val);
+        // Read only the secret slots (261..263), not the full erasure alias (261..264). Those three
+        // share one ACL in every state — Open when erased, Fw0 once maki's boot1 has provisioned them
+        // — so this read is always uniform. Reading the alias would include the Open public slot 264
+        // beside the provisioned Fw0 secret slots, which fails get_acl's uniformity check
+        // (DataAclInconsistency) once collateral is provisioned. If the secret slots are all the erase
+        // value, collateral is erased.
+        let collateral = self.slot_mgr.read(&COLLATERAL_SECRET).unwrap();
+        let check_val = vec![bao1x_hal::ERASE_VALUE; COLLATERAL_SECRET.len() * SLOT_ELEMENT_LEN_BYTES];
         collateral == &check_val
     }
 
