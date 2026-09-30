@@ -143,7 +143,7 @@ fn login(r: &mut Request, storage: &mut storage::Manager, launcher: &Launcher) -
     if found.is_empty() {
         return Err(Approval::NoMatch);
     }
-    found.sort_by(|a, b| b.atime.cmp(&a.atime)); // the one used last, first
+    found.sort_by_key(|p| std::cmp::Reverse(p.atime)); // the one used last, first
     let i = if found.len() == 1 {
         ask(launcher, &r.site, "Fill login?", &found[0].username, &[])?
     } else {

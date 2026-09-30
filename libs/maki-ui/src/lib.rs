@@ -19,7 +19,8 @@ use ux_api::platform::{HEIGHT, WIDTH};
 use ux_api::service::api::Gid;
 use ux_api::service::gfx::Gfx;
 
-pub const W: isize = WIDTH as isize;
+pub const W: isize = WIDTH;
+// HEIGHT is a usize on baosec (WIDTH is an isize on every platform), hence the cast
 pub const H: isize = HEIGHT as isize;
 /// A line of regular or fixed-width text.
 pub const LINE: isize = 16;
@@ -115,7 +116,7 @@ impl Screen {
     /// right as the time goes, and what's left of it is drawn thicker.
     pub fn time_left(&self, left_ms: u64, total_ms: u64) {
         let dark = DrawStyle::new(PixelColor::Dark, PixelColor::Dark, 1);
-        let x = if total_ms == 0 { 0 } else { (W as u64 * left_ms.min(total_ms) / total_ms) as isize };
+        let x = (W as u64 * left_ms.min(total_ms)).checked_div(total_ms).unwrap_or(0) as isize;
         if x < W {
             self.gfx.draw_line(Line::new_with_style(Point::new(x, self.bar + 1), Point::new(W, self.bar + 1), dark)).ok();
         }

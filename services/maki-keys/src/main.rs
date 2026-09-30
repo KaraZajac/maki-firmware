@@ -5,6 +5,7 @@
 //!     derivation, and the basis key wrapped under that derived key (AES-GCM-SIV);
 //!   - `tries`: wrong PINs since the last right one, written before each try is checked, so
 //!     pulling the plug mid-check doesn't give a free guess.
+//!
 //! The secret basis gets a fresh random name at each setup: after a wipe, the old one can't be
 //! opened (its key is gone), and its name mustn't collide with the new one.
 

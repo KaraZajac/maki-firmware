@@ -257,6 +257,8 @@ pub trait Platform {
     fn random(&mut self, buf: &mut [u8]);
     fn log(&mut self, line: &str);
     fn storage_get(&mut self, key: &str) -> Option<Vec<u8>>;
+    // The only way this fails is no room, which the app is told as a status: `()` says it all.
+    #[allow(clippy::result_unit_err)]
     fn storage_set(&mut self, key: &str, value: &[u8]) -> Result<(), ()>;
     /// Whether there was such a key.
     fn storage_delete(&mut self, key: &str) -> bool;

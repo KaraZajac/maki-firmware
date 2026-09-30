@@ -118,7 +118,7 @@ fn integer_type(base: &str) -> Option<(bool, u32)> {
         return None;
     }
     let n: u32 = bits.parse().ok()?;
-    (n % 8 == 0 && (8..=256).contains(&n)).then_some((signed, n))
+    (n.is_multiple_of(8) && (8..=256).contains(&n)).then_some((signed, n))
 }
 
 /// `bytesN`, N from 1 to 32: N.

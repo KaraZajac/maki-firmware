@@ -732,7 +732,8 @@ fn typing_takes_plain_text_only() {
     assert_eq!((result_of(&r), r.typed.clone()), (0, vec!["ls -la\n\tx".to_string()]));
     // not ASCII, or a control character: nothing typed
     for bad in ["caf\\c3\\a9", "bell\\07"] {
-        let len = if bad.starts_with("caf") { 5 } else { 5 };
+        // five bytes each once WAT decodes the escapes: "caf" + é (two), "bell" + BEL (one)
+        let len = 5;
         let (_, r) = call_with(imports, bad, &call(len), Record::default(), with(&[Permission::Keyboard]));
         assert_eq!(result_of(&r), INVALID, "{bad}");
         assert!(r.typed.is_empty());

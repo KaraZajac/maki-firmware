@@ -145,7 +145,7 @@ impl Psbt {
 
 /// A BIP32 derivation value: the master key's fingerprint, then the path.
 pub fn parse_derivation(value: &[u8]) -> Option<([u8; 4], Vec<u32>)> {
-    if value.len() < 4 || (value.len() - 4) % 4 != 0 {
+    if value.len() < 4 || !(value.len() - 4).is_multiple_of(4) {
         return None;
     }
     let fp = [value[0], value[1], value[2], value[3]];

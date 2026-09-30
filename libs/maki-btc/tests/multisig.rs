@@ -45,7 +45,7 @@ fn makis() -> String {
 fn two_of_three() -> (String, Xpriv) {
     let (second, b) = other(0x22);
     let (_, c) = other(0x33);
-    (format!("wsh(sortedmulti(2,{},{b}/<0;1>/*,{c}/<0;1>/*))", format!("{}/<0;1>/*", makis())), second)
+    (format!("wsh(sortedmulti(2,{m}/<0;1>/*,{b}/<0;1>/*,{c}/<0;1>/*))", m = makis()), second)
 }
 
 #[test]
@@ -129,7 +129,7 @@ fn a_wallet_maki_wont_take() {
     let wrapped = format!("sh({})", desc);
     let nested_path = desc.replace("48h/1h/0h/2h", "48h/1h/0h/1h");
     let twice = format!("wsh(sortedmulti(2,{m}/<0;1>/*,{m}/<0;1>/*))", m = makis());
-    let too_many = format!("wsh(sortedmulti(4,{},{d}/<0;1>/*,{e}/<0;1>/*))", format!("{}/<0;1>/*", makis()));
+    let too_many = format!("wsh(sortedmulti(4,{m}/<0;1>/*,{d}/<0;1>/*,{e}/<0;1>/*))", m = makis());
     for (text, why) in [
         (bad_checksum.as_str(), "checksum"),
         (wrapped.as_str(), "P2SH"),

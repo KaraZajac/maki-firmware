@@ -364,7 +364,7 @@ fn install(w: &Worker, bytes: Vec<u8>) -> (u32, String) {
     if let Some(loaded) = loaded {
         tell(to_runner, shared, ToRunner::Loaded(m.id.clone(), m.version, loaded));
     }
-    sync_home(&store, &launcher, shared);
+    sync_home(store, launcher, shared);
     (RESULT_OK, String::new())
 }
 

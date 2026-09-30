@@ -196,18 +196,15 @@ fn main() -> ! {
 
     // maki: the records live in the secret basis, which opens with the PIN, after this has
     // loaded its lists; load them again then
-    thread::spawn({
-        let conn = conn.clone();
-        move || {
-            maki_keys::Keys::new(&xous_names::XousNames::new().unwrap())
-                .expect("couldn't connect to maki-keys")
-                .wait_unlocked();
-            xous::send_message(
-                conn,
-                xous::Message::new_scalar(VaultOp::ReloadDbAndFullRedraw.to_usize().unwrap(), 0, 0, 0, 0),
-            )
-            .ok();
-        }
+    thread::spawn(move || {
+        maki_keys::Keys::new(&xous_names::XousNames::new().unwrap())
+            .expect("couldn't connect to maki-keys")
+            .wait_unlocked();
+        xous::send_message(
+            conn,
+            xous::Message::new_scalar(VaultOp::ReloadDbAndFullRedraw.to_usize().unwrap(), 0, 0, 0, 0),
+        )
+        .ok();
     });
 
     // spawn the actions server. This is responsible for grooming the UX elements. It

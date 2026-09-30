@@ -219,7 +219,9 @@ impl WordEntry {
                         }
                     }
                     Some(Opt::Back) => {
-                        if self.prefix.pop().is_none() {
+                        // back over a letter of the word being typed; once it's empty, the last word
+                        let prefix_was_empty = self.prefix.pop().is_none();
+                        if prefix_was_empty {
                             self.words.pop();
                         }
                     }

@@ -53,7 +53,7 @@ fn nothing_a_site_sends_panics() {
     let text = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/transactions.json")).unwrap();
     let json: serde_json::Value = serde_json::from_str(&text).unwrap();
     let real: Vec<Vec<u8>> = json.as_array().unwrap().iter().map(|f| unhex(f["message"].as_str().unwrap())).collect();
-    let mut rng = Rng(0x5eed_501);
+    let mut rng = Rng(0x5eed501);
     let (mut read, mut reviewed) = (0, 0);
     for round in 0..40_000 {
         let bytes = if round % 8 == 0 {

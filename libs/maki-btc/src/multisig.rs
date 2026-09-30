@@ -203,7 +203,7 @@ impl Multisig {
     /// wallet's network, told apart; a name, printable and short.
     fn checked(mut self) -> Result<Multisig, Error> {
         let n = self.keys.len();
-        if n < 2 || n > MAX_KEYS || self.threshold < 1 || self.threshold > n {
+        if !(2..=MAX_KEYS).contains(&n) || !(1..=n).contains(&self.threshold) {
             return Err(bad("maki takes 1 to 15 of 2 to 15 keys"));
         }
         let coin = self.network.coin_type() | HARDENED;

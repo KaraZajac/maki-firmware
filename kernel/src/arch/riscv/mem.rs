@@ -828,7 +828,7 @@ pub fn pagetable_entry(addr: usize) -> Result<*mut usize, xous_kernel::Error> {
 /// maki: whether the page at `virt`, in the address space in use, is out in swap.
 #[cfg(feature = "swap")]
 pub fn page_in_swap(virt: usize) -> bool {
-    pagetable_entry(virt).map_or(false, |entry| {
+    pagetable_entry(virt).is_ok_and(|entry| {
         let pte = unsafe { entry.read_volatile() };
         pte & MMUFlags::VALID.bits() == 0 && pte & MMUFlags::P.bits() != 0
     })

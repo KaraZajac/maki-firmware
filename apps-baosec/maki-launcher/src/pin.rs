@@ -105,7 +105,7 @@ impl PinPad {
         screen.text(top + LINE + 2, LINE, GlyphStyle::Small, false, true, &self.note);
 
         // the row: a dot per digit, the one being chosen, then blanks up to six
-        let slots = (self.entered.len() + 1).max(maki_keys::MIN_PIN).min(maki_keys::MAX_PIN);
+        let slots = (self.entered.len() + 1).clamp(maki_keys::MIN_PIN, maki_keys::MAX_PIN);
         let current = self.entered.len();
         // a fixed-width character and a space, narrowing as the PIN grows so twelve digits fit
         let cell = (16isize).min((W - 4) / slots as isize);

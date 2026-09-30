@@ -109,6 +109,7 @@ impl Launcher {
     /// An installed app's question for the owner (the app host asks for it): shown under the
     /// app's own bar, its name and, if it's sideloaded, the mark, with `yes` and `no` as the
     /// answers ("allow" and "deny" if empty).
+    #[allow(clippy::too_many_arguments)]
     pub fn ask_app(
         &self,
         name: &str,
@@ -167,6 +168,7 @@ impl Launcher {
     /// Ask with something to check first: the owner goes through `pages` with left and right
     /// (the centre moves on), then answers `yes` or `no` ("sign", "reject"). `subject`,
     /// `question` and `detail` show with the answers, as a plain ask shows them.
+    #[allow(clippy::too_many_arguments)]
     pub fn review(
         &self,
         subject: &str,

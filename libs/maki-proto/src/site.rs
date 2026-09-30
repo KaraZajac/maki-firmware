@@ -19,7 +19,7 @@ pub fn valid(site: &str) -> bool {
 pub fn normalize(saved: &str) -> String {
     let s = saved.trim().to_ascii_lowercase();
     let s = s.split_once("://").map(|(_, rest)| rest.to_string()).unwrap_or(s);
-    let host = s.split(|c| c == '/' || c == ':' || c == '?' || c == '#').next().unwrap_or("");
+    let host = s.split(['/', ':', '?', '#']).next().unwrap_or("");
     host.strip_prefix("www.").unwrap_or(host).to_string()
 }
 

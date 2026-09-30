@@ -98,7 +98,7 @@ impl<'a> Message<'a> {
         let mut last_offset = 0;
         for i in 1..count {
             let offset = msg.offset(i);
-            if offset % 4 != 0 || offset < last_offset || offset > msg.values.len() {
+            if !offset.is_multiple_of(4) || offset < last_offset || offset > msg.values.len() {
                 return Err(Error::Malformed);
             }
             last_offset = offset;

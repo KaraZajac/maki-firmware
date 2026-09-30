@@ -523,7 +523,7 @@ fn draw(session: &mut Session, op: maki_native::draw::Draw) {
 
 /// A derivation path, as a native app sends it: little-endian u32s, at most `maki_hd::MAX_DEPTH`.
 fn path_of(bytes: &[u8]) -> Option<Vec<u32>> {
-    if bytes.len() % 4 != 0 || bytes.len() / 4 > maki_hd::MAX_DEPTH {
+    if !bytes.len().is_multiple_of(4) || bytes.len() / 4 > maki_hd::MAX_DEPTH {
         return None;
     }
     Some(bytes.chunks_exact(4).map(|b| u32::from_le_bytes(b.try_into().unwrap())).collect())

@@ -453,7 +453,7 @@ fn marble_rolls_the_way_maki_tilts_and_pauses() {
         assert_eq!(run(bundle.code, Box::new(Script(record.clone())), limits), Stop::Finished);
         Rc::try_unwrap(record).ok().unwrap().into_inner()
     };
-    let steps = |n: usize| -> Vec<Event> { std::iter::once(Event::Centre).chain(std::iter::repeat(Event::Timeout).take(n)).collect() };
+    let steps = |n: usize| -> Vec<Event> { std::iter::once(Event::Centre).chain(std::iter::repeat_n(Event::Timeout, n)).collect() };
     // level, the marble stays at the start; tilted, it rolls
     let flat = run_with(Some([0, 0, 1000]), &steps(20));
     assert_eq!(flat.frames.len(), 22);
@@ -486,7 +486,7 @@ fn breakout_serves_from_a_paddle_that_follows_the_tilt() {
         assert_eq!(run(bundle.code, Box::new(Script(record.clone())), limits), Stop::Finished);
         Rc::try_unwrap(record).ok().unwrap().into_inner()
     };
-    let then = |first: &[Event], n: usize| -> Vec<Event> { first.iter().copied().chain(std::iter::repeat(Event::Timeout).take(n)).collect() };
+    let then = |first: &[Event], n: usize| -> Vec<Event> { first.iter().copied().chain(std::iter::repeat_n(Event::Timeout, n)).collect() };
     // on the paddle until served, then off it
     let waiting = run_with(Some([0, 0, 1000]), &then(&[Event::Centre], 10));
     assert_eq!(waiting.frames[1], waiting.frames[11]);
@@ -690,7 +690,7 @@ fn minisign_signs_a_hash_and_its_own_trusted_comment_once_asked() {
     };
     let inbox = vec![b"P".to_vec(), sign("maki-0.2.0.tar.gz", ""), sign("notes.txt", "release 0.2"), sign("other.bin", ""), sign("../etc/passwd", "")];
     let record = Rc::new(RefCell::new(Record {
-        events: std::iter::repeat(Event::Message).take(inbox.len()).collect(),
+        events: std::iter::repeat_n(Event::Message, inbox.len()).collect(),
         inbox: inbox.into_iter().collect(),
         answers: [Answer::Yes, Answer::Yes, Answer::No].into_iter().collect(),
         ..Default::default()
@@ -786,7 +786,7 @@ fn the_ssh_app_signs_certificates_with_its_ca_key_once_that_is_on() {
         sign(&ca_blob, &cert(&user_blob, &["kara"], b"")),
     ];
     let record = Rc::new(RefCell::new(Record {
-        events: [Event::Message, Event::Message, Event::Menu(1)].into_iter().chain(std::iter::repeat(Event::Message).take(5)).collect(),
+        events: [Event::Message, Event::Message, Event::Menu(1)].into_iter().chain(std::iter::repeat_n(Event::Message, 5)).collect(),
         inbox: inbox.into_iter().collect(),
         answers: [Answer::Yes, Answer::Yes].into_iter().collect(),
         ..Default::default()
@@ -865,7 +865,7 @@ fn the_ssh_app_signs_a_commit_it_was_sent_whole_showing_what_it_is() {
     wrong.remove(1);
     inbox.extend(wrong.into_iter().take(2));
     let record = Rc::new(RefCell::new(Record {
-        events: std::iter::repeat(Event::Message).take(inbox.len()).collect(),
+        events: std::iter::repeat_n(Event::Message, inbox.len()).collect(),
         inbox: inbox.into_iter().collect(),
         answers: [Answer::Yes, Answer::Yes].into_iter().collect(),
         ..Default::default()
@@ -1069,7 +1069,7 @@ fn openpgp_names_its_key_and_signs_a_commit_it_was_sent_whole() {
     let other = [&b"D\x03"[..], &[9; 8], &[18, 1, 7], &[0x40; 33], &[40], &[0; 40]].concat();
     let inbox = vec![b"K".to_vec(), b"UKara Zajac <kara@example.org>".to_vec(), b"K".to_vec(), b"F".to_vec(), sign, other];
     let record = Rc::new(RefCell::new(Record {
-        events: std::iter::repeat(Event::Message).take(inbox.len()).collect(),
+        events: std::iter::repeat_n(Event::Message, inbox.len()).collect(),
         inbox: inbox.into_iter().collect(),
         answers: [Answer::Yes, Answer::Yes].into_iter().collect(),
         ..Default::default()
@@ -1190,7 +1190,7 @@ fn snake_eats_grows_and_ends_at_the_wall() {
     let mut events = vec![Event::Centre];
     events.extend([Event::Timeout; 25]);
     let (_, r) = run_fixture("snake", &events, BTreeMap::new());
-    assert!(r.storage.get("best").is_none());
+    assert!(!r.storage.contains_key("best"));
 }
 
 #[test]
@@ -1216,7 +1216,7 @@ fn status_shows_what_the_computer_says_and_says_what_it_shows() {
     assert_eq!(r.storage.get("at").unwrap(), &0u32.to_le_bytes());
     assert_eq!(r.storage.get("light").unwrap(), &1u32.to_le_bytes());
     let last = r.frames.last().unwrap();
-    assert!(lit(last) > (WIDTH * HEIGHT) as usize / 2, "light: more lit than not");
+    assert!(lit(last) > (WIDTH * HEIGHT) / 2, "light: more lit than not");
 }
 
 #[test]
@@ -1361,7 +1361,7 @@ fn bitcoin_signs_a_psbt_read_off_a_screen_and_shows_it_back() {
     let bundle = maki_bundle::read(&bytes).unwrap();
     let record = Rc::new(RefCell::new(Record {
         // Sign from a QR code; then the signed PSBT's parts shown in turn, until the centre
-        events: std::iter::once(Event::Menu(3)).chain(std::iter::repeat(Event::Timeout).take(40)).chain([Event::Centre]).collect(),
+        events: std::iter::once(Event::Menu(3)).chain(std::iter::repeat_n(Event::Timeout, 40)).chain([Event::Centre]).collect(),
         qrs: parts.into_iter().collect(),
         answers: [Answer::Yes].into_iter().collect(),
         ..Default::default()

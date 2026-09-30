@@ -7,7 +7,7 @@ use maki_bundle::*;
 
 #[test]
 fn no_bundle_panics_the_reader() {
-    let mut x: u64 = 0x5eed_0f_5eed_0f;
+    let mut x: u64 = 0x5eed0f5eed0f;
     let mut next = move || {
         x ^= x << 13;
         x ^= x >> 7;

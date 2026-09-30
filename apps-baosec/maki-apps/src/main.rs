@@ -12,6 +12,9 @@ use num_traits::{FromPrimitive, ToPrimitive};
 
 const SERVER_NAME: &str = "_maki apps_";
 
+// Each built-in app gets its own Key/Focus/Menu opcodes, prefixed with its name so a second app
+// can sit beside the first.
+#[allow(clippy::enum_variant_names)]
 #[derive(Debug, Clone, Copy, num_derive::FromPrimitive, num_derive::ToPrimitive)]
 enum Op {
     PasskeysKey = 3,
@@ -40,6 +43,7 @@ fn main() -> ! {
     let xns = xous_names::XousNames::new().unwrap();
     let sid = xns.register_name(SERVER_NAME, None).expect("can't register server");
     let launcher = maki_launcher::Launcher::new(&xns).expect("couldn't connect to the launcher");
+    #[allow(clippy::single_element_loop)] // the built-in apps registered here: one so far
     for (name, key, focus, menu, icon) in [
         ("Passkeys", Op::PasskeysKey, Op::PasskeysFocus, Op::PasskeysMenu, &maki_icons::PASSKEYS),
     ] {

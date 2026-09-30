@@ -171,7 +171,7 @@ pub(crate) struct Prompt {
 }
 
 impl Prompt {
-    fn remaining_s(&self, now_ms: u64) -> u32 { ((self.deadline_ms.saturating_sub(now_ms) + 999) / 1000) as u32 }
+    fn remaining_s(&self, now_ms: u64) -> u32 { self.deadline_ms.saturating_sub(now_ms).div_ceil(1000) as u32 }
 
     fn label<'a>(&'a self, custom: &'a str, default: &'a str) -> &'a str {
         if custom.is_empty() { default } else { custom }

@@ -45,7 +45,7 @@ pub enum Error {
 
 /// Entropy (16 to 32 bytes, a multiple of 4) as words.
 pub fn to_words(entropy: &[u8]) -> Vec<&'static str> {
-    assert!(entropy.len() % 4 == 0 && (16..=32).contains(&entropy.len()));
+    assert!(entropy.len().is_multiple_of(4) && (16..=32).contains(&entropy.len()));
     let checksum_bits = entropy.len() / 4;
     let hash = Sha256::digest(entropy);
     let bit = |i: usize| -> u32 {
