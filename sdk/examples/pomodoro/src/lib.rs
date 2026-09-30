@@ -3,10 +3,10 @@
 //! and over the break the pie fills back up, clockwise, until it's whole again; it flashes, and
 //! the centre starts the next focus. Nothing else is on the screen while it runs.
 //!
-//! Before a focus its minutes show on the pie, and left and right set them. The centre pauses
-//! (two bars on the pie). Every fourth break is three times as long. The menu skips ahead,
-//! starts over or changes the breaks. Leaving the app doesn't stop the timer when maki knows the
-//! time: it picks up where it would be when opened again.
+//! Before a focus its minutes show on the pie: the jog dial sets them a minute at a time, left and
+//! right in fives. The centre pauses (two bars on the pie). Every fourth break is three times as
+//! long. The menu skips ahead, starts over or changes the breaks. Leaving the app doesn't stop the
+//! timer when maki knows the time: it picks up where it would be when opened again.
 
 #![no_std]
 
@@ -38,9 +38,11 @@ const SIN: [i32; 181] = [
 
 /// A minute, in maki's milliseconds.
 const MINUTE: u64 = 60_000;
-/// Minutes: a focus, set in steps before it starts; a break, one of these from the menu.
+/// Minutes: a focus, set before it starts (left and right in steps, the dial one at a time); a
+/// break, one of these from the menu.
 const FOCUS: u32 = 25;
 const FOCUS_STEP: u32 = 5;
+const FOCUS_MIN: u32 = 1;
 const FOCUS_MAX: u32 = 90;
 const BREAKS: [u32; 3] = [5, 10, 3];
 /// Focuses to a set, after which the break is `LONG` times as long.
@@ -198,7 +200,7 @@ impl Timer {
         let rest = storage::get_u32("rest", BREAKS[0]);
         let mut t = Timer {
             state: State::Ready,
-            focus: storage::get_u32("focus", FOCUS).clamp(FOCUS_STEP, FOCUS_MAX),
+            focus: storage::get_u32("focus", FOCUS).clamp(FOCUS_MIN, FOCUS_MAX),
             rest: if BREAKS.contains(&rest) { rest } else { BREAKS[0] },
             done: 0,
         };
@@ -291,13 +293,15 @@ impl Timer {
         self.start(Phase::Focus, now)
     }
 
-    /// Left and right, before a focus: how long it is.
-    fn nudge(&mut self, longer: bool) {
+    /// Before a focus, how long it is: to the next multiple of `step` up or down, so left and
+    /// right take 27 minutes to 30 or 25, and the dial goes a minute at a time.
+    fn nudge(&mut self, longer: bool, step: u32) {
         if self.state != State::Ready {
             return;
         }
-        self.focus = if longer { self.focus + FOCUS_STEP } else { self.focus - FOCUS_STEP }
-            .clamp(FOCUS_STEP, FOCUS_MAX);
+        self.focus =
+            if longer { (self.focus / step + 1) * step } else { self.focus.saturating_sub(1) / step * step }
+                .clamp(FOCUS_MIN, FOCUS_MAX);
         let _ = storage::set_u32("focus", self.focus);
     }
 
@@ -429,8 +433,10 @@ fn main() {
         let now = millis();
         match event {
             Event::Centre => timer.centre(now),
-            Event::Left => timer.nudge(false),
-            Event::Right => timer.nudge(true),
+            Event::Left => timer.nudge(false, FOCUS_STEP),
+            Event::Right => timer.nudge(true, FOCUS_STEP),
+            Event::Down => timer.nudge(false, 1),
+            Event::Up => timer.nudge(true, 1),
             Event::Menu(item) => timer.picked(item, now),
             Event::Hidden => hidden = true,
             Event::Shown => {

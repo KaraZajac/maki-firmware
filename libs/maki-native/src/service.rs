@@ -20,8 +20,14 @@ use crate::load::APP_SERVICE;
 pub const SID: [u8; 16] = APP_SERVICE;
 
 /// The firmware a native app is built for, as its manifest's `firmware` says: the service's
-/// protocol and the kernel's rules. maki refuses an app built for another.
-pub const FIRMWARE: &str = "maki-native-1";
+/// protocol and the kernel's rules. maki refuses an app built for one it doesn't run (`RUNS`).
+/// 2: WAIT also answers the jog dial on maki's side (Up, Down).
+pub const FIRMWARE: &str = "maki-native-2";
+/// The same, before the jog dial: an app built for it doesn't get the dial (it would read it as a
+/// timeout), and runs as before.
+pub const FIRMWARE_BEFORE_JOG: &str = "maki-native-1";
+/// The firmwares maki runs native apps built for.
+pub const RUNS: &[&str] = &[FIRMWARE_BEFORE_JOG, FIRMWARE];
 
 /// The head of a lent buffer: status, then length (u32s, little-endian).
 pub const HEAD: usize = 8;

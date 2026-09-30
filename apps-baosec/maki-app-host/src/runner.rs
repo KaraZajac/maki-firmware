@@ -599,7 +599,7 @@ impl Platform for Device {
                     if s == self.slot
                         && self.state.borrow().front
                         && self.state.borrow().info.is_none()
-                        && self.manifest.api >= maki_wasm::API_JOG =>
+                        && maki_wasm::knows_jog(&self.manifest) =>
                 {
                     return if up { Event::Up } else { Event::Down };
                 }

@@ -10,7 +10,7 @@ use std::rc::Rc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use maki_bundle::Manifest;
-use maki_wasm::{Answer, Ask, Canvas, Color, Event, Platform, Review, Style, TOP, WIDTH};
+use maki_wasm::{Answer, Ask, Canvas, Color, Event, Platform, Review, Style, TOP, WIDTH, knows_jog};
 
 /// maki's screen, 128 pixels square, true for light.
 pub type Screen = [[bool; WIDTH]; WIDTH];
@@ -248,9 +248,6 @@ impl Shared {
 }
 
 const HELP: &str = "←/→ move · ↑/↓ jog dial · enter centre · m menu (left+right) · q exit";
-
-/// Whether maki gives the app the jog dial: it says host API 8 or later.
-fn knows_jog(manifest: &Manifest) -> bool { manifest.api >= maki_wasm::API_JOG }
 
 impl Sim {
     pub fn new(manifest: Manifest, options: Options) -> Sim {

@@ -172,8 +172,9 @@ The app draws, then waits for the next event, and returns from `main` when told 
   items (`menu(&[...])`, up to six), `Hidden` and `Shown` when something else takes the screen
   for a while (an ask, the menu), `Timeout`, and `Exit`: save anything worth saving and return.
   Waiting again after `Exit` stops the app. Host API 8 adds `Up` and `Down`, the jog dial on
-  maki's side; only an app whose `api` is 8 or more gets them (an older one would read them as a
-  timeout), and in `maki run` they're `--press up,down`, or the arrow keys.
+  maki's side; only an app whose `api` is 8 or more gets them, or a native app built for
+  `maki-native-2` (an older one would read them as a timeout), and in `maki run` they're
+  `--press up,down`, or the arrow keys.
 - **Storage** of its own, up to its manifest's `storage`: `storage::get`, `set`, `delete`,
   `key` (keys up to 48 bytes, values up to 16 KiB), `get_u32` and `set_u32`.
 - **Time**: `millis()` since the app started, `unix_time()` if maki knows it, and
@@ -293,8 +294,11 @@ permissions), to the ticktimer and to the log, and then confines itself for good
 those three connections and its own memory, up to what its manifest asks for, and can't make
 new connections or map anything else. Rust's `std` works (threads, `Vec`, `String`, `println!`
 to maki's log), but not what needs other servers: the time comes from `maki_app::unix_time`,
-not `SystemTime`, and nothing reaches the network or files. A native app names the firmware it
-was built for (`maki-native-1`); maki refuses one built for another.
+not `SystemTime`, and nothing reaches the network or files. A native app names the app service
+it was built for, `maki-native-2` (the one with the jog dial), and maki refuses one built for a
+service it doesn't have. It runs apps built for `maki-native-1` as well, without the dial: to
+build one that maki from before the dial runs too, say `firmware = "maki-native-1"` in
+`maki.toml`.
 
 ## The maki store
 

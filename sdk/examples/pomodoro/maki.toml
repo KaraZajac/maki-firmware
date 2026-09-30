@@ -2,8 +2,8 @@
 # you rest.
 id = "com.leviathan.maki.pomodoro"
 name = "Pomodoro"
-version = 2
-label = "2.0"
+version = 3
+label = "3.0"
 kind = "native"
 storage = 1
 memory = 256

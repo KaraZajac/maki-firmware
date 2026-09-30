@@ -29,6 +29,15 @@ pub const API_VERSION: u16 = 8;
 /// that says this API or later gets them: an older one would read them as a timeout.
 pub const API_JOG: u16 = 8;
 
+/// Whether maki gives an app the jog dial: a WebAssembly app of host API 8 or later, or a native
+/// app built for maki-native-2 or later (see `API_JOG`).
+pub fn knows_jog(manifest: &Manifest) -> bool {
+    match manifest.kind {
+        Kind::Wasm => manifest.api >= API_JOG,
+        Kind::Native => manifest.firmware != maki_native::service::FIRMWARE_BEFORE_JOG,
+    }
+}
+
 /// Functions that came after host API 1, and with which: an app calling one says that API or later.
 pub const SINCE: &[(&str, u16)] = &[
     ("key_schnorr_public", 2),
@@ -374,9 +383,9 @@ pub const PERMISSIONS: &[Permission] = &Permission::ALL;
 
 /// Whether maki takes this app, and what it gives it if so: asking only for permissions it
 /// offers and for no more than it gives an app, and either a WebAssembly app for a host API this
-/// maki has whose code passes `check`, or a native app built for this firmware's app service
-/// whose ELF the loader maps, its code, data and stack within its memory. What's wrong if not,
-/// for the owner or developer to read.
+/// maki has whose code passes `check`, or a native app built for an app service this firmware
+/// runs whose ELF the loader maps, its code, data and stack within its memory. What's wrong if
+/// not, for the owner or developer to read.
 pub fn admit(manifest: &Manifest, code: &[u8]) -> Result<Limits, String> {
     match manifest.kind {
         Kind::Wasm => load(manifest, code).map(|l| l.limits),
@@ -385,11 +394,13 @@ pub fn admit(manifest: &Manifest, code: &[u8]) -> Result<Limits, String> {
 }
 
 fn admit_native(manifest: &Manifest, elf: &[u8]) -> Result<Limits, String> {
-    use maki_native::{load::STACK_KIB, service::FIRMWARE};
-    if manifest.firmware != FIRMWARE {
+    use maki_native::load::STACK_KIB;
+    use maki_native::service::RUNS;
+    if !RUNS.contains(&manifest.firmware.as_str()) {
         return Err(format!(
-            "it's built for other firmware ({}; this maki runs {FIRMWARE})",
-            if manifest.firmware.is_empty() { "unnamed" } else { &manifest.firmware }
+            "it's built for other firmware ({}; this maki runs {})",
+            if manifest.firmware.is_empty() { "unnamed" } else { &manifest.firmware },
+            RUNS.join(" and ")
         ));
     }
     let limits = limits(manifest)?;

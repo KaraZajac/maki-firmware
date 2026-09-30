@@ -635,6 +635,33 @@ fn admit_says_what_maki_takes() {
     }
 }
 
+/// A native app built for either app service maki runs gets in, and one built for another
+/// doesn't. The jog dial goes only to apps that know it: native ones built for maki-native-2, and
+/// WebAssembly ones of host API 8 or later.
+#[test]
+fn native_apps_of_either_service_get_in_and_the_dial_goes_to_apps_that_know_it() {
+    use maki_bundle::{Kind, Manifest};
+    let bytes = std::fs::read(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../maki-native/tests/fixtures/hello-native.maki"
+    ))
+    .unwrap();
+    let b = maki_bundle::read(&bytes).unwrap();
+    assert_eq!(b.manifest.firmware, "maki-native-1");
+    assert!(admit(&b.manifest, b.code).is_ok());
+    assert!(!knows_jog(&b.manifest));
+    let newer = Manifest { firmware: "maki-native-2".into(), ..b.manifest.clone() };
+    assert!(admit(&newer, b.code).is_ok());
+    assert!(knows_jog(&newer));
+    for firmware in ["maki-native-3", ""] {
+        let err = admit(&Manifest { firmware: firmware.into(), ..b.manifest.clone() }, b.code).unwrap_err();
+        assert!(err.contains("this maki runs maki-native-1 and maki-native-2"), "{err}");
+    }
+    let wasm = Manifest { kind: Kind::Wasm, api: API_JOG - 1, firmware: String::new(), ..b.manifest.clone() };
+    assert!(!knows_jog(&wasm));
+    assert!(knows_jog(&Manifest { api: API_JOG, ..wasm }));
+}
+
 /// Runs an app calling one of maki's functions, with `data` at 0, and keeping the function's
 /// result (4 bytes, little-endian) in storage as "r": `call` is the call's WAT, which leaves
 /// the result on the stack.
