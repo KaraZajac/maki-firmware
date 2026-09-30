@@ -603,6 +603,52 @@ fn instruments_level_lights_up_when_level_and_the_tilt_sets_its_level() {
     assert!(near(instruments_kept(&r.storage, 2), [0.1, 0.995, 0.0]));
 }
 
+/// Morse's letters: a dot each up, a dash each down, and the dial resting (a timeout, a second).
+fn morse(code: &str) -> Vec<Event> {
+    let mut events: Vec<Event> =
+        code.chars().map(|c| if c == '.' { Event::Up } else { Event::Down }).collect();
+    events.push(Event::Timeout);
+    events
+}
+
+#[test]
+fn morse_keys_letters_and_types_them_a_line_waiting_for_the_centre() {
+    use Event::*;
+    // typing on; s, o, s, a space, then a line (.-.-), which waits for the centre; ---- deletes
+    let mut events = vec![Menu(4)];
+    for code in ["...", "---", "..."] {
+        events.extend(morse(code));
+    }
+    events.push(Centre);
+    events.extend(morse(".-.-"));
+    events.push(Centre);
+    events.extend(morse("-"));
+    events.extend(morse("----"));
+    let record = Record { events: events.into(), clock: true, ..Default::default() };
+    let (stop, r) = run_record("morse", record);
+    assert_eq!(stop, Stop::Finished);
+    assert_eq!(r.typed, ["s", "o", "s", " ", "\n", "t"]);
+    assert_eq!(r.pressed, [(0x2a, false)], "Backspace");
+    assert_eq!(&r.storage["morse"][4..], b"sos \n");
+}
+
+#[test]
+fn morse_teaches_by_the_koch_method_a_letter_more_at_90_percent() {
+    use Event::*;
+    // learning: the lamp shows a letter (the counting random picks M, --), it's keyed back, and
+    // after twenty right, a third letter's learned
+    let mut events = vec![Menu(1)];
+    for _ in 0..20 {
+        events.extend([Timeout; 8]);
+        events.extend([Down, Down, Timeout, Timeout]);
+    }
+    let record = Record { events: events.into(), clock: true, ..Default::default() };
+    let (_, r) = run_record("morse", record);
+    assert_eq!(r.storage["morse"][3], 3);
+    // while the lamp shows the letter, the screen's the lamp: lit for a dash
+    assert!(r.frames.iter().any(|f| f.get(1, 60)));
+}
+
 #[test]
 fn tally_counts_and_keeps_the_count() {
     let (stop, r) =

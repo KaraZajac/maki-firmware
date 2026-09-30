@@ -960,6 +960,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "morse"
+version = "0.1.0"
+dependencies = [
+ "maki-app",
+]
+
+[[package]]
 name = "munge"
 version = "0.4.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"

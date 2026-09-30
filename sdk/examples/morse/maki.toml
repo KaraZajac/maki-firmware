@@ -1,0 +1,12 @@
+id = "com.leviathan.maki.morse"
+name = "Morse"
+version = 1
+label = "1.0"
+api = 8
+storage = 4
+memory = 256
+backup = true
+description = "Morse code on the jog dial, a paddle: up a dot, down a dash. Key it (and type it into the computer, if you like), learn it from the screen flashing like a signal lamp, or flash a message across a room."
+
+[permissions]
+keyboard = "To type what you key into the computer, once you turn typing on."
