@@ -1,9 +1,9 @@
 id = "com.leviathan.maki.dice"
 name = "Dice"
-version = 1
-label = "1.0"
-api = 1
+version = 2
+label = "2.0"
+api = 8
 storage = 1
 memory = 64
 backup = true
-description = "Rolls one to three dice with maki's random number generator, and counts the rolls."
+description = "Dice for tabletop games, as players say them: 3d6, 1d20. The jog dial on maki's side picks the die (d2 to d20), left and right how many, and the centre rolls."

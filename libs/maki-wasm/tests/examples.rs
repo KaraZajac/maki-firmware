@@ -197,19 +197,27 @@ fn hello_says_hello_and_leaves_when_told() {
 }
 
 #[test]
-fn dice_rolls_counts_and_resets() {
-    let (stop, r) = run_fixture("dice", &[Event::Centre, Event::Centre, Event::Right], BTreeMap::new());
+fn dice_takes_the_die_from_the_dial_and_how_many_from_left_and_right() {
+    // 1d20 at first; the dial down three (d8), two more (3d8), and roll
+    let events = [Event::Down, Event::Down, Event::Down, Event::Right, Event::Right, Event::Centre];
+    let (stop, r) = run_fixture("dice", &events, BTreeMap::new());
     assert_eq!(stop, Stop::Finished);
-    assert_eq!(r.menu, ["Reset count"]);
-    assert_eq!(r.storage["rolls"], 2u32.to_le_bytes());
-    // the count carries over, and the menu's Reset clears it
-    let (_, r) = run_fixture("dice", &[Event::Centre], r.storage);
-    assert_eq!(r.storage["rolls"], 3u32.to_le_bytes());
-    let (_, r) = run_fixture("dice", &[Event::Menu(0)], r.storage);
-    assert!(!r.storage.contains_key("rolls"));
-    // different dice draw differently
-    let (_, a) = run_fixture("dice", &[Event::Right], BTreeMap::new());
-    assert_ne!(a.frames[0], a.frames[1]);
+    assert_eq!(r.storage["count"], 3u32.to_le_bytes());
+    assert_eq!(r.storage["die"], 3u32.to_le_bytes()); // d8: the fourth of d2, d4, d6, d8 ... d20
+    // a frame at the start and after each event; the roll's is the dice's with a total
+    assert_eq!(r.frames.len(), events.len() + 1);
+    assert_ne!(r.frames[5], r.frames[6]);
+    // the dice picked are kept: they're what it opens with next time
+    let (_, again) = run_fixture("dice", &[], r.storage.clone());
+    assert_eq!(again.frames[0], r.frames[5]);
+    // the dial stops at d20 and at d2, how many at 1 and at 20
+    let (_, top) = run_fixture("dice", &[Event::Up, Event::Left], BTreeMap::new());
+    assert!(!top.storage.contains_key("die"), "1d20 stays 1d20");
+    let many: Vec<Event> =
+        std::iter::repeat_n(Event::Right, 25).chain(std::iter::repeat_n(Event::Down, 9)).collect();
+    let (_, r) = run_fixture("dice", &many, BTreeMap::new());
+    assert_eq!(r.storage["count"], 20u32.to_le_bytes());
+    assert_eq!(r.storage["die"], 0u32.to_le_bytes()); // d2
 }
 
 #[test]
