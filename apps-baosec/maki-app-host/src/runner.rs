@@ -28,6 +28,8 @@ pub enum ToRunner {
     /// The launcher put this slot's app in front: start it, or show it again.
     Open(usize),
     Key(usize, Key),
+    /// The jog dial on maki's side: up (true) or down. Only apps that say host API 8 get it.
+    Jog(usize, bool),
     /// Something else is in front for now: an ask, or the app's menu.
     Hidden(usize),
     /// The owner left it from its menu.
@@ -587,6 +589,19 @@ impl Platform for Device {
                         Key::Confirm => return Event::Centre,
                         Key::Menu => {}
                     }
+                }
+                ToRunner::Jog(s, _)
+                    if s == self.slot
+                        && self.state.borrow().quiet_until.is_some_and(|q| Instant::now() < q) => {}
+                // the jog dial, for an app that says it knows it: an older one would take it for a
+                // timeout (and App info is the launcher's, not the app's)
+                ToRunner::Jog(s, up)
+                    if s == self.slot
+                        && self.state.borrow().front
+                        && self.state.borrow().info.is_none()
+                        && self.manifest.api >= maki_wasm::API_JOG =>
+                {
+                    return if up { Event::Up } else { Event::Down };
                 }
                 ToRunner::Menu(s, i) if s == self.slot => {
                     let items =

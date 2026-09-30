@@ -101,6 +101,8 @@ pub fn parse_presses(s: &str) -> Result<Vec<Press>, String> {
         };
         let press = match name {
             "left" | "l" => Press::Event(Event::Left),
+            "up" | "u" => Press::Event(Event::Up),
+            "down" | "d" => Press::Event(Event::Down),
             "right" | "r" => Press::Event(Event::Right),
             "centre" | "center" | "c" => Press::Event(Event::Centre),
             "timeout" | "t" => Press::Event(Event::Timeout),
@@ -120,7 +122,7 @@ pub fn parse_presses(s: &str) -> Result<Vec<Press>, String> {
             }
             other => {
                 return Err(format!(
-                    "no press \"{other}\": left, right, centre, timeout, menu:N, exit, yes or no for an ask, msg:TEXT or hex:BYTES for a message, qr:TEXT for a scan, tilt:X;Y;Z"
+                    "no press \"{other}\": left, right, centre, up, down, timeout, menu:N, exit, yes or no for an ask, msg:TEXT or hex:BYTES for a message, qr:TEXT for a scan, tilt:X;Y;Z"
                 ));
             }
         };
@@ -245,7 +247,10 @@ impl Shared {
     }
 }
 
-const HELP: &str = "←/→ move · enter centre · m menu (left+right) · q exit";
+const HELP: &str = "←/→ move · ↑/↓ jog dial · enter centre · m menu (left+right) · q exit";
+
+/// Whether maki gives the app the jog dial: it says host API 8 or later.
+fn knows_jog(manifest: &Manifest) -> bool { manifest.api >= maki_wasm::API_JOG }
 
 impl Sim {
     pub fn new(manifest: Manifest, options: Options) -> Sim {
@@ -328,9 +333,16 @@ impl Sim {
             match k.code {
                 KeyCode::Left | KeyCode::Char('a') | KeyCode::Char('h') => return Event::Left,
                 KeyCode::Right | KeyCode::Char('d') | KeyCode::Char('l') => return Event::Right,
-                KeyCode::Enter | KeyCode::Char(' ') | KeyCode::Down => return Event::Centre,
+                KeyCode::Enter | KeyCode::Char(' ') => return Event::Centre,
+                // the jog dial on maki's side, for apps that know it (host API 8), as on maki
+                KeyCode::Up | KeyCode::Char('w') | KeyCode::Char('k') if knows_jog(&s.manifest) => {
+                    return Event::Up;
+                }
+                KeyCode::Down | KeyCode::Char('s') | KeyCode::Char('j') if knows_jog(&s.manifest) => {
+                    return Event::Down;
+                }
                 KeyCode::Char('q') | KeyCode::Esc => return Event::Exit,
-                KeyCode::Char('m') | KeyCode::Up | KeyCode::Tab => {
+                KeyCode::Char('m') | KeyCode::Tab => {
                     let pick = Self::interactive_menu(s);
                     // the app was hidden while the menu showed
                     let event = Self::menu_event(s, pick);
@@ -507,6 +519,14 @@ impl Platform for Sim {
                 Some(Press::Event(Event::Timeout)) => {
                     s.slept += timeout.unwrap_or_default();
                     Event::Timeout
+                }
+                Some(Press::Event(Event::Up | Event::Down)) if !knows_jog(&s.manifest) => {
+                    eprintln!(
+                        "script: the jog dial goes to apps of host API {} or later, and this one says {}: skipped",
+                        maki_wasm::API_JOG,
+                        s.manifest.api
+                    );
+                    continue;
                 }
                 Some(Press::Event(e)) => e,
                 Some(Press::Menu(pick)) => {

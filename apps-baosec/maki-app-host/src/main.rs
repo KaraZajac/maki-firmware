@@ -587,18 +587,28 @@ fn main() -> ! {
             let (slot, which) = ((op - APP_OPS) / 4, (op - APP_OPS) % 4);
             match which {
                 0 => {
-                    let keys: Vec<Key> = msg
+                    let chars: Vec<char> = msg
                         .body
                         .scalar_message()
                         .map(|s| {
                             [s.arg1, s.arg2, s.arg3, s.arg4]
                                 .iter()
-                                .filter_map(|&k| char::from_u32(k as u32).and_then(Key::from_char))
+                                .filter_map(|&k| char::from_u32(k as u32))
                                 .collect()
                         })
                         .unwrap_or_default();
-                    for k in keys {
-                        tell(&to_runner, &shared, ToRunner::Key(slot, k));
+                    for c in chars {
+                        // the jog dial on maki's side goes to apps that know it (host API 8); the
+                        // face buttons, as keys
+                        match c {
+                            '↑' => tell(&to_runner, &shared, ToRunner::Jog(slot, true)),
+                            '↓' => tell(&to_runner, &shared, ToRunner::Jog(slot, false)),
+                            c => {
+                                if let Some(k) = Key::from_char(c) {
+                                    tell(&to_runner, &shared, ToRunner::Key(slot, k));
+                                }
+                            }
+                        }
                     }
                 }
                 1 => {

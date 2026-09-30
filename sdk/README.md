@@ -9,7 +9,8 @@ app carries a mark in maki's top bar for as long as it's installed.
 This directory has the Rust crate apps are written with (`maki-app`), twenty-seven examples, and the
 `maki` tool that packs, signs, checks and simulates them. The examples:
 
-- **Hello**, **Dice** and **Tally**: a screen, the buttons, storage and randomness.
+- **Hello**, **Dice** and **Tally**: a screen, the buttons, storage and randomness. Dice takes the
+  die from the jog dial on maki's side (host API 8): 3d6, 1d20, as players say them.
 - **Signer** and **Sensors**, which use permissions: asking the owner, keys of their own, the
   camera and the accelerometer.
 - **SSH**: maki's SSH key, which answers maki desktop's SSH agent (the link permission), and
@@ -170,7 +171,9 @@ The app draws, then waits for the next event, and returns from `main` when told 
 - **Events** from `wait(timeout)`: `Left`, `Right`, `Centre`, `Menu(i)` for the app's own menu
   items (`menu(&[...])`, up to six), `Hidden` and `Shown` when something else takes the screen
   for a while (an ask, the menu), `Timeout`, and `Exit`: save anything worth saving and return.
-  Waiting again after `Exit` stops the app.
+  Waiting again after `Exit` stops the app. Host API 8 adds `Up` and `Down`, the jog dial on
+  maki's side; only an app whose `api` is 8 or more gets them (an older one would read them as a
+  timeout), and in `maki run` they're `--press up,down`, or the arrow keys.
 - **Storage** of its own, up to its manifest's `storage`: `storage::get`, `set`, `delete`,
   `key` (keys up to 48 bytes, values up to 16 KiB), `get_u32` and `set_u32`.
 - **Time**: `millis()` since the app started, `unix_time()` if maki knows it, and

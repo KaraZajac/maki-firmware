@@ -184,6 +184,10 @@ pub enum Event {
     /// A message from software on the computer (the `link` permission): `link::read` it, and
     /// `link::reply`, before waiting again.
     Message,
+    /// The jog dial on maki's side, up or down. Only for an app that says host API 8 or later
+    /// (`api` in maki.toml, the SDK's own by default); an older one never gets these.
+    Up,
+    Down,
 }
 
 /// Why a maki function failed.
@@ -285,6 +289,8 @@ pub fn wait(timeout_ms: Option<u32>) -> Event {
         5 => Event::Hidden,
         6 => Event::Exit,
         7 => Event::Message,
+        8 => Event::Up,
+        9 => Event::Down,
         n if n >= 0x100 => Event::Menu((n - 0x100) as u32),
         _ => Event::Timeout,
     }

@@ -23,7 +23,11 @@ use wasmi::{
 };
 
 /// The functions this host offers apps.
-pub const API_VERSION: u16 = 7;
+pub const API_VERSION: u16 = 8;
+
+/// Host API 8: the jog dial on maki's side, up and down (`Event::Up`, `Event::Down`). Only an app
+/// that says this API or later gets them: an older one would read them as a timeout.
+pub const API_JOG: u16 = 8;
 
 /// Functions that came after host API 1, and with which: an app calling one says that API or later.
 pub const SINCE: &[(&str, u16)] = &[
@@ -169,6 +173,9 @@ pub enum Event {
     /// A message from software on the computer (the link permission): read it, and reply,
     /// before waiting again.
     Message,
+    /// The jog dial on maki's side, up or down (host API 8, `API_JOG`).
+    Up,
+    Down,
 }
 
 impl Event {
@@ -182,6 +189,8 @@ impl Event {
             Event::Hidden => 5,
             Event::Exit => 6,
             Event::Message => 7,
+            Event::Up => 8,
+            Event::Down => 9,
             Event::Menu(i) => 0x100 + i.min(0xff) as i32,
         }
     }

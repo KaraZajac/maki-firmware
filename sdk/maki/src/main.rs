@@ -48,9 +48,10 @@ maki: make apps for maki
       shows what it is and what it may do, and installs it if you say so there.
   maki run APP.maki [--press left,right*2,centre,menu:0,timeout,exit] [--shot OUT.png]
                     [--frames DIR] [--scale N] [--verified] [--storage FILE] [--motion X,Y,Z]
-      Run it as maki would. Without --press, in this terminal: arrow keys, enter for the
-      centre, m for the menu (left and right together), q to leave; y or n answers an ask,
-      and a scan takes what you type. With --press, the presses in order, then Exit (yes or
+      Run it as maki would. Without --press, in this terminal: left and right, up and down
+      for the jog dial on maki's side (apps of host API 8 on), enter for the centre, m for the
+      menu (left and right together), q to leave; y or n answers an ask, and a scan takes what
+      you type. With --press, the presses in order, then Exit (up and down are the jog dial; yes or
       no answers an ask, msg:TEXT sends a message, hex:BYTES one of any bytes, qr:TEXT is the
       next scan, tilt:X;Y;Z moves the accelerometer); --shot saves the last frame, --frames every frame. A scripted run
       keeps time of its own: only a timeout lets time pass, the whole of the wait it ends, so
