@@ -147,4 +147,10 @@ loader-dabao = []
 # this feature enables the printing of secret materials for debug purposes
 hazardous-debug = []
 
+# maki: bind the storage master key to the chip's `collateral` secret slots, which Baochip's boot0
+# preserves only for maki's counter-signed boot1 and erases for other firmware. Off by default; a
+# badge reflashed with other firmware then derives a different key and can't read maki's data.
+# Enabling it changes the master key once (a backup/restore migration). See scratch/collateral-plan.md.
+collateral-keys = []
+
 default = []

@@ -18,6 +18,8 @@ use bao1x_hal::{
     board::{CHAFF_KEYS, COLLATERAL_ERASURE_ALIAS, NUISANCE_KEYS_0, NUISANCE_KEYS_1, ROOT_SEED, THE_FLAG_1},
     rram::Reram,
 };
+#[cfg(feature = "collateral-keys")]
+use bao1x_hal::board::COLLATERAL_SECRET;
 use hkdf::Hkdf;
 use keystore_api::KeyWrapper;
 use rand::prelude::*;
@@ -252,6 +254,34 @@ impl KeyStore {
         log::info!("chaff: {:x?}", &chaff_xor[..8]);
         ikm.extend_from_slice(&chaff_xor);
         assert!(ikm.len() == (nk_len + 1 + 1) * KEY_LEN); // sanity check that all keys were in fact added
+
+        // maki: bind the master key to the chip's `collateral` secret slots (261..264), which
+        // Baochip's boot0 preserves only for firmware carrying a valid counter-signature (maki's
+        // boot1) and erases for anything else. Mixing them into the key material means a badge
+        // reflashed with other firmware finds the collateral gone and derives a different key, so
+        // maki's stored data is unreadable to it — turning "someone with your badge can read it"
+        // into "can only erase it". See scratch/collateral-plan.md and README-baochip.md.
+        //
+        // Only the SECRET slots (261..263) are mixed in — never the public evidence slot 264.
+        // The binding activates only when real collateral is present: on a badge whose boot0 hasn't
+        // been updated, or before maki's boot1 has provisioned it, the slots read erased/zero and
+        // the key is derived exactly as before, so existing setups keep working until maki's boot1
+        // is in place (at which point the key changes once — a backup/restore migration, tracked
+        // separately). Off by default; enable with the `collateral-keys` feature.
+        #[cfg(feature = "collateral-keys")]
+        {
+            let collateral = self.slot_mgr.read(&COLLATERAL_SECRET).unwrap();
+            let absent = collateral.iter().all(|&b| b == 0 || b == bao1x_hal::ERASE_VALUE);
+            if absent {
+                log::warn!(
+                    "{}COLLATERAL.ABSENT,{}: master key not bound to collateral (needs maki's boot1)",
+                    BOOKEND_START, BOOKEND_END
+                );
+            } else {
+                ikm.extend_from_slice(collateral);
+                log::info!("{}COLLATERAL.BOUND,{}", BOOKEND_START, BOOKEND_END);
+            }
+        }
 
         // add salt
         // UUID is a random unique number made by the TRNG
