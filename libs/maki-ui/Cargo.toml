@@ -2,6 +2,7 @@
 name = "maki-ui"
 version = "0.1.0"
 edition = "2021"
+license = "MIT"
 description = "maki's screen: the three buttons, and the drawing every maki screen shares"
 
 [dependencies]

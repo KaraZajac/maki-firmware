@@ -2,6 +2,7 @@
 name = "maki-bundle"
 version = "0.1.0"
 edition = "2021"
+license = "MIT"
 description = "maki's .maki app bundles: manifest, code, icon and the developer's signature, read strictly and checked"
 
 [dependencies]

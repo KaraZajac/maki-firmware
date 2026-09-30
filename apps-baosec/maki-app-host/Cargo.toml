@@ -2,6 +2,7 @@
 name = "maki-app-host"
 version = "0.1.0"
 edition = "2021"
+license = "MIT"
 description = "maki's app host: installs .maki apps, keeps them and their data, and runs them (WebAssembly, with wasmi)"
 
 [dependencies]

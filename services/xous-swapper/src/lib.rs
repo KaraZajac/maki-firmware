@@ -1,3 +1,4 @@
+// Changed for maki (a fork of Xous: github.com/KaraZajac/maki-firmware) in 2026; its git history says what.
 #[cfg(feature = "bao1x")]
 use bao1x_hal::board::SPINOR_ERASE_SIZE;
 #[cfg(any(feature = "precursor", feature = "renode"))]

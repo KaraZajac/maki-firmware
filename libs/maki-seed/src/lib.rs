@@ -14,6 +14,9 @@ use alloc::vec::Vec;
 use sha2::{Digest, Sha256, Sha512};
 use zeroize::Zeroize;
 
+// BIP 39's English word list (bitcoin/bips, bip-0039/english.txt), under the MIT License:
+// Copyright (c) 2013 Marek Palatinus, Pavol Rusnak, Aaron Voisine, Sean Bowe. The license's
+// text is LICENSE-bip39, beside this crate's Cargo.toml.
 static ENGLISH: &str = include_str!("english.txt");
 
 /// The 2048 words, in order.

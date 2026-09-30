@@ -2,6 +2,7 @@
 name = "maki-wasm"
 version = "0.1.0"
 edition = "2021"
+license = "MIT"
 description = "maki's app host core: runs .maki WebAssembly apps with wasmi, giving them only maki's functions"
 
 [dependencies]

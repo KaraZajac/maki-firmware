@@ -2,6 +2,7 @@
 name = "maki-apps"
 version = "0.1.0"
 edition = "2021"
+license = "MIT"
 description = "maki's own apps, in one process: Passkeys"
 
 [dependencies]

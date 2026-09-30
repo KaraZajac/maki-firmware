@@ -2,6 +2,7 @@
 name = "maki-app-host-api"
 version = "0.1.0"
 edition = "2021"
+license = "MIT"
 description = "Client side of maki's app host: install, list and remove apps, for maki-link"
 
 [dependencies]

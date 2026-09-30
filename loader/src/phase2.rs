@@ -1,3 +1,4 @@
+// Changed for maki (a fork of Xous: github.com/KaraZajac/maki-firmware) in 2026; its git history says what.
 #[cfg(any(feature = "board-baosec", feature = "board-baosor"))]
 use ux_api::minigfx::FrameBuffer;
 #[cfg(feature = "swap")]

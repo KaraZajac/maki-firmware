@@ -3,7 +3,7 @@ name = "maki-launcher-api-tests"
 version = "0.1.0"
 edition = "2021"
 description = "The launcher's IPC (src/api.rs) on its own, for its tests: the launcher, built for maki's hardware, doesn't build on a computer"
-license = "MIT OR Apache-2.0"
+license = "MIT"
 publish = false
 
 [lib]

@@ -3,7 +3,7 @@ name = "maki-hd"
 version = "0.1.0"
 edition = "2021"
 description = "Keys for maki's wallet apps: BIP32 paths from the recovery phrase's seed, and the signatures wallets need"
-license = "MIT OR Apache-2.0"
+license = "MIT"
 
 [features]
 default = []

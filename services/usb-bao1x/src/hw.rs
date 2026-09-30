@@ -1,3 +1,4 @@
+// Changed for maki (a fork of Xous: github.com/KaraZajac/maki-firmware) in 2026; its git history says what.
 use std::borrow::BorrowMut;
 use std::cell::RefCell;
 use std::collections::VecDeque;

@@ -1,3 +1,8 @@
+// Parts ported from monero-oxide (monero-bulletproofs, monero-bulletproofs-generators), under the MIT License:
+//   Copyright (c) 2022-2025 Luke Parker
+//   Copyright (c) 2025-2026 monero-oxide Developers
+// The license's text is LICENSE-monero-oxide, beside this crate's Cargo.toml.
+
 //! Bulletproofs+, the range proof a Monero transaction carries for its outputs: that each amount
 //! its commitments hide is less than 2^64, without saying what it is. Proving only: the node
 //! checks it. Monero's (`src/ringct/bulletproofs_plus.cc`), ported from monero-oxide's

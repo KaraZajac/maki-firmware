@@ -2,6 +2,7 @@
 name = "maki-link"
 version = "0.1.0"
 edition = "2021"
+license = "MIT"
 description = "maki's link to the desktop app over USB serial"
 
 [dependencies]

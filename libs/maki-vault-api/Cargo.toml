@@ -2,6 +2,7 @@
 name = "maki-vault-api"
 version = "0.1.0"
 edition = "2021"
+license = "MIT"
 description = "How maki-link asks the vault for logins and codes on the browser's behalf"
 
 [dependencies]

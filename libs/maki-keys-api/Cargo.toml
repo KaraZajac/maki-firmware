@@ -2,6 +2,7 @@
 name = "maki-keys-api"
 version = "0.1.0"
 edition = "2021"
+license = "MIT"
 description = "How the rest of maki talks to maki-keys: the boot PIN, the recovery phrase, backups"
 
 [dependencies]

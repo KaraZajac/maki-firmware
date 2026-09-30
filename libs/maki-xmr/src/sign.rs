@@ -1,3 +1,8 @@
+// Parts ported from monero-oxide (monero-ed25519: the hash onto the curve), under the MIT License:
+//   Copyright (c) 2022-2025 Luke Parker
+//   Copyright (c) 2025-2026 monero-oxide Developers
+// The license's text is LICENSE-monero-oxide, beside this crate's Cargo.toml.
+
 //! What spending takes of maki: the curve work of a Monero transaction that needs the account's
 //! keys, or that decides where its money goes. The computer finds the account's outputs (with
 //! the view key), picks the decoys and builds the rest; maki works out what the outputs pay, from

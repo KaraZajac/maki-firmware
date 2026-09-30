@@ -2,6 +2,7 @@
 name = "maki"
 version = "0.1.0"
 edition = "2021"
+license = "MIT"
 description = "Make maki apps: pack and sign .maki bundles, inspect them, and run them in a simulator"
 
 [dependencies]

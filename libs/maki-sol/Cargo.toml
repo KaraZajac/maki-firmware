@@ -2,6 +2,7 @@
 name = "maki-sol"
 version = "0.1.0"
 edition = "2021"
+license = "MIT"
 description = "maki's Solana account: its address, and the transactions and messages it signs, read strictly and shown first"
 
 [dependencies]

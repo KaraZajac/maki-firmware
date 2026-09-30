@@ -2,6 +2,7 @@
 name = "maki-seed"
 version = "0.1.0"
 edition = "2021"
+license = "MIT"
 description = "maki's recovery phrase: BIP39 words, the seed, and the keys derived from it"
 
 [dependencies]

@@ -1,4 +1,7 @@
-// NOTE: Adapted from cortex-m/build.rs
+// Adapted from cortex-m's build.rs (github.com/rust-embedded/cortex-m), under the MIT License:
+//   Copyright (c) 2016 Jorge Aparicio
+//   Copyright (c) 2016-2026 The Embedded Devices Working Group Developers
+// The MIT License's text is LICENSES/MIT.txt, at the top of this repository.
 use std::env;
 use std::fs;
 use std::io::Write;

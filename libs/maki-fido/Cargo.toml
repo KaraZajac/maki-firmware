@@ -2,6 +2,7 @@
 name = "maki-fido"
 version = "0.1.0"
 edition = "2021"
+license = "MIT"
 description = "maki's passkeys as the vault's FIDO authenticator stores them: what a backup takes, and what the Passkeys app lists"
 
 [dependencies]

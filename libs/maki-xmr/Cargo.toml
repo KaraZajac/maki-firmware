@@ -3,7 +3,7 @@ name = "maki-xmr"
 version = "0.1.0"
 edition = "2021"
 description = "Monero for maki: addresses and subaddresses, and (with `keys`) the keys and 25-word backup maki-keys makes from the recovery phrase"
-license = "MIT OR Apache-2.0"
+license = "MIT"
 
 [features]
 default = []

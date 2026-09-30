@@ -2,6 +2,7 @@
 name = "maki-launcher"
 version = "0.1.0"
 edition = "2021"
+license = "MIT"
 description = "maki home screen: lists the apps and owns input focus"
 
 [dependencies]

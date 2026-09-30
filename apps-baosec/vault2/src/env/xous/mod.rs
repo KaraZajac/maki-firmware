@@ -1,3 +1,4 @@
+// Changed for maki (a fork of Xous: github.com/KaraZajac/maki-firmware) in 2026; its git history says what.
 use core::sync::atomic::{AtomicU32, Ordering};
 use std::io::{Read, Write};
 use std::sync::Arc;

@@ -2,6 +2,7 @@
 name = "maki-proto"
 version = "0.1.0"
 edition = "2021"
+license = "MIT"
 description = "maki's serial protocol: framing, messages, and the device-side logic"
 
 [dependencies]

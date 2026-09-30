@@ -1,5 +1,6 @@
 // SPDX-FileCopyrightText: 2024 bunnie <bunnie@kosagi.com>
 // SPDX-License-Identifier: Apache-2.0
+// Changed for maki (a fork of Xous: github.com/KaraZajac/maki-firmware) in 2026; its git history says what.
 
 use core::cmp::Ordering;
 

@@ -2,6 +2,7 @@
 name = "maki-keys"
 version = "0.1.0"
 edition = "2021"
+license = "MIT"
 description = "maki's boot PIN, and the secrets it guards"
 
 [dependencies]

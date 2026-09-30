@@ -1,3 +1,4 @@
+// Changed for maki (a fork of Xous: github.com/KaraZajac/maki-firmware) in 2026; its git history says what.
 use core::convert::TryFrom;
 use core::mem::size_of;
 #[cfg(feature = "std")]

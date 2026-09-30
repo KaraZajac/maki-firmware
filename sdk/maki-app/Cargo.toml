@@ -2,6 +2,7 @@
 name = "maki-app"
 version = "0.1.0"
 edition = "2021"
+license = "MIT"
 description = "Write apps for maki, the DEF CON 34 badge firmware: the screen, buttons, storage and time, for wasm32 or natively"
 
 [features]

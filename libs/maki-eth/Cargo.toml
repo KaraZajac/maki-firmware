@@ -2,6 +2,7 @@
 name = "maki-eth"
 version = "0.1.0"
 edition = "2021"
+license = "MIT"
 description = "maki's Ethereum account: its address from maki's keys, and transactions and messages shown before they're signed"
 
 [dependencies]

@@ -2,6 +2,7 @@
 name = "roughtime"
 version = "0.1.0"
 edition = "2021"
+license = "MIT"
 description = "Roughtime (draft-ietf-ntp-roughtime-19) request builder and response verifier, no_std"
 
 [dependencies]
