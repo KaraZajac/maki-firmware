@@ -31,20 +31,39 @@ pub fn keystore(sid: SID) -> ! {
             log::error!("Collateral is not erased - protocol error for Baochip firmwares!");
             log::info!("{}COLLATERAL.FAIL,{}", BOOKEND_START, BOOKEND_END);
         }
-        // maki: collateral present is the expected, correct state.
+        // maki: collateral present is the expected, correct state; derive_master_key has said whether
+        // it was usable (COLLATERAL.BOUND / ABSENT: slots of zeros aren't the erase value, but aren't
+        // collateral either)
         #[cfg(feature = "collateral-keys")]
-        log::info!("{}COLLATERAL.PRESENT,{}", BOOKEND_START, BOOKEND_END);
+        if store.has_master_key() {
+            log::info!("{}COLLATERAL.PRESENT,{}", BOOKEND_START, BOOKEND_END);
+        }
     }
 
     #[cfg(feature = "swap")]
     let xns = xous_names::XousNames::new().unwrap();
 
     let mut msg_opt = None;
+    // maki: requests that need the storage key, while there's none (see below): held, never answered
+    let mut held: Vec<xous::MessageEnvelope> = Vec::new();
 
     // allow preemption once the keystore has claimed locks on all its critical resources
     hal.set_preemption(true);
     loop {
         xous::reply_and_receive_next(sid, &mut msg_opt).unwrap();
+        // maki: without a storage key (the collateral-keys build, with the chip's collateral gone),
+        // wrapping and AES requests are held rather than answered: answering would have to panic
+        // (the key isn't there) or hand back data that was never encrypted. The services that need
+        // storage wait quietly, and maki-keys, which asks StorageKeyReady first, says why on screen.
+        if !store.has_master_key()
+            && matches!(
+                msg_opt.as_ref().and_then(|m| <Opcode as num_traits::FromPrimitive>::from_usize(m.body.id())),
+                Some(Opcode::AesKwp | Opcode::AesOracle)
+            )
+        {
+            held.push(msg_opt.take().unwrap());
+            continue;
+        }
         let msg = msg_opt.as_mut().unwrap();
         let opcode = num_traits::FromPrimitive::from_usize(msg.body.id()).unwrap_or(Opcode::InvalidCall);
         log::debug!("{:?}", opcode);
@@ -129,6 +148,11 @@ pub fn keystore(sid: SID) -> ! {
                         }
                         _ => panic!("Couldn't set bootwait"),
                     }
+                }
+            }
+            Opcode::StorageKeyReady => {
+                if let Some(scalar) = msg.body.scalar_message_mut() {
+                    scalar.arg1 = store.has_master_key() as usize;
                 }
             }
             Opcode::IsDeveloper => {

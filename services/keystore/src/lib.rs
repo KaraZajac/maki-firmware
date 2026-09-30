@@ -285,6 +285,19 @@ impl Keystore {
         }
     }
 
+    /// maki: whether the keystore has a storage key. Without one (the collateral-keys build, with
+    /// the chip's collateral gone), requests that need it are held, never answered.
+    pub fn storage_key_ready(&self) -> bool {
+        matches!(
+            xous::send_message(
+                self.conn,
+                xous::Message::new_blocking_scalar(Opcode::StorageKeyReady.to_usize().unwrap(), 0, 0, 0, 0),
+            ),
+            // the server answers by changing the message's arguments, which come back as Scalar5
+            Ok(xous::Result::Scalar5(_, 1, _, _, _))
+        )
+    }
+
     pub fn get_owc(&self, offset: usize) -> Result<u32, OneWayErr> {
         let result = xous::send_message(
             self.conn,

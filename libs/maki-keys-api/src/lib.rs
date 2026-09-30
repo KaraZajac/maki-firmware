@@ -161,6 +161,10 @@ pub enum State {
     Locked = 1,
     /// The secrets are open, until maki is unplugged.
     Unlocked = 2,
+    /// The storage is sealed to the chip's collateral, and that's gone (the release build without
+    /// maki's boot updater, or with other firmware put on after it): nothing can be opened, so
+    /// nothing is asked for.
+    Sealed = 3,
 }
 
 /// A PIN, and on the way back what became of it (`PinResult`).

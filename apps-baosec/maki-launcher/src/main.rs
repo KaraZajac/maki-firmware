@@ -382,6 +382,17 @@ impl System {
             }
             (State::Locked, _) => self.pin_pad("Enter your PIN", "", PinFor::Enter),
             (State::Unlocked, _) => self.now_unlocked(),
+            (State::Sealed, _) => self.info(
+                "maki is sealed",
+                &[
+                    "Its storage needs maki's",
+                    "boot updater, which isn't",
+                    "on this badge. See",
+                    "maki.netslum.io/flashing",
+                ],
+                "",
+                Next::Home,
+            ),
         }
     }
 
@@ -874,7 +885,14 @@ fn main() -> ! {
     std::thread::spawn(move || {
         let tt = ticktimer_server::Ticktimer::new().unwrap();
         let start = tt.elapsed_ms();
-        pddb::Pddb::new().is_mounted_blocking();
+        // a sealed maki (no storage key: see maki-keys) never mounts the PDDB, so say why rather
+        // than keep the splash up for good. maki-keys answers once it knows which it is: at once
+        // when sealed, otherwise only after the mount, so this waits as long as it always has
+        let xns = xous_names::XousNames::new().unwrap();
+        let sealed = Keys::new(&xns).map(|k| k.status().0 == State::Sealed).unwrap_or(false);
+        if !sealed {
+            pddb::Pddb::new().is_mounted_blocking();
+        }
         let shown = tt.elapsed_ms() - start;
         if shown < SPLASH_MIN_MS {
             tt.sleep_ms((SPLASH_MIN_MS - shown) as usize).ok();

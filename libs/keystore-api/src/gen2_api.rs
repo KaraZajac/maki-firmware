@@ -27,6 +27,9 @@ pub enum Opcode {
     /// One way counter operations
     GetOneWayCounter = 768,
     IncOneWayCounter = 769,
+    /// maki: whether there's a storage key (the collateral-keys build derives none without the
+    /// chip's collateral). Scalar: 1 if there is.
+    StorageKeyReady = 770,
 
     /// Application key operations
     #[cfg(feature = "app-keys")]

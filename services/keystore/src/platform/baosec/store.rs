@@ -350,6 +350,10 @@ impl KeyStore {
         self.master_key = Some(master_key);
     }
 
+    /// maki: whether a master key was derived (the collateral-keys build derives none without the
+    /// chip's collateral).
+    pub fn has_master_key(&self) -> bool { self.master_key.is_some() }
+
     pub fn aes_kwp(&self, kwp: &mut KeyWrapper) -> Result<(), xous::Error> {
         use aes_kw::Kek;
         use aes_kw::KekAes256;

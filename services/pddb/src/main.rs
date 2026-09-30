@@ -746,11 +746,23 @@ fn wrapped_main() -> ! {
     let mut susres =
         susres::Susres::new(Some(susres::SuspendOrder::Early), &xns, Opcode::SuspendResume as u32, my_cid)
             .expect("couldn't create suspend/resume object");
+    // maki: mount requests while there's no storage key (see TryMount below): held, never answered
+    #[cfg(feature = "gen2")]
+    let mut held_mounts: Vec<xous::MessageEnvelope> = Vec::new();
     loop {
         let mut msg = xous::receive_message(pddb_sid).unwrap();
         let op: Opcode = FromPrimitive::from_usize(msg.body.id() & 0xffff).unwrap_or(Opcode::InvalidOpcode);
         log::debug!("{:x?}", op);
         match op {
+            // maki: without a storage key (the collateral-keys build, with the chip's collateral
+            // gone) there's nothing to mount, and formatting would wait on the keystore for good
+            // under a progress bar. The request waits instead, unanswered (an answer would have to
+            // say mounted or failed, and a dropped one reads as mounted); maki-keys says why.
+            #[cfg(feature = "gen2")]
+            Opcode::TryMount if !pddb_os.storage_key_ready() => {
+                log::error!("no storage key: not mounting or formatting");
+                held_mounts.push(msg);
+            }
             #[cfg(feature = "gen1")]
             Opcode::SuspendResume => xous::msg_scalar_unpack!(msg, token, _, _, _, {
                 basis_cache.suspend(&mut pddb_os);

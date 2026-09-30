@@ -448,6 +448,11 @@ impl PddbOs {
         self.pddb_mr.reset();
     }
 
+    /// maki: whether the keystore has a storage key. Without one (the collateral-keys build, with the
+    /// chip's collateral gone) nothing can be mounted or formatted.
+    #[cfg(feature = "gen2")]
+    pub(crate) fn storage_key_ready(&self) -> bool { self.rootkeys.storage_key_ready() }
+
     pub(crate) fn is_efuse_secured(&self) -> bool {
         #[cfg(feature = "gen1")]
         {

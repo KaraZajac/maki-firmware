@@ -670,6 +670,33 @@ fn change_pin(store: &Store, chip: &keystore::Keystore, current: &str, new: &str
     Ok(())
 }
 
+/// Sealed: the storage key is bound to the chip's collateral, which is gone, so nothing can be
+/// opened, the PDDB included. The screen asks the state and says why; whatever waits for maki to
+/// unlock waits for good; the rest is refused.
+fn serve_sealed(sid: xous::SID) -> ! {
+    let mut waiting: Vec<xous::MessageEnvelope> = Vec::new();
+    loop {
+        let msg = xous::receive_message(sid).unwrap();
+        match FromPrimitive::from_usize(msg.body.id()) {
+            Some(KeysOp::Status) => {
+                xous::return_scalar2(msg.sender, State::Sealed as usize, 0).ok();
+            }
+            // the screen's role is the launcher's, as ever
+            Some(KeysOp::Claim) => {
+                xous::return_scalar(msg.sender, 1).ok();
+            }
+            Some(KeysOp::WaitUnlocked | KeysOp::WaitChange) => waiting.push(msg),
+            // refused: a blocking scalar gets 0 (a name falls back to "maki", a claim to no), and
+            // a lent buffer goes back as it came
+            _ => {
+                if msg.body.is_blocking() && msg.body.scalar_message().is_some() {
+                    xous::return_scalar(msg.sender, 0).ok();
+                }
+            }
+        }
+    }
+}
+
 fn main() -> ! {
     log_server::init_wait().unwrap();
     log::set_max_level(log::LevelFilter::Info);
@@ -700,6 +727,13 @@ fn main() -> ! {
     // connections, all made by maki's services as they start, before any app could make one:
     // this is one of them
     let chip = keystore::Keystore::new(&xns);
+    // the release build binds the storage key to the chip's collateral; without that (maki's boot
+    // updater isn't there, or other firmware erased it) the storage can't be opened, and waiting
+    // for the PDDB would be waiting for good
+    if !chip.storage_key_ready() {
+        log::error!("no storage key: the chip's collateral is gone, so maki stays sealed");
+        serve_sealed(sid);
+    }
     let store = Store { pddb: Pddb::new() };
     store.pddb.is_mounted_blocking();
     // this maki's name, once it's been read (or picked)
