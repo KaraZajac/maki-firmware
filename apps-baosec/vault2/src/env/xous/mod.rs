@@ -129,7 +129,8 @@ impl XousEnv {
         let ctap1_timeout_sid = xous::create_server().unwrap();
         let ctap1_timeout_cid = xous::connect(ctap1_timeout_sid).unwrap();
         // maki: a small stack, as it only times out CTAP1 prompts
-        std::thread::Builder::new().stack_size(32 * 1024).spawn({
+        let small_stack = std::thread::Builder::new().stack_size(32 * 1024);
+        let spawned = small_stack.spawn({
             const MARGIN_MS: u128 = 2000; // auto-clears the box 2 seconds after the timeout deadline.
             // some margin is desired because this is basically a huge race condition.
             move || {
@@ -215,8 +216,8 @@ impl XousEnv {
                     }
                 }
             }
-        })
-        .unwrap();
+        });
+        spawned.unwrap();
 
         std::thread::spawn({
             let main_cid = conn.clone();

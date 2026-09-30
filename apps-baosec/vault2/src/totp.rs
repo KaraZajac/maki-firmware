@@ -180,7 +180,8 @@ pub(crate) fn pumper(
     pace: Arc<Pace>,
 ) {
     // maki: a small stack, as it only pumps redraws
-    let _ = thread::Builder::new().stack_size(32 * 1024).spawn({
+    let small_stack = thread::Builder::new().stack_size(32 * 1024);
+    let spawned = small_stack.spawn({
         move || {
             let tt = ticktimer_server::Ticktimer::new().unwrap();
             let self_conn = xous::connect(sid).unwrap();
@@ -228,8 +229,8 @@ pub(crate) fn pumper(
             }
             xous::destroy_server(sid).ok();
         }
-    })
-    .unwrap();
+    });
+    spawned.unwrap();
 }
 
 pub(crate) fn db_str_to_code(db_str: &str) -> Result<String, TotpError> {
