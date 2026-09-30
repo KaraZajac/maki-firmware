@@ -6,7 +6,7 @@ you can install"). Anyone can build one and sideload it through maki desktop; ma
 owner what it is, where it's from and what it may do before installing it, and a sideloaded
 app carries a mark in maki's top bar for as long as it's installed.
 
-This directory has the Rust crate apps are written with (`maki-app`), thirty-one examples, and
+This directory has the Rust crate apps are written with (`maki-app`), thirty-two examples, and
 the `maki` tool that packs, signs, checks and simulates them. The examples:
 
 - **Hello**, **Dice** and **Tally**: a screen, the buttons, storage and randomness. Dice takes the
@@ -52,6 +52,9 @@ the `maki` tool that packs, signs, checks and simulates them. The examples:
   computer (camera and keyboard); text that would press Enter or Tab waits for the centre first.
 - **Snake**: the game, steered the way it's to go with the jog dial and left and right, timed
   with `wait`.
+- **Instruments**: the accelerometer as a racing g-meter (a ball in a ring, its trail and peaks,
+  calibrated by keeping still and pulling away), a pilot's horizon and slip ball, and a spirit
+  level to a tenth of a degree (host API 8's `motion::range` for rides; std for its angles).
 - **Marble**: a maze, new every time, and a marble that rolls the way maki is tilted (the motion
   permission), into the hole at the far corner.
 - **Breakout**: the bricks and the ball, off a paddle that follows maki's tilt, or left and right

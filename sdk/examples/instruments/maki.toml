@@ -1,0 +1,12 @@
+id = "com.leviathan.maki.instruments"
+name = "Instruments"
+version = 1
+label = "1.0"
+api = 8
+storage = 1
+memory = 256
+backup = true
+description = "maki's accelerometer as instruments: a g-meter for the car, the bike or a ride, with its peaks; a horizon and slip ball, as a pilot's; and a spirit level, to a tenth of a degree once calibrated."
+
+[permissions]
+motion = "To read how maki is tilted and pushed: the g-meter, the horizon and the level."

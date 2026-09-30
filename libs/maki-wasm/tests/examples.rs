@@ -554,6 +554,55 @@ fn the_chess_clock_keeps_byo_yomi_and_the_hourglass() {
     assert_eq!((sides[0].0, sides[1].0), (60_000 + 9840, 60_000 - 9840));
 }
 
+/// Instruments' kept vectors: 0 the g-meter's up, 1 its forward, 2 the tilt's level.
+fn instruments_kept(storage: &BTreeMap<String, Vec<u8>>, which: usize) -> [f32; 3] {
+    let b = &storage["kept"];
+    let f = |i: usize| f32::from_le_bytes(b[i * 4..i * 4 + 4].try_into().unwrap());
+    [f(which * 3), f(which * 3 + 1), f(which * 3 + 2)]
+}
+
+fn near(a: [f32; 3], b: [f32; 3]) -> bool { a.iter().zip(b).all(|(x, y)| (x - y).abs() < 0.02) }
+
+#[test]
+fn instruments_calibrate_the_g_meter_from_still_then_pulling_away() {
+    // lying flat, still for the calibration's 2 s; then pushed toward maki's top, 0.3 g, steady:
+    // that's forward
+    let mut motions: VecDeque<[i16; 3]> = std::iter::repeat_n([0, 0, 1000], 130).collect();
+    motions.extend(std::iter::repeat_n([0, 300, 1000], 80));
+    let mut events = vec![Event::Menu(0)];
+    events.extend([Event::Timeout; 210]);
+    let record = Record { events: events.into(), motions, clock: true, ..Default::default() };
+    let (stop, r) = run_record("instruments", record);
+    assert_eq!(stop, Stop::Finished);
+    assert!(near(instruments_kept(&r.storage, 0), [0.0, 0.0, 1.0]), "up");
+    assert!(near(instruments_kept(&r.storage, 1), [0.0, 1.0, 0.0]), "forward");
+    assert_eq!(r.range, 4, "the g-meter reads to 4 g");
+}
+
+#[test]
+fn instruments_level_lights_up_when_level_and_the_tilt_sets_its_level() {
+    // the level (left from the g-meter): flat and level, the screen's lit; a degree off, it isn't
+    let lit = |motion: [i16; 3]| {
+        let mut events = vec![Event::Left];
+        events.extend([Event::Timeout; 60]);
+        let record =
+            Record { events: events.into(), motion: Some(motion), clock: true, ..Default::default() };
+        let (_, r) = run_record("instruments", record);
+        assert_eq!(r.range, 2, "the level reads finest");
+        r.frames.last().unwrap().get(1, 60)
+    };
+    assert!(lit([0, 0, 1000]));
+    assert!(!lit([17, 0, 1000]));
+    // the tilt (right from the g-meter): the centre takes level as maki's held now
+    let mut events = vec![Event::Right];
+    events.extend([Event::Timeout; 30]);
+    events.push(Event::Centre);
+    let record =
+        Record { events: events.into(), motion: Some([100, 995, 0]), clock: true, ..Default::default() };
+    let (_, r) = run_record("instruments", record);
+    assert!(near(instruments_kept(&r.storage, 2), [0.1, 0.995, 0.0]));
+}
+
 #[test]
 fn tally_counts_and_keeps_the_count() {
     let (stop, r) =
