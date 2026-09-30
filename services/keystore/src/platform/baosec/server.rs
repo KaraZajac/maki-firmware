@@ -19,6 +19,12 @@ pub fn keystore(sid: SID) -> ! {
     // derive the master key
     store.derive_master_key();
 
+    // Baochip firmware expects collateral to be erased; maki's does the opposite. Under
+    // `collateral-keys`, collateral is intentionally provisioned by maki's boot1 and mixed into the
+    // master key (derive_master_key logs COLLATERAL.BOUND / COLLATERAL.ABSENT), so this Baochip
+    // check does not apply — and `is_collateral_erased` would fault reading the erasure alias, whose
+    // ACLs are no longer uniform once the secret slots are provisioned (Fw0) beside the public one.
+    #[cfg(not(feature = "collateral-keys"))]
     if store.is_collateral_erased() {
         log::info!("{}COLLATERAL.ERASED,{}", BOOKEND_START, BOOKEND_END);
     } else {
