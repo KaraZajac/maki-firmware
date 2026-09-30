@@ -1,5 +1,4 @@
 use core::convert::TryInto;
-use core::mem;
 use usb_device::class_prelude::*;
 use usb_device::Result;
 
@@ -8,8 +7,7 @@ pub const USB_CLASS_CDC: u8 = 0x02;
 
 const USB_CLASS_CDC_DATA: u8 = 0x0a;
 const CDC_SUBCLASS_ACM: u8 = 0x02;
-const CDC_PROTOCOL_NONE: u8 = 0x00;
-const CDC_COMM_PROTOCOL_AT: u8 = 01;
+const CDC_COMM_PROTOCOL_AT: u8 = 0x01;
 
 const CS_INTERFACE: u8 = 0x24;
 const CDC_TYPE_HEADER: u8 = 0x00;
@@ -254,11 +252,12 @@ pub enum StopBits {
 }
 
 impl From<u8> for StopBits {
+    // A match, not a transmute: see ParityType's From below. Out-of-range falls back to One.
     fn from(value: u8) -> Self {
-        if value <= 2 {
-            unsafe { mem::transmute(value )}
-        } else {
-            StopBits::One
+        match value {
+            1 => StopBits::OnePointFive,
+            2 => StopBits::Two,
+            _ => StopBits::One,
         }
     }
 }
@@ -274,11 +273,16 @@ pub enum ParityType {
 }
 
 impl From<u8> for ParityType {
+    // A match, not a transmute: the value comes from the host (SET_LINE_CODING), and the enum
+    // has no #[repr], so its layout isn't something to rely on. Out-of-range falls back to None,
+    // as before.
     fn from(value: u8) -> Self {
-        if value <= 4 {
-            unsafe { mem::transmute(value )}
-        } else {
-            ParityType::None
+        match value {
+            1 => ParityType::Odd,
+            2 => ParityType::Event,
+            3 => ParityType::Mark,
+            4 => ParityType::Space,
+            _ => ParityType::None,
         }
     }
 }
@@ -315,6 +319,39 @@ impl Default for LineCoding {
             data_bits: 8,
             parity_type: ParityType::None,
             data_rate: 8_000,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ParityType, StopBits};
+
+    // The host sets these with SET_LINE_CODING, so every byte value has to land somewhere sane:
+    // the listed codes map to their variants, anything else to the default.
+    #[test]
+    fn stop_bits_from_every_byte() {
+        for v in 0..=u8::MAX {
+            let expect = match v {
+                1 => StopBits::OnePointFive,
+                2 => StopBits::Two,
+                _ => StopBits::One,
+            };
+            assert!(StopBits::from(v) == expect, "stop bits {}", v);
+        }
+    }
+
+    #[test]
+    fn parity_from_every_byte() {
+        for v in 0..=u8::MAX {
+            let expect = match v {
+                1 => ParityType::Odd,
+                2 => ParityType::Event,
+                3 => ParityType::Mark,
+                4 => ParityType::Space,
+                _ => ParityType::None,
+            };
+            assert!(ParityType::from(v) == expect, "parity {}", v);
         }
     }
 }

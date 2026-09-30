@@ -55,7 +55,7 @@ impl<S: BorrowMut<[u8]>> Buffer<S> {
             return 0;
         }
 
-        &self.store.borrow_mut()[self.wpos..self.wpos+count].copy_from_slice(&data[..count]);
+        self.store.borrow_mut()[self.wpos..self.wpos+count].copy_from_slice(&data[..count]);
 
         self.wpos += count;
         count
@@ -120,6 +120,13 @@ impl<S: BorrowMut<[u8]>> Buffer<S> {
 /// Default backing store for the mediocre buffer
 pub struct DefaultBufferStore([u8; 128]);
 
+impl Default for DefaultBufferStore {
+    // Zeroed, not uninitialized: an uninitialized `[u8; N]` is undefined behaviour. The buffer
+    // tracks its own read/write positions, so the initial contents are never read before being
+    // written; zeroing costs one small memset when the port is created.
+    fn default() -> Self { DefaultBufferStore([0; 128]) }
+}
+
 impl Borrow<[u8]> for DefaultBufferStore {
     fn borrow(&self) -> &[u8] {
         &self.0
@@ -136,13 +143,28 @@ impl BorrowMut<[u8]> for DefaultBufferStore {
 mod tests {
     extern crate std;
 
+    // Ported from upstream's generic_array-backed buffer to this store-backed one: a LEN-byte
+    // array is the store, and `read` consumes what its callback returns, so each callback returns
+    // `Ok(data.len())` to consume everything it was shown, as the old API did.
     const DATA: &[u8] = &[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12];
     const LEN: usize = 5;
-    type Buf = crate::buffer::Buffer<generic_array::typenum::consts::U5>;
+    type Buf = crate::buffer::Buffer<[u8; LEN]>;
+
+    fn buf() -> Buf { Buf::new([0u8; LEN]) }
+
+    fn read_all(b: &mut Buf, max: usize) -> std::vec::Vec<u8> {
+        let mut got = std::vec::Vec::new();
+        b.read(max, |data| {
+            got.extend_from_slice(data);
+            Ok::<usize, ()>(data.len())
+        })
+        .unwrap();
+        got
+    }
 
     #[test]
     fn write() {
-        let mut b = Buf::new();
+        let mut b = buf();
 
         assert_eq!(b.write(&DATA[0..2]), 2);
         assert_eq!(b.available_write(), LEN - 2);
@@ -155,24 +177,18 @@ mod tests {
 
     #[test]
     fn read() {
-        let mut b = Buf::new();
+        let mut b = buf();
 
         assert_eq!(b.write(&DATA[0..4]), 4);
 
-        b.read(3, |data| {
-            assert_eq!(data, &DATA[0..3]);
-        });
-        b.read(1, |data| {
-            assert_eq!(data, &DATA[3..4]);
-        });
-        b.read(1, |data| {
-            assert_eq!(data, &[]);
-        });
+        assert_eq!(read_all(&mut b, 3), &DATA[0..3]);
+        assert_eq!(read_all(&mut b, 1), &DATA[3..4]);
+        assert!(read_all(&mut b, 1).is_empty());
     }
 
     #[test]
     fn clear() {
-        let mut b = Buf::new();
+        let mut b = buf();
 
         b.write(&DATA[0..2]);
         b.clear();
@@ -183,18 +199,47 @@ mod tests {
 
     #[test]
     fn discard() {
-        let mut b = Buf::new();
+        let mut b = buf();
 
         assert_eq!(b.write(&DATA[0..4]), 4);
-        b.read(2, |data| {
-            assert_eq!(data, &DATA[0..2]);
-        });
+        assert_eq!(read_all(&mut b, 2), &DATA[0..2]);
 
+        // 1 byte free at the end plus 2 already read: the write moves the unread bytes down
         assert_eq!(b.write(&DATA[4..7]), 3);
-        b.read(5, |data| {
-            assert_eq!(data, &DATA[2..7]);
-        });
+        assert_eq!(read_all(&mut b, 5), &DATA[2..7]);
 
         assert_eq!(b.available_read(), 0);
+    }
+
+    #[test]
+    fn write_all_and_partial_read() {
+        let mut b = buf();
+
+        // write_all hands out space and keeps only what the callback reports as written
+        let n = b
+            .write_all(3, |space| {
+                space[..2].copy_from_slice(&DATA[0..2]);
+                Ok::<usize, ()>(2)
+            })
+            .unwrap();
+        assert_eq!(n, 2);
+        assert_eq!(b.available_read(), 2);
+
+        // a read that consumes less than it was shown leaves the rest for next time
+        b.read(2, |data| {
+            assert_eq!(data, &DATA[0..2]);
+            Ok::<usize, ()>(1)
+        })
+        .unwrap();
+        assert_eq!(read_all(&mut b, 5), &DATA[1..2]);
+    }
+
+    #[test]
+    fn default_store_is_zeroed() {
+        let s = crate::buffer::DefaultBufferStore::default();
+        use core::borrow::Borrow;
+        let bytes: &[u8] = s.borrow();
+        assert_eq!(bytes.len(), 128);
+        assert!(bytes.iter().all(|&b| b == 0));
     }
 }

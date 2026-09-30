@@ -1,5 +1,4 @@
 use core::borrow::BorrowMut;
-use core::mem;
 use core::slice;
 use usb_device::class_prelude::*;
 use usb_device::Result;
@@ -50,10 +49,7 @@ where
     pub fn new(alloc: &UsbBusAllocator<B>)
         -> SerialPort<'_, B, DefaultBufferStore, DefaultBufferStore>
     {
-        SerialPort::new_with_store(
-            alloc,
-            unsafe { mem::uninitialized() },
-            unsafe { mem::uninitialized() })
+        SerialPort::new_with_store(alloc, DefaultBufferStore::default(), DefaultBufferStore::default())
     }
 }
 
@@ -139,7 +135,7 @@ where
         }
 
         let r = buf.read(data.len(), |buf_data| {
-            &data[..buf_data.len()].copy_from_slice(buf_data);
+            data[..buf_data.len()].copy_from_slice(buf_data);
 
             Ok(buf_data.len())
         });

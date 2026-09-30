@@ -11,9 +11,9 @@
 //! =======
 //!
 //! A full example requires the use of a hardware-driver, but the hardware independent part is as
-//! follows:
+//! follows (illustrative: it needs a hardware driver's `usb_bus`, so it isn't compiled):
 //!
-//! ```
+//! ```ignore
 //! let mut serial = SerialPort::new(&usb_bus);
 //!
 //! let mut usb_dev = UsbDeviceBuilder::new(&usb_bus, UsbVidPid(0x16c0, 0x27dd))
