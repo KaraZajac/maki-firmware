@@ -1,0 +1,12 @@
+id = "com.leviathan.maki.tamper"
+name = "Tamper Log"
+version = 1
+label = "1.0"
+api = 8
+storage = 4
+memory = 256
+backup = true
+description = "Leave maki on your closed laptop: armed, its screen goes dark and it logs every time it's moved, and every press. Your code, pressed on the dark screen, shows you what happened while you were away."
+
+[permissions]
+motion = "To notice maki being moved while it's armed."

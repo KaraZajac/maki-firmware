@@ -1,0 +1,13 @@
+[package]
+name = "tamper"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+# std, for the log
+maki-app = { path = "../../maki-app", default-features = false, features = ["std"] }

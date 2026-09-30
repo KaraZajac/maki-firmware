@@ -655,6 +655,91 @@ fn morse_teaches_by_the_koch_method_a_letter_more_at_90_percent() {
     assert!(r.frames.iter().any(|f| f.get(1, 60)));
 }
 
+/// The Tamper Log's log as it keeps it: armed still, and its events (kind, yours, at, and the
+/// tilt it was left at in tenths of a degree).
+fn tamper_log(storage: &BTreeMap<String, Vec<u8>>) -> (bool, Vec<(u8, bool, u32, u16)>) {
+    let b = &storage["log"];
+    let at = 3 + b[2] as usize + 8 + 1 + 4 + 4 + 4 + 12;
+    // after the byte saying whether the last is kept apart
+    let events = b[at + 1..]
+        .chunks_exact(16)
+        .map(|e| {
+            (
+                e[0],
+                e[1] != 0,
+                u32::from_le_bytes(e[2..6].try_into().unwrap()),
+                u16::from_le_bytes([e[14], e[15]]),
+            )
+        })
+        .collect();
+    (b[0] != 0, events)
+}
+
+const TAMPER_CODE: [Event; 5] = [Event::Up, Event::Down, Event::Left, Event::Right, Event::Centre];
+
+/// Arming, as the owner does: the centre, the code twice, 30 s to put it down and 2 still.
+fn tamper_arming() -> Vec<Event> {
+    let mut events = vec![Event::Centre];
+    events.extend(TAMPER_CODE);
+    events.extend(TAMPER_CODE);
+    events.extend([Event::Timeout; 810]);
+    events
+}
+
+#[test]
+fn the_tamper_log_logs_a_move_and_the_code_disarms_it() {
+    // lying still to arm; then picked up and left 17 degrees over; an hour on (in 40 ms reads, a
+    // little over a minute), the code on the dark screen
+    let mut motions: VecDeque<[i16; 3]> = std::iter::repeat_n([0, 0, 1000], 900).collect();
+    motions.extend(std::iter::repeat_n([300, 0, 950], 50));
+    let mut events = tamper_arming();
+    events.extend([Event::Timeout; 90 + 50 + 400 + 1600]);
+    events.extend(TAMPER_CODE);
+    let record = Record {
+        events: events.into(),
+        motions,
+        motion: Some([300, 0, 950]),
+        clock: true,
+        ..Default::default()
+    };
+    let (stop, r) = run_record("tamper", record);
+    assert_eq!(stop, Stop::Finished);
+    let (armed, events) = tamper_log(&r.storage);
+    assert!(!armed, "disarmed");
+    // the move, not yours, left tilted; then the code's five presses, yours
+    let moved: Vec<_> = events.iter().filter(|e| e.0 == 1).collect();
+    assert_eq!(moved.len(), 1);
+    assert!(!moved[0].1 && moved[0].3 > 150, "{moved:?}");
+    assert!(events.iter().any(|e| e.0 == 2 && e.1));
+    // dark while armed, lit for the report
+    assert!(!r.dark);
+}
+
+#[test]
+fn the_tamper_log_logs_the_menu_wrong_codes_and_the_app_closed() {
+    use Event::*;
+    let mut events = tamper_arming();
+    // maki's menu opened; three wrong tries, 4 s apart, lock the code: the right one then isn't
+    // taken; the app's closed
+    events.push(Hidden);
+    for _ in 0..3 {
+        events.extend([Up, Up, Up, Up, Up]);
+        events.extend([Timeout; 100]);
+    }
+    events.extend(TAMPER_CODE);
+    events.extend([Timeout; 100]);
+    let record =
+        Record { events: events.into(), motion: Some([0, 0, 1000]), clock: true, ..Default::default() };
+    let (_, r) = run_record("tamper", record);
+    let (armed, events) = tamper_log(&r.storage);
+    assert!(armed, "still armed: the code was locked");
+    let kinds: Vec<u8> = events.iter().map(|e| e.0).collect();
+    // the menu (3); presses (2) and wrong (5) three times, the third locking (6); the code's
+    // presses; closed (4)
+    assert_eq!(kinds, [3, 2, 5, 2, 5, 2, 5, 6, 2, 4]);
+    assert!(r.dark);
+}
+
 #[test]
 fn tally_counts_and_keeps_the_count() {
     let (stop, r) =

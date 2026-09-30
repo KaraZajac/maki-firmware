@@ -6,7 +6,7 @@ you can install"). Anyone can build one and sideload it through maki desktop; ma
 owner what it is, where it's from and what it may do before installing it, and a sideloaded
 app carries a mark in maki's top bar for as long as it's installed.
 
-This directory has the Rust crate apps are written with (`maki-app`), thirty-three examples, and
+This directory has the Rust crate apps are written with (`maki-app`), thirty-four examples, and
 the `maki` tool that packs, signs, checks and simulates them. The examples:
 
 - **Hello**, **Dice** and **Tally**: a screen, the buttons, storage and randomness. Dice takes the
@@ -70,6 +70,9 @@ the `maki` tool that packs, signs, checks and simulates them. The examples:
   command line (quoted as a shell would take it back), what it's given to run with beyond what
   every command gets, and who asked where, then signs the request with its key (the keys
   permission), which the plugin checks against the key root keeps.
+- **Tamper Log**: left on a closed laptop, its screen dark (host API 8's `screen::dark`), it logs
+  every time maki's moved and every press, until the owner's code, pressed on the dark screen,
+  shows what happened: undisturbed, moved, or interrupted.
 - **Status**: a sign readable across the room, in big letters it draws itself with `blit`, which
   software on the computer can set (the link permission).
 - **Bitcoin** and **Ethereum**: maki's wallets, in the maki store (host API 3's wallet
