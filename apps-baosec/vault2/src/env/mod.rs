@@ -72,6 +72,10 @@ pub trait Env {
     /// from the recovery phrase); `storage::init` keeps the store in step with it.
     fn fixed_cred_random(&mut self) -> Option<[u8; 64]> { None }
 
+    /// Whether the authenticator verifies its user itself (built-in user verification). maki
+    /// does, with its own PIN: see `XousEnv`'s.
+    fn builtin_uv(&mut self) -> bool { false }
+
     /// I/O connection for sending packets implementing CTAP HID protocol.
     fn main_hid_connection(&mut self) -> &mut Self::HidConnection;
 

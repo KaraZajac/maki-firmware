@@ -221,7 +221,8 @@ pub struct AuthenticatorClientPinResponse {
     pub pin_uv_auth_token: Option<Vec<u8>>,
     pub retries: Option<u64>,
     pub power_cycle_state: Option<bool>,
-    // - 0x05: uvRetries missing as we don't support internal UV.
+    // maki: built-in UV's retries
+    pub uv_retries: Option<u64>,
 }
 
 impl From<AuthenticatorClientPinResponse> for cbor::Value {
@@ -231,6 +232,7 @@ impl From<AuthenticatorClientPinResponse> for cbor::Value {
             pin_uv_auth_token,
             retries,
             power_cycle_state,
+            uv_retries,
         } = client_pin_response;
 
         cbor_map_options! {
@@ -238,6 +240,7 @@ impl From<AuthenticatorClientPinResponse> for cbor::Value {
             0x02 => pin_uv_auth_token,
             0x03 => retries,
             0x04 => power_cycle_state,
+            0x05 => uv_retries,
         }
     }
 }
@@ -516,6 +519,7 @@ mod test {
             pin_uv_auth_token: Some(vec![70]),
             retries: Some(8),
             power_cycle_state: Some(false),
+            uv_retries: None,
         };
         let response_cbor: Option<cbor::Value> =
             ResponseData::AuthenticatorClientPin(Some(client_pin_response)).into();

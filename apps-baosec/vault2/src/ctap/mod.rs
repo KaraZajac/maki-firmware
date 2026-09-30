@@ -657,6 +657,24 @@ impl CtapState {
             Command::AuthenticatorGetNextAssertion => self.process_get_next_assertion(env),
             Command::AuthenticatorGetInfo => self.process_get_info(env),
             Command::AuthenticatorClientPin(params) => {
+                // maki: a token by built-in UV for more than making credentials and assertions
+                // (managing passkeys, settings, large blobs) is asked for on maki first: those
+                // operations don't ask for a press themselves, and making the token takes none
+                if matches!(
+                    params.sub_command,
+                    self::data_formats::ClientPinSubCommand::GetPinUvAuthTokenUsingUvWithPermissions
+                ) && params.permissions.unwrap_or(0) & !0x03 != 0
+                    && env.builtin_uv()
+                {
+                    #[cfg(feature = "xous")]
+                    check_user_presence(
+                        env,
+                        channel,
+                        Some(String::from("Passkeys\nLet the computer manage them?")),
+                    )?;
+                    #[cfg(not(feature = "xous"))]
+                    check_user_presence(env, channel)?;
+                }
                 self.client_pin.process_command(env, params, now)
             }
             Command::AuthenticatorReset => self.process_reset(env, channel),
@@ -713,7 +731,8 @@ impl CtapState {
                 check_user_presence(env, channel, Some(
                     t!("vault2.fido.pin_uv_auth", locales::LANG).to_owned(),
                 ))?;
-                if storage::pin_hash(env)?.is_none() {
+                // maki: built-in UV counts as set up
+                if storage::pin_hash(env)?.is_none() && !env.builtin_uv() {
                     return Err(Ctap2StatusCode::CTAP2_ERR_PIN_NOT_SET);
                 } else {
                     return Err(Ctap2StatusCode::CTAP2_ERR_PIN_INVALID);
@@ -792,11 +811,15 @@ impl CtapState {
         // MakeCredential always requires user presence.
         // User verification depends on the PIN auth inputs, which are checked here.
         // The ED flag is added later, if applicable.
-        let has_uv = pin_uv_auth_param.is_some();
+        // maki: or the uv option, by built-in UV (maki's PIN); the press this always asks for, below,
+        // completes it
+        let builtin_option = pin_uv_auth_param.is_none() && options.uv && env.builtin_uv();
+        let has_uv = pin_uv_auth_param.is_some() || builtin_option;
         let mut flags = match pin_uv_auth_param {
             Some(pin_uv_auth_param) => {
                 // This case is not mentioned in CTAP2.1, so we keep 2.0 logic.
-                if storage::pin_hash(env)?.is_none() {
+                // maki: unless the token is by built-in UV, which needs no FIDO2 PIN
+                if storage::pin_hash(env)?.is_none() && !self.client_pin.has_builtin_uv_token() {
                     return Err(Ctap2StatusCode::CTAP2_ERR_PIN_NOT_SET);
                 }
                 self.client_pin.verify_pin_uv_auth_token(
@@ -813,6 +836,7 @@ impl CtapState {
                 self.client_pin.ensure_rp_id_permission(&rp_id)?;
                 UV_FLAG
             }
+            None if builtin_option => UV_FLAG,
             None => {
                 if options.uv {
                     return Err(Ctap2StatusCode::CTAP2_ERR_INVALID_OPTION);
@@ -1166,11 +1190,16 @@ impl CtapState {
 
         // The user verification bit depends on the existance of PIN auth, since we do
         // not support internal UV. User presence is requested as an option.
-        let has_uv = pin_uv_auth_param.is_some();
+        // maki: or on built-in UV (maki's PIN), by token or the uv option, which verifies only
+        // alongside a press on maki in this same request (see below)
+        let builtin_token = pin_uv_auth_param.is_some() && self.client_pin.has_builtin_uv_token();
+        let builtin_option = pin_uv_auth_param.is_none() && options.uv && env.builtin_uv();
+        let mut has_uv = pin_uv_auth_param.is_some() || builtin_option;
         let mut flags = match pin_uv_auth_param {
             Some(pin_uv_auth_param) => {
                 // This case is not mentioned in CTAP2.1, so we keep 2.0 logic.
-                if storage::pin_hash(env)?.is_none() {
+                // maki: unless the token is by built-in UV, which needs no FIDO2 PIN
+                if storage::pin_hash(env)?.is_none() && !self.client_pin.has_builtin_uv_token() {
                     return Err(Ctap2StatusCode::CTAP2_ERR_PIN_NOT_SET);
                 }
                 self.client_pin.verify_pin_uv_auth_token(
@@ -1187,6 +1216,7 @@ impl CtapState {
                 self.client_pin.ensure_rp_id_permission(&rp_id)?;
                 UV_FLAG
             }
+            None if builtin_option => UV_FLAG,
             None => {
                 if options.uv {
                     return Err(Ctap2StatusCode::CTAP2_ERR_INVALID_OPTION);
@@ -1197,6 +1227,12 @@ impl CtapState {
                 0x00
             }
         };
+        // maki: without a press (up false) built-in UV verifies nothing, so the assertion is made
+        // unverified: nothing on the computer gets a verified assertion from maki unasked
+        if !options.up && (builtin_token || builtin_option) {
+            has_uv = false;
+            flags &= !UV_FLAG;
+        }
         if options.up {
             flags |= UP_FLAG;
         }
@@ -1309,6 +1345,10 @@ impl CtapState {
         let mut options = vec![];
         if env.customization().enterprise_attestation_mode().is_some() {
             options.push((String::from("ep"), storage::enterprise_attestation(env)?));
+        }
+        // maki: built-in user verification, maki's own PIN (see `Env::builtin_uv`)
+        if env.builtin_uv() {
+            options.push((String::from("uv"), true));
         }
         options.append(&mut vec![
             (String::from("rk"), true),

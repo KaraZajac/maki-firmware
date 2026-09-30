@@ -906,6 +906,12 @@ impl Env for XousEnv {
 
     fn fixed_cred_random(&mut self) -> Option<[u8; 64]> { self.phrase_keys.as_ref().map(|k| k.cred_random) }
 
+    /// maki verifies its owner with its own PIN, the one entered on maki to unlock it: nothing
+    /// reaches the authenticator while maki is locked (see main.rs), and the phrase keys are there
+    /// only once it has been unlocked. The press each operation asks for completes it, so there's
+    /// no FIDO2 PIN to set or type. Unplugging maki locks it.
+    fn builtin_uv(&mut self) -> bool { self.phrase_keys.is_some() }
+
     fn main_hid_connection(&mut self) -> &mut Self::HidConnection { &mut self.main_connection }
 
     #[cfg(feature = "vendor_hid")]

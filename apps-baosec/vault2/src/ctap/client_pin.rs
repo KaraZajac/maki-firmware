@@ -112,6 +112,8 @@ pub struct ClientPin {
     pin_protocol_v2: PinProtocol,
     consecutive_pin_mismatches: u8,
     pin_uv_auth_token_state: PinUvAuthTokenState,
+    /// maki: whether the token out is by built-in UV (maki's own PIN) rather than a FIDO2 PIN
+    builtin_uv_token: bool,
 }
 
 impl ClientPin {
@@ -121,6 +123,7 @@ impl ClientPin {
             pin_protocol_v2: PinProtocol::new(rng),
             consecutive_pin_mismatches: 0,
             pin_uv_auth_token_state: PinUvAuthTokenState::new(),
+            builtin_uv_token: false,
         }
     }
 
@@ -207,6 +210,7 @@ impl ClientPin {
             pin_uv_auth_token: None,
             retries: Some(storage::pin_retries(env)? as u64),
             power_cycle_state: Some(self.consecutive_pin_mismatches >= 3),
+            uv_retries: None,
         })
     }
 
@@ -223,6 +227,7 @@ impl ClientPin {
             pin_uv_auth_token: None,
             retries: None,
             power_cycle_state: None,
+            uv_retries: None,
         })
     }
 
@@ -330,6 +335,7 @@ impl ClientPin {
         self.pin_uv_auth_token_state
             .begin_using_pin_uv_auth_token(now);
         self.pin_uv_auth_token_state.set_default_permissions();
+        self.builtin_uv_token = false;
         let pin_uv_auth_token = shared_secret.encrypt(
             env.rng(),
             self.get_pin_protocol(pin_uv_auth_protocol)
@@ -341,23 +347,78 @@ impl ClientPin {
             pin_uv_auth_token: Some(pin_uv_auth_token),
             retries: None,
             power_cycle_state: None,
+            uv_retries: None,
         })
     }
 
+    /// maki: a pinUvAuthToken by built-in user verification, maki's own PIN (see
+    /// `Env::builtin_uv`). The token alone makes nothing verified: making a credential or an
+    /// assertion still asks for a press on maki, and only with it is the result verified (see
+    /// `has_builtin_uv_token`); a token for more than those (managing passkeys, settings, large
+    /// blobs) is asked for on maki before this runs, as those don't ask again.
     fn process_get_pin_uv_auth_token_using_uv_with_permissions(
-        &self,
-        // If you want to support local user verification, implement this function.
-        // Lacking a fingerprint reader, this subcommand is currently unsupported.
-        _client_pin_params: AuthenticatorClientPinParameters,
+        &mut self,
+        env: &mut impl Env,
+        client_pin_params: AuthenticatorClientPinParameters,
+        now: Instant,
     ) -> Result<AuthenticatorClientPinResponse, Ctap2StatusCode> {
-        // User verification is only supported through PIN currently.
-        Err(Ctap2StatusCode::CTAP2_ERR_INVALID_SUBCOMMAND)
+        if !env.builtin_uv() {
+            return Err(Ctap2StatusCode::CTAP2_ERR_INVALID_SUBCOMMAND);
+        }
+        let AuthenticatorClientPinParameters {
+            pin_uv_auth_protocol,
+            key_agreement,
+            permissions,
+            permissions_rp_id,
+            ..
+        } = client_pin_params;
+        let key_agreement = ok_or_missing(key_agreement)?;
+        let permissions = ok_or_missing(permissions)?;
+        if permissions == 0 {
+            return Err(Ctap2StatusCode::CTAP1_ERR_INVALID_PARAMETER);
+        }
+        // making credentials and assertions needs the RP the token is for
+        if permissions & 0x03 != 0 && permissions_rp_id.is_none() {
+            return Err(Ctap2StatusCode::CTAP1_ERR_INVALID_PARAMETER);
+        }
+        let shared_secret = self.get_shared_secret(pin_uv_auth_protocol, key_agreement)?;
+        self.pin_protocol_v1.reset_pin_uv_auth_token(env.rng());
+        self.pin_protocol_v2.reset_pin_uv_auth_token(env.rng());
+        self.pin_uv_auth_token_state.begin_using_pin_uv_auth_token(now);
+        self.pin_uv_auth_token_state.set_permissions(permissions);
+        self.pin_uv_auth_token_state.set_permissions_rp_id(permissions_rp_id);
+        self.builtin_uv_token = true;
+        let pin_uv_auth_token = shared_secret.encrypt(
+            env.rng(),
+            self.get_pin_protocol(pin_uv_auth_protocol).get_pin_uv_auth_token(),
+        )?;
+        Ok(AuthenticatorClientPinResponse {
+            key_agreement: None,
+            pin_uv_auth_token: Some(pin_uv_auth_token),
+            retries: None,
+            power_cycle_state: None,
+            uv_retries: None,
+        })
     }
 
-    fn process_get_uv_retries(&self) -> Result<AuthenticatorClientPinResponse, Ctap2StatusCode> {
-        // User verification is only supported through PIN currently.
-        Err(Ctap2StatusCode::CTAP2_ERR_INVALID_SUBCOMMAND)
+    /// maki: built-in UV's tries. maki's PIN is tried on maki when it's unlocked, not here, so
+    /// there's nothing to count down: the most there is.
+    fn process_get_uv_retries(&self, env: &mut impl Env) -> Result<AuthenticatorClientPinResponse, Ctap2StatusCode> {
+        if !env.builtin_uv() {
+            return Err(Ctap2StatusCode::CTAP2_ERR_INVALID_SUBCOMMAND);
+        }
+        Ok(AuthenticatorClientPinResponse {
+            key_agreement: None,
+            pin_uv_auth_token: None,
+            retries: None,
+            power_cycle_state: None,
+            uv_retries: Some(8),
+        })
     }
+
+    /// maki: whether the token out is by built-in UV, which verifies only alongside a press on
+    /// maki in the same operation.
+    pub fn has_builtin_uv_token(&self) -> bool { self.builtin_uv_token }
 
     fn process_get_pin_uv_auth_token_using_pin_with_permissions(
         &mut self,
@@ -416,9 +477,9 @@ impl ClientPin {
                 Some(self.process_get_pin_token(env, client_pin_params, now)?)
             }
             ClientPinSubCommand::GetPinUvAuthTokenUsingUvWithPermissions => Some(
-                self.process_get_pin_uv_auth_token_using_uv_with_permissions(client_pin_params)?,
+                self.process_get_pin_uv_auth_token_using_uv_with_permissions(env, client_pin_params, now)?,
             ),
-            ClientPinSubCommand::GetUvRetries => Some(self.process_get_uv_retries()?),
+            ClientPinSubCommand::GetUvRetries => Some(self.process_get_uv_retries(env)?),
             ClientPinSubCommand::GetPinUvAuthTokenUsingPinWithPermissions => Some(
                 self.process_get_pin_uv_auth_token_using_pin_with_permissions(
                     env,
@@ -824,6 +885,7 @@ mod test {
             pin_uv_auth_token: None,
             retries: Some(storage::pin_retries(&mut env).unwrap() as u64),
             power_cycle_state: Some(false),
+            uv_retries: None,
         });
         assert_eq!(
             client_pin.process_command(&mut env, params.clone(), Instant::new(0)),
@@ -836,6 +898,7 @@ mod test {
             pin_uv_auth_token: None,
             retries: Some(storage::pin_retries(&mut env).unwrap() as u64),
             power_cycle_state: Some(true),
+            uv_retries: None,
         });
         assert_eq!(
             client_pin.process_command(&mut env, params, Instant::new(0)),
@@ -864,6 +927,7 @@ mod test {
             pin_uv_auth_token: None,
             retries: None,
             power_cycle_state: None,
+            uv_retries: None,
         });
         assert_eq!(
             client_pin.process_command(&mut env, params, Instant::new(0)),
