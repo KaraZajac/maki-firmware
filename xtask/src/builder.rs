@@ -1528,6 +1528,35 @@ impl Builder {
         if !status.success() {
             return Err("cargo build failed".into());
         }
+
+        // maki: the swap image is flashed to the reserved swap region on external flash, immediately
+        // below the PDDB (user storage). If it outgrows that region it would silently overwrite the
+        // PDDB, so fail the build if it's over and warn as it gets close. Only the baosec layout is
+        // fixed this way; other boards size their swap differently. `swap_file` is the swap.img path
+        // built above when a swap region was requested.
+        if self.swap.is_some() && self.board == "board-baosec" {
+            let reserved = bao1x_api::offsets::baosec::SWAP_FLASH_RESERVED_LEN;
+            if let Ok(meta) = std::fs::metadata(&swap_file) {
+                let used = meta.len() as usize;
+                let pct = used * 100 / reserved;
+                if used > reserved {
+                    return Err(format!(
+                        "swap image is {used} bytes, over the {reserved}-byte reserved swap region \
+                         ({pct}%): it would overwrite the PDDB (user storage). Move swap-resident \
+                         services (~swap / --inis) to flash (~flash / --inif), or trim built-in code."
+                    )
+                    .into());
+                } else if pct >= 85 {
+                    println!(
+                        "WARNING: swap image is {used} bytes, {pct}% of the {reserved}-byte reserved \
+                         swap region — approaching the limit; more swap-resident code would overflow \
+                         into the PDDB (user storage)."
+                    );
+                } else {
+                    println!("swap image: {used} bytes, {pct}% of the {reserved}-byte reserved region");
+                }
+            }
+        }
         Ok(project_root().join(output_file))
     }
 
