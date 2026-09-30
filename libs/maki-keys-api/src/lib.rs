@@ -17,6 +17,9 @@ pub const MAX_PIN: usize = 12;
 /// Wrong PINs in a row before the secrets are wiped.
 pub const MAX_TRIES: u32 = 5;
 
+/// How the tries are counted: in the chip, where a copy of the flash put back can't undo them.
+pub mod tries;
+
 #[derive(Debug, num_derive::FromPrimitive, num_derive::ToPrimitive)]
 pub enum KeysOp {
     /// Blocking scalar: returns (`State`, tries left).

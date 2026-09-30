@@ -5402,6 +5402,7 @@ dependencies = [
  "aes-gcm-siv",
  "getrandom 0.2.12",
  "hmac 0.12.1",
+ "keystore",
  "log",
  "maki-app-host-api",
  "maki-fido",

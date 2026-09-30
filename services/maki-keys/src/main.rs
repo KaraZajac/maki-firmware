@@ -3,8 +3,10 @@
 //! In the system basis (open whenever the PDDB is mounted), dictionary `maki.keys`:
 //!   - `lock`: which secret basis is maki's, the salt and round count for the PIN's key derivation, and the
 //!     basis key wrapped under that derived key (AES-GCM-SIV);
-//!   - `tries`: wrong PINs since the last right one, written before each try is checked, so pulling the plug
-//!     mid-check doesn't give a free guess.
+//!   - `tries.chip`: which of the chip's one-way counters counts the PIN tries, and its value at the last
+//!     right PIN. The count itself is in the chip, bumped before each try is checked, so neither pulling the
+//!     plug mid-check nor putting back a copy of the flash gives a guess back (`maki_keys_api::tries`).
+//!     (`tries`, the count kept here before, is carried onto the chip once.)
 //!
 //! The secret basis gets a fresh random name at each setup: after a wipe, the old one can't be
 //! opened (its key is gone), and its name mustn't collide with the new one.
@@ -28,7 +30,10 @@ const KEY_LOCK: &str = "lock";
 /// A PIN change writes its record here first, then over `lock`: cut the power between the two
 /// and either PIN still opens maki (whichever does becomes the only record).
 const KEY_LOCK_NEXT: &str = "lock.next";
+/// The count of PIN tries firmware before the chip's counters kept (carried onto the chip once).
 const KEY_TRIES: &str = "tries";
+/// Which chip counter counts the tries, and its value at the last right PIN (`tries::Base`).
+const KEY_TRIES_BASE: &str = "tries.chip";
 /// This maki's name (`maki_proto::names`): picked the first time it starts, kept through wipes,
 /// which forget only the lock.
 const KEY_NAME: &str = "name";
@@ -466,14 +471,6 @@ impl Store {
         self.pddb.sync()
     }
 
-    fn tries(&self) -> u32 {
-        self.read(KEY_TRIES)
-            .and_then(|b| b.get(..4).map(|s| u32::from_le_bytes(s.try_into().unwrap())))
-            .unwrap_or(0)
-    }
-
-    fn set_tries(&self, n: u32) -> std::io::Result<()> { self.write(KEY_TRIES, &n.to_le_bytes()) }
-
     /// This maki's name: the one it picked, or a new pick the first time.
     fn name(&self) -> String {
         if let Some(name) = self.read(KEY_NAME).and_then(|b| String::from_utf8(b).ok()) {
@@ -497,6 +494,49 @@ impl Store {
         self.pddb.delete_key(DICT, KEY_TRIES, Some(PDDB_DEFAULT_SYSTEM_BASIS)).ok();
         self.pddb.sync().ok();
     }
+}
+
+/// The PIN tries: counted on the chip's one-way counters, with where they stood at the last right
+/// PIN kept in the flash (`maki_keys_api::tries`).
+struct PinTries<'a> {
+    store: &'a Store,
+    chip: &'a keystore::Keystore,
+}
+
+impl tries::Counters for PinTries<'_> {
+    fn get(&self, counter: usize) -> Option<u32> { self.chip.get_owc(counter).ok() }
+
+    fn bump(&self, counter: usize) -> bool {
+        // safety: the counter is one of maki's PIN counters, in the applications' range, as
+        // `inc_owc` asks
+        unsafe { self.chip.inc_owc(counter) }.is_ok()
+    }
+
+    fn base(&self) -> Option<tries::Base> {
+        self.store.read(KEY_TRIES_BASE).and_then(|b| tries::Base::from_bytes(&b))
+    }
+
+    fn set_base(&self, base: tries::Base) -> bool {
+        self.store.write(KEY_TRIES_BASE, &base.to_bytes()).is_ok()
+    }
+
+    fn old_tries(&self) -> u32 {
+        self.store
+            .read(KEY_TRIES)
+            .and_then(|b| b.get(..4).map(|s| u32::from_le_bytes(s.try_into().unwrap())))
+            .unwrap_or(0)
+    }
+
+    fn forget_old_tries(&self) {
+        self.store.pddb.delete_key(DICT, KEY_TRIES, Some(PDDB_DEFAULT_SYSTEM_BASIS)).ok();
+        self.store.pddb.sync().ok();
+    }
+}
+
+/// Tries since the last right PIN, for showing how many are left (all of them if the chip
+/// can't be asked: then no PIN is checked anyway).
+fn tries_so_far(store: &Store, chip: &keystore::Keystore) -> u32 {
+    tries::tries(&PinTries { store, chip }).unwrap_or(0)
 }
 
 /// The basis key, if `pin` opens `lock`.
@@ -526,7 +566,7 @@ fn seal_lock(basis: &str, basis_key: &[u8; 32], pin: &str) -> Result<Lock, u32> 
     Ok(Lock { basis: basis.to_string(), rounds: ROUNDS, salt, nonce, wrapped })
 }
 
-fn set_pin(store: &Store, pin: &str) -> Result<(), u32> {
+fn set_pin(store: &Store, chip: &keystore::Keystore, pin: &str) -> Result<(), u32> {
     if !pin_is_valid(pin) {
         return Err(RESULT_BAD_PIN);
     }
@@ -545,26 +585,43 @@ fn set_pin(store: &Store, pin: &str) -> Result<(), u32> {
         return Err(RESULT_FAILED);
     }
     store.keep_lock(&lock).map_err(|_| RESULT_FAILED)?;
-    store.set_tries(0).ok();
+    if !tries::forgive(&PinTries { store, chip }) {
+        log::error!("couldn't start counting the PIN tries");
+    }
     log::info!("PIN set; secret basis {} made and open", lock.basis);
     Ok(())
 }
 
 /// Count a try, then see whether `pin` opens maki: the basis key, and the record it opened.
 /// Err((result, tries left)): wrong, or wiped on the last try.
-fn try_pin(store: &Store, pin: &str) -> Result<([u8; 32], Lock), (u32, u32)> {
+fn try_pin(store: &Store, chip: &keystore::Keystore, pin: &str) -> Result<([u8; 32], Lock), (u32, u32)> {
     let records: Vec<Lock> = [store.primary_lock(), store.next_lock()].into_iter().flatten().collect();
     if records.is_empty() {
         return Err((RESULT_NOT_NOW, 0));
     }
-    // counted before it's checked
-    let tries = store.tries() + 1;
-    if store.set_tries(tries).is_err() {
-        return Err((RESULT_FAILED, 0));
-    }
+    // counted on the chip before it's checked: neither pulling the plug mid-check nor putting
+    // back a copy of the flash gives a try back
+    let counted = PinTries { store, chip };
+    let tries = match tries::count_try(&counted) {
+        Some(tries::Try::Check(n)) => {
+            log::info!("PIN try {n} of {MAX_TRIES}, counted on the chip");
+            n
+        }
+        Some(tries::Try::UsedUp) => {
+            log::warn!("the PIN tries were used up before this one: wiping, without checking it");
+            store.wipe();
+            return Err((RESULT_WIPED, 0));
+        }
+        None => {
+            log::error!("couldn't count the try on the chip: not checking it");
+            return Err((RESULT_FAILED, 0));
+        }
+    };
     for lock in records {
         if let Some(key) = open_lock(&lock, pin) {
-            store.set_tries(0).ok();
+            if !tries::forgive(&counted) {
+                log::error!("couldn't start the PIN tries over");
+            }
             return Ok((key, lock));
         }
     }
@@ -577,8 +634,8 @@ fn try_pin(store: &Store, pin: &str) -> Result<([u8; 32], Lock), (u32, u32)> {
 }
 
 /// Ok(()) unlocked; Err((result, tries left)).
-fn unlock(store: &Store, pin: &str) -> Result<(), (u32, u32)> {
-    let (mut key, lock) = try_pin(store, pin)?;
+fn unlock(store: &Store, chip: &keystore::Keystore, pin: &str) -> Result<(), (u32, u32)> {
+    let (mut key, lock) = try_pin(store, chip, pin)?;
     let result = store.pddb.unlock_basis(&lock.basis, &key, Some(BasisRetentionPolicy::Persist));
     key.zeroize();
     match result {
@@ -598,11 +655,11 @@ fn unlock(store: &Store, pin: &str) -> Result<(), (u32, u32)> {
 }
 
 /// Ok(()) changed; Err((result, tries left)).
-fn change_pin(store: &Store, current: &str, new: &str) -> Result<(), (u32, u32)> {
+fn change_pin(store: &Store, chip: &keystore::Keystore, current: &str, new: &str) -> Result<(), (u32, u32)> {
     if !pin_is_valid(new) {
-        return Err((RESULT_BAD_PIN, MAX_TRIES.saturating_sub(store.tries())));
+        return Err((RESULT_BAD_PIN, MAX_TRIES.saturating_sub(tries_so_far(store, chip))));
     }
-    let (mut key, lock) = try_pin(store, current)?;
+    let (mut key, lock) = try_pin(store, chip, current)?;
     let next = seal_lock(&lock.basis, &key, new);
     key.zeroize();
     let next = next.map_err(|code| (code, MAX_TRIES))?;
@@ -639,6 +696,10 @@ fn main() -> ! {
 
     let xns = xous_names::XousNames::new().unwrap();
     let sid = xns.register_name(SERVER_NAME_KEYS, None).expect("can't register server");
+    // the chip's one-way counters count the PIN tries. The keystore takes a handful of
+    // connections, all made by maki's services as they start, before any app could make one:
+    // this is one of them
+    let chip = keystore::Keystore::new(&xns);
     let store = Store { pddb: Pddb::new() };
     store.pddb.is_mounted_blocking();
     // this maki's name, once it's been read (or picked)
@@ -699,7 +760,7 @@ fn main() -> ! {
                 let tries_left = if state == State::Unset {
                     MAX_TRIES
                 } else {
-                    MAX_TRIES.saturating_sub(*tries_known.get_or_insert_with(|| store.tries()))
+                    MAX_TRIES.saturating_sub(*tries_known.get_or_insert_with(|| tries_so_far(&store, &chip)))
                 };
                 let has_phrase = state == State::Unlocked && phrase_made(&mut phrase_known);
                 let rest = tries_left as usize
@@ -1060,14 +1121,14 @@ fn main() -> ! {
                 let mut buffer = unsafe { Buffer::from_memory_message_mut(mem) };
                 let Ok(mut req) = buffer.to_original::<PinRequest, _>() else { continue };
                 let (result, tries_left) = match (op, state) {
-                    (KeysOp::SetPin, State::Unset) => match set_pin(&store, &req.pin) {
+                    (KeysOp::SetPin, State::Unset) => match set_pin(&store, &chip, &req.pin) {
                         Ok(()) => {
                             state = State::Unlocked;
                             (RESULT_OK, MAX_TRIES)
                         }
                         Err(code) => (code, MAX_TRIES),
                     },
-                    (KeysOp::Unlock, State::Locked) => match unlock(&store, &req.pin) {
+                    (KeysOp::Unlock, State::Locked) => match unlock(&store, &chip, &req.pin) {
                         Ok(()) => {
                             state = State::Unlocked;
                             (RESULT_OK, MAX_TRIES)
@@ -1094,7 +1155,7 @@ fn main() -> ! {
                     (RESULT_NOT_NOW, 0)
                 } else {
                     let basis = store.lock().map(|l| l.basis);
-                    match change_pin(&store, &req.pin, &req.new_pin) {
+                    match change_pin(&store, &chip, &req.pin, &req.new_pin) {
                         Ok(()) => (RESULT_OK, MAX_TRIES),
                         Err((RESULT_WIPED, _)) => {
                             // the key is gone: close what's open, and start over
