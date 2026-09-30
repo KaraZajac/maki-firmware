@@ -11,17 +11,18 @@ use bitcoin::psbt::Psbt as BPsbt;
 use bitcoin::secp256k1::{self, Message, Secp256k1};
 use bitcoin::sighash::{Prevouts, SighashCache, TapSighashType};
 use bitcoin::{
-    absolute, transaction, Address, Amount, CompressedPublicKey, OutPoint, ScriptBuf, Sequence, Transaction, TxIn, TxOut,
-    Txid, Witness,
+    Address, Amount, CompressedPublicKey, OutPoint, ScriptBuf, Sequence, Transaction, TxIn, TxOut, Txid,
+    Witness, absolute, transaction,
 };
+use maki_btc::bip32::HARDENED;
 use maki_btc::psbt::Psbt;
 use maki_btc::wallet::{self, Error, Kind};
-use maki_btc::bip32::HARDENED;
 use maki_btc::{Account, Network};
 use maki_hd::seed::SeedKeys;
 use maki_hd::{Keys, Public, Tweak};
 
-const ABANDON: &str = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
+const ABANDON: &str =
+    "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
 
 fn seed() -> [u8; 64] {
     let words: Vec<&str> = ABANDON.split(' ').collect();
@@ -36,16 +37,30 @@ struct Aux(SeedKeys, [u8; 32]);
 
 impl Keys for Aux {
     fn fingerprint(&self) -> Result<[u8; 4], maki_hd::Error> { self.0.fingerprint() }
+
     fn public(&self, path: &[u32]) -> Result<Public, maki_hd::Error> { self.0.public(path) }
+
     fn uncompressed(&self, path: &[u32]) -> Result<[u8; 65], maki_hd::Error> { self.0.uncompressed(path) }
+
     fn taproot_output(&self, path: &[u32]) -> Result<[u8; 32], maki_hd::Error> { self.0.taproot_output(path) }
-    fn sign_ecdsa(&self, path: &[u32], digest: &[u8; 32]) -> Result<([u8; 64], u8), maki_hd::Error> { self.0.sign_ecdsa(path, digest) }
-    fn sign_schnorr(&self, path: &[u32], digest: &[u8; 32], tweak: Tweak) -> Result<[u8; 64], maki_hd::Error> {
+
+    fn sign_ecdsa(&self, path: &[u32], digest: &[u8; 32]) -> Result<([u8; 64], u8), maki_hd::Error> {
+        self.0.sign_ecdsa(path, digest)
+    }
+
+    fn sign_schnorr(
+        &self,
+        path: &[u32],
+        digest: &[u8; 32],
+        tweak: Tweak,
+    ) -> Result<[u8; 64], maki_hd::Error> {
         self.0.sign_schnorr_with(path, digest, tweak, &self.1)
     }
 }
 
-fn taproot(network: Network) -> Account<'static> { Account::new(keys(&seed()), network, Kind::Taproot).unwrap() }
+fn taproot(network: Network) -> Account<'static> {
+    Account::new(keys(&seed()), network, Kind::Taproot).unwrap()
+}
 
 #[test]
 fn bip86_test_vectors() {
@@ -54,9 +69,18 @@ fn bip86_test_vectors() {
         account.zpub(),
         "xpub6BgBgsespWvERF3LHQu6CnqdvfEvtMcQjYrcRzx53QJjSxarj2afYWcLteoGVky7D3UKDP9QyrLprQ3VCECoY49yfdDEHGCtMMj92pReUsQ"
     );
-    assert_eq!(account.address(false, 0).unwrap(), "bc1p5cyxnuxmeuwuvkwfem96lqzszd02n6xdcjrs20cac6yqjjwudpxqkedrcr");
-    assert_eq!(account.address(false, 1).unwrap(), "bc1p4qhjn9zdvkux4e44uhx8tc55attvtyu358kutcqkudyccelu0was9fqzwh");
-    assert_eq!(account.address(true, 0).unwrap(), "bc1p3qkhfews2uk44qtvauqyr2ttdsw7svhkl9nkm9s9c3x4ax5h60wqwruhk7");
+    assert_eq!(
+        account.address(false, 0).unwrap(),
+        "bc1p5cyxnuxmeuwuvkwfem96lqzszd02n6xdcjrs20cac6yqjjwudpxqkedrcr"
+    );
+    assert_eq!(
+        account.address(false, 1).unwrap(),
+        "bc1p4qhjn9zdvkux4e44uhx8tc55attvtyu358kutcqkudyccelu0was9fqzwh"
+    );
+    assert_eq!(
+        account.address(true, 0).unwrap(),
+        "bc1p3qkhfews2uk44qtvauqyr2ttdsw7svhkl9nkm9s9c3x4ax5h60wqwruhk7"
+    );
     // the internal and output keys BIP86 gives for the first address
     let path = [86 | HARDENED, HARDENED, HARDENED, 0, 0];
     let k = keys(&seed());
@@ -64,10 +88,15 @@ fn bip86_test_vectors() {
         maki_btc::taproot::x_only(&k.public(&path).unwrap().key).to_vec(),
         hex("cc8a4bc64d897bddc5fbc2f670f7a8ba0b386779106cf1223c6fc5d7cd6fc115")
     );
-    assert_eq!(k.taproot_output(&path).unwrap().to_vec(), hex("a60869f0dbcf1dc659c9cecbaf8050135ea9e8cdc487053f1dc6880949dc684c"));
+    assert_eq!(
+        k.taproot_output(&path).unwrap().to_vec(),
+        hex("a60869f0dbcf1dc659c9cecbaf8050135ea9e8cdc487053f1dc6880949dc684c")
+    );
 }
 
-fn hex(s: &str) -> Vec<u8> { (0..s.len()).step_by(2).map(|i| u8::from_str_radix(&s[i..i + 2], 16).unwrap()).collect() }
+fn hex(s: &str) -> Vec<u8> {
+    (0..s.len()).step_by(2).map(|i| u8::from_str_radix(&s[i..i + 2], 16).unwrap()).collect()
+}
 
 #[test]
 fn addresses_and_the_descriptor_agree_with_rust_bitcoin_and_miniscript() {
@@ -80,10 +109,19 @@ fn addresses_and_the_descriptor_agree_with_rust_bitcoin_and_miniscript() {
         let account = taproot(network);
         let master = BXpriv::new_master(kind, &seed()).unwrap();
         for (change, index) in [(false, 0), (false, 7), (true, 0), (true, 2)] {
-            let path = DerivationPath::from_str(&format!("m/86'/{}'/0'/{}/{}", network.coin_type(), change as u32, index)).unwrap();
+            let path = DerivationPath::from_str(&format!(
+                "m/86'/{}'/0'/{}/{}",
+                network.coin_type(),
+                change as u32,
+                index
+            ))
+            .unwrap();
             let key = master.derive_priv(&secp, &path).unwrap();
             let (internal, _) = key.private_key.public_key(&secp).x_only_public_key();
-            assert_eq!(account.address(change, index).unwrap(), Address::p2tr(&secp, internal, None, btc).to_string());
+            assert_eq!(
+                account.address(change, index).unwrap(),
+                Address::p2tr(&secp, internal, None, btc).to_string()
+            );
         }
         let text = account.descriptor();
         let desc = Descriptor::<DescriptorPublicKey>::from_str(&text).unwrap();
@@ -107,7 +145,9 @@ struct Fixture {
     psbt: BPsbt,
 }
 
-fn tap_path(chain: u32, index: u32) -> DerivationPath { DerivationPath::from_str(&format!("m/86'/0'/0'/{chain}/{index}")).unwrap() }
+fn tap_path(chain: u32, index: u32) -> DerivationPath {
+    DerivationPath::from_str(&format!("m/86'/0'/0'/{chain}/{index}")).unwrap()
+}
 
 fn funding(salt: u8, output: TxOut) -> Transaction {
     Transaction {
@@ -132,10 +172,26 @@ impl Fixture {
             let k = master.derive_priv(&secp, &tap_path(chain, index)).unwrap();
             k.private_key.public_key(&secp).x_only_public_key().0
         };
-        let payee = ScriptBuf::new_p2tr(&secp, XOnlyPublicKey::from_slice(&[0x79; 32]).unwrap_or(tap_key(0, 99)), None);
+        let payee = ScriptBuf::new_p2tr(
+            &secp,
+            XOnlyPublicKey::from_slice(&[0x79; 32]).unwrap_or(tap_key(0, 99)),
+            None,
+        );
         let mut prevs = vec![
-            funding(1, TxOut { value: Amount::from_sat(60_000), script_pubkey: ScriptBuf::new_p2tr(&secp, tap_key(0, 0), None) }),
-            funding(2, TxOut { value: Amount::from_sat(15_000), script_pubkey: ScriptBuf::new_p2tr(&secp, tap_key(0, 3), None) }),
+            funding(
+                1,
+                TxOut {
+                    value: Amount::from_sat(60_000),
+                    script_pubkey: ScriptBuf::new_p2tr(&secp, tap_key(0, 0), None),
+                },
+            ),
+            funding(
+                2,
+                TxOut {
+                    value: Amount::from_sat(15_000),
+                    script_pubkey: ScriptBuf::new_p2tr(&secp, tap_key(0, 3), None),
+                },
+            ),
         ];
         let segwit_path = DerivationPath::from_str("m/84'/0'/0'/0/1").unwrap();
         let segwit_key = master.derive_priv(&secp, &segwit_path).unwrap().private_key.public_key(&secp);
@@ -163,7 +219,10 @@ impl Fixture {
                 .collect(),
             output: vec![
                 TxOut { value: Amount::from_sat(45_000 + fee_in), script_pubkey: payee },
-                TxOut { value: Amount::from_sat(25_000), script_pubkey: ScriptBuf::new_p2tr(&secp, tap_key(1, 0), None) },
+                TxOut {
+                    value: Amount::from_sat(25_000),
+                    script_pubkey: ScriptBuf::new_p2tr(&secp, tap_key(1, 0), None),
+                },
             ],
         };
         let mut psbt = BPsbt::from_unsigned_tx(tx).unwrap();
@@ -181,7 +240,8 @@ impl Fixture {
         let change = tap_key(1, 0);
         psbt.outputs[1].tap_internal_key = Some(change);
         psbt.outputs[1].tap_key_origins.insert(change, (vec![], (fp, tap_path(1, 0))));
-        let accounts = vec![Account::segwit(keys(&seed()), Network::Bitcoin).unwrap(), taproot(Network::Bitcoin)];
+        let accounts =
+            vec![Account::segwit(keys(&seed()), Network::Bitcoin).unwrap(), taproot(Network::Bitcoin)];
         Fixture { secp, master, accounts, psbt }
     }
 
@@ -211,11 +271,18 @@ fn verify(f: &Fixture, signed: &BPsbt) {
     let mut cache = SighashCache::new(tx);
     for (i, input) in signed.inputs.iter().enumerate() {
         let Some(sig) = input.tap_key_sig else { continue };
-        let hash_type = input.sighash_type.map(|t| t.taproot_hash_ty().unwrap()).unwrap_or(TapSighashType::Default);
+        let hash_type =
+            input.sighash_type.map(|t| t.taproot_hash_ty().unwrap()).unwrap_or(TapSighashType::Default);
         assert_eq!(sig.sighash_type, hash_type);
         let sighash = cache.taproot_key_spend_signature_hash(i, &Prevouts::All(&spent), hash_type).unwrap();
         let (output_key, _) = input.tap_internal_key.unwrap().tap_tweak(&f.secp, None);
-        f.secp.verify_schnorr(&sig.signature, &Message::from_digest(sighash.to_byte_array()), &output_key.to_x_only_public_key()).unwrap();
+        f.secp
+            .verify_schnorr(
+                &sig.signature,
+                &Message::from_digest(sighash.to_byte_array()),
+                &output_key.to_x_only_public_key(),
+            )
+            .unwrap();
     }
 }
 
@@ -234,7 +301,10 @@ fn taproot_signatures_match_rust_bitcoins_and_verify() {
     // with randomness, other signatures, just as good
     let mut random = f.ours();
     let aux: &'static Aux = Box::leak(Box::new(Aux(SeedKeys::from_seed(&seed()).unwrap(), [0x5a; 32])));
-    let accounts = vec![Account::segwit(aux, Network::Bitcoin).unwrap(), Account::new(aux, Network::Bitcoin, Kind::Taproot).unwrap()];
+    let accounts = vec![
+        Account::segwit(aux, Network::Bitcoin).unwrap(),
+        Account::new(aux, Network::Bitcoin, Kind::Taproot).unwrap(),
+    ];
     wallet::sign(&mut random, &accounts).unwrap();
     let random = BPsbt::deserialize(&random.serialize()).unwrap();
     assert_ne!(random.inputs[0].tap_key_sig, signed.inputs[0].tap_key_sig);
@@ -259,7 +329,12 @@ fn taproot_signatures_match_rust_bitcoins_and_verify() {
         input.final_script_witness = Some(Witness::p2tr_key_spend(&signed.inputs[i].tap_key_sig.unwrap()));
     }
     let vsize = done.extract_tx().unwrap().vsize() as u64;
-    assert!(review.vbytes >= vsize && review.vbytes <= vsize + 1, "estimated {} for {}", review.vbytes, vsize);
+    assert!(
+        review.vbytes >= vsize && review.vbytes <= vsize + 1,
+        "estimated {} for {}",
+        review.vbytes,
+        vsize
+    );
 }
 
 #[test]

@@ -561,8 +561,11 @@ impl MemoryManager {
         // address chosen above: then another, and the page's record says so.
         #[cfg(all(feature = "swap", baremetal))]
         if !crate::arch::mem::address_available(virt) {
-            virt = match self.find_virtual_address(core::ptr::null_mut(), PAGE_SIZE, xous_kernel::MemoryType::Default)
-            {
+            virt = match self.find_virtual_address(
+                core::ptr::null_mut(),
+                PAGE_SIZE,
+                xous_kernel::MemoryType::Default,
+            ) {
                 Ok(v) => v as usize,
                 Err(e) => {
                     self.release_page(phys as *mut usize, pid).ok();

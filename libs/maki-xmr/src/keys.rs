@@ -95,7 +95,15 @@ impl Keys {
 
     /// Whether output `index` of a transaction with public key `tx_key` pays this account, by
     /// its view tag and then its key; the subaddress it pays is the caller's to say.
-    pub fn owns(&self, tx_key: &EdwardsPoint, index: u64, view_tag: u8, key: &EdwardsPoint, major: u32, minor: u32) -> bool {
+    pub fn owns(
+        &self,
+        tx_key: &EdwardsPoint,
+        index: u64,
+        view_tag: u8,
+        key: &EdwardsPoint,
+        major: u32,
+        minor: u32,
+    ) -> bool {
         let mut shared = sign::derivation(&self.view, tx_key);
         let tagged = sign::view_tag(&shared, index) == view_tag;
         shared.zeroize();
@@ -111,7 +119,13 @@ impl Keys {
     /// An output of this account's, as maki reads it to spend: the amount its commitment hides
     /// and the commitment's mask, from the amount the transaction carries (encrypted), if that
     /// opens `commitment`.
-    pub fn open_output(&self, tx_key: &EdwardsPoint, index: u64, encrypted_amount: &[u8; 8], commitment: &EdwardsPoint) -> Option<(u64, Scalar)> {
+    pub fn open_output(
+        &self,
+        tx_key: &EdwardsPoint,
+        index: u64,
+        encrypted_amount: &[u8; 8],
+        commitment: &EdwardsPoint,
+    ) -> Option<(u64, Scalar)> {
         let mut shared = sign::derivation(&self.view, tx_key);
         let mut scalar = sign::output_scalar(&shared, index);
         shared.zeroize();

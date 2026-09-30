@@ -17,12 +17,12 @@
 //! `6` a piece taken: send the next):
 //! - `F`: the key's fingerprint (20 bytes) and the subkey's ID (8), name or no name.
 //! - `U`, then a user ID: the key's name from now on, once the owner says yes.
-//! - `K`: the key as `gpg --export` gives it: the public key, its name and its certification,
-//!   the subkey and its binding.
-//! - `S`, the whole length and where this piece starts (u32s, little-endian), and the piece: the
-//!   last piece shown and signed, answered with a signature packet.
-//! - `D`, then a public-key encrypted session key packet's body: the session key (its
-//!   algorithm, then the key), once the owner says yes.
+//! - `K`: the key as `gpg --export` gives it: the public key, its name and its certification, the subkey and
+//!   its binding.
+//! - `S`, the whole length and where this piece starts (u32s, little-endian), and the piece: the last piece
+//!   shown and signed, answered with a signature packet.
+//! - `D`, then a public-key encrypted session key packet's body: the session key (its algorithm, then the
+//!   key), once the owner says yes.
 
 use maki_app::*;
 use sha1::Sha1;
@@ -105,11 +105,17 @@ fn fingerprint(body: &[u8]) -> [u8; 20] {
 fn keys() -> Option<Keys> {
     let sign = keys::public_key(SIGN).ok()?;
     let crypt = keys::x25519_public_key(CRYPT).ok()?;
-    let head = |algo: u8, oid: &[u8]| [&[4u8][..], &CREATED.to_be_bytes(), &[algo, oid.len() as u8], oid].concat();
+    let head =
+        |algo: u8, oid: &[u8]| [&[4u8][..], &CREATED.to_be_bytes(), &[algo, oid.len() as u8], oid].concat();
     let primary = [head(EDDSA, ED25519), mpi(&[&[0x40][..], &sign].concat())].concat();
     let subkey = [head(ECDH, CV25519), mpi(&[&[0x40][..], &crypt].concat()), KDF.to_vec()].concat();
     let sub_fpr = fingerprint(&subkey);
-    Some(Keys { fingerprint: fingerprint(&primary), primary, subkey, subkey_id: sub_fpr[12..].try_into().ok()? })
+    Some(Keys {
+        fingerprint: fingerprint(&primary),
+        primary,
+        subkey,
+        subkey_id: sub_fpr[12..].try_into().ok()?,
+    })
 }
 
 /// A key's body, hashed as signatures over it take it.
@@ -259,7 +265,8 @@ fn header<'a>(object: &'a [u8], name: &[u8]) -> Option<&'a [u8]> {
 }
 
 fn shown(bytes: &[u8], most: usize) -> String {
-    let mut s: String = String::from_utf8_lossy(bytes).chars().map(|c| if c.is_control() { '?' } else { c }).collect();
+    let mut s: String =
+        String::from_utf8_lossy(bytes).chars().map(|c| if c.is_control() { '?' } else { c }).collect();
     if s.chars().count() > most {
         s = s.chars().take(most).collect::<String>() + "...";
     }
@@ -268,19 +275,31 @@ fn shown(bytes: &[u8], most: usize) -> String {
 
 /// What the owner is asked, for something signed whole: what it is, from its bytes.
 fn what(head: &[u8], total: u32) -> (String, String) {
-    let person = |line: &[u8]| shown(&line[..line.iter().position(|&b| b == b'<').unwrap_or(line.len())], 40).trim().to_string();
+    let person = |line: &[u8]| {
+        shown(&line[..line.iter().position(|&b| b == b'<').unwrap_or(line.len())], 40).trim().to_string()
+    };
     let subject = || {
         let at = head.windows(2).position(|w| w == b"\n\n").map_or(head.len(), |i| i + 2);
         let message = &head[at..];
         shown(&message[..message.iter().position(|&b| b == b'\n').unwrap_or(message.len())], 64)
     };
     if header(head, b"tree").is_some() {
-        let parents = head.split(|&b| b == b'\n').take_while(|l| !l.is_empty()).filter(|l| l.starts_with(b"parent ")).count();
+        let parents = head
+            .split(|&b| b == b'\n')
+            .take_while(|l| !l.is_empty())
+            .filter(|l| l.starts_with(b"parent "))
+            .count();
         let q = if parents > 1 { "Sign this merge?" } else { "Sign this commit?" };
-        (q.into(), format!("\"{}\" by {}", subject(), header(head, b"author").map(person).unwrap_or_default()))
+        (
+            q.into(),
+            format!("\"{}\" by {}", subject(), header(head, b"author").map(person).unwrap_or_default()),
+        )
     } else if header(head, b"object").is_some() {
         let tag = shown(header(head, b"tag").unwrap_or(b"?"), 40);
-        (format!("Sign tag {tag}?"), format!("\"{}\" by {}", subject(), header(head, b"tagger").map(person).unwrap_or_default()))
+        (
+            format!("Sign tag {tag}?"),
+            format!("\"{}\" by {}", subject(), header(head, b"tagger").map(person).unwrap_or_default()),
+        )
     } else {
         ("Sign with your OpenPGP key?".into(), format!("{total} bytes"))
     }
@@ -343,7 +362,10 @@ impl App {
                 vec![OK]
             }
             Some(b'K') if m.len() == 1 => {
-                let (Some(uid), Some(cert), Some(bind)) = (self.uid.as_ref(), read("cert"), read("bind")) else { return vec![NO_NAME] };
+                let (Some(uid), Some(cert), Some(bind)) = (self.uid.as_ref(), read("cert"), read("bind"))
+                else {
+                    return vec![NO_NAME];
+                };
                 let mut out = vec![OK];
                 out.extend_from_slice(&packet(6, &keys.primary));
                 out.extend_from_slice(&packet(13, uid.as_bytes()));
@@ -359,7 +381,8 @@ impl App {
                     return vec![BAD];
                 }
                 let to = self.uid.clone().unwrap_or_else(|| "your key".into());
-                if let Err(code) = asked("Open a message?", &format!("sent to {}", fit(&to, 110)), "open it") {
+                if let Err(code) = asked("Open a message?", &format!("sent to {}", fit(&to, 110)), "open it")
+                {
                     return vec![code];
                 }
                 match open(&keys, &point_wrapped) {
@@ -376,7 +399,8 @@ impl App {
 
     fn sign_piece(&mut self, keys: &Keys, m: &[u8]) -> Vec<u8> {
         let (Some(total), Some(offset)) = (m.get(..4), m.get(4..8)) else { return vec![BAD] };
-        let (total, offset) = (u32::from_le_bytes(total.try_into().unwrap()), u32::from_le_bytes(offset.try_into().unwrap()));
+        let (total, offset) =
+            (u32::from_le_bytes(total.try_into().unwrap()), u32::from_le_bytes(offset.try_into().unwrap()));
         let piece = &m[8..];
         if offset == 0 {
             if total == 0 || total > MOST {
@@ -437,7 +461,8 @@ impl App {
             let groups: Vec<&str> = row.chunks(4).map(|g| std::str::from_utf8(g).unwrap_or("")).collect();
             screen::text_centred(18 + i as i32 * 15, &groups.join(" "), Style::Mono, Color::Light);
         }
-        let line = if self.note.is_empty() { format!("signed {} times", self.signed) } else { self.note.clone() };
+        let line =
+            if self.note.is_empty() { format!("signed {} times", self.signed) } else { self.note.clone() };
         screen::text_centred(62, &line, Style::Small, Color::Light);
         screen::text_centred(94, "menu: show the key", Style::Small, Color::Light);
         screen::present();
@@ -454,7 +479,13 @@ fn read(key: &str) -> Option<Vec<u8>> {
 fn main() {
     let _ = menu(&["Show the key"]);
     let uid = read("uid").and_then(|b| String::from_utf8(b).ok());
-    let mut app = App { uid, whole: None, signed: storage::get_u32("signed", 0), note: String::new(), showing_key: false };
+    let mut app = App {
+        uid,
+        whole: None,
+        signed: storage::get_u32("signed", 0),
+        note: String::new(),
+        showing_key: false,
+    };
     loop {
         app.draw();
         match wait(None) {

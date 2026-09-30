@@ -23,8 +23,8 @@
 //! maki_app::main!(main);
 //! ```
 //!
-//! The crate is a `cdylib`. Build it with `cargo build --release --target wasm32-unknown-unknown`, then pack and sign
-//! it with `maki pack`, or do both with `maki build`. `maki run` tries it on the computer.
+//! The crate is a `cdylib`. Build it with `cargo build --release --target wasm32-unknown-unknown`, then pack
+//! and sign it with `maki pack`, or do both with `maki build`. `maki run` tries it on the computer.
 //!
 //! Some functions need a permission, which the app's `maki.toml` asks for with a line saying
 //! why, and the owner sees before installing it: `ask` (maki's own ask screen), `keys`
@@ -95,7 +95,14 @@ mod sys {
         #[cfg(feature = "wallet")]
         pub fn wallet_review(tptr: *const u8, tlen: usize, signatures: i32, timeout_s: i32) -> i32;
         #[cfg(feature = "wallet")]
-        pub fn wallet_sign(pptr: *const u32, plen: usize, dptr: *const u8, scheme: i32, out: *mut u8, cap: usize) -> i32;
+        pub fn wallet_sign(
+            pptr: *const u32,
+            plen: usize,
+            dptr: *const u8,
+            scheme: i32,
+            out: *mut u8,
+            cap: usize,
+        ) -> i32;
         #[cfg(feature = "wallet")]
         pub fn wallet_subaddress(pptr: *const u32, plen: usize, major: i32, minor: i32, out: *mut u8) -> i32;
         #[cfg(feature = "wallet")]
@@ -105,9 +112,22 @@ mod sys {
         #[cfg(feature = "wallet")]
         pub fn wallet_monero_key_image(pptr: *const u32, plen: usize, optr: *const u8, out: *mut u8) -> i32;
         #[cfg(feature = "wallet")]
-        pub fn wallet_monero_sign(pptr: *const u32, plen: usize, rptr: *const u8, rlen: usize, out: *mut u8, cap: usize) -> i32;
+        pub fn wallet_monero_sign(
+            pptr: *const u32,
+            plen: usize,
+            rptr: *const u8,
+            rlen: usize,
+            out: *mut u8,
+            cap: usize,
+        ) -> i32;
         #[cfg(feature = "wallet")]
-        pub fn wallet_sign_ed25519(pptr: *const u32, plen: usize, mptr: *const u8, mlen: usize, out: *mut u8) -> i32;
+        pub fn wallet_sign_ed25519(
+            pptr: *const u32,
+            plen: usize,
+            mptr: *const u8,
+            mlen: usize,
+            out: *mut u8,
+        ) -> i32;
     }
 }
 
@@ -197,7 +217,7 @@ fn result(code: i32) -> Result<i32, Error> {
 
 /// Drawing. Nothing shows until `present`.
 pub mod screen {
-    use super::{sys, Color, Style};
+    use super::{Color, Style, sys};
 
     pub fn width() -> i32 { unsafe { sys::screen_width() } }
 
@@ -207,9 +227,13 @@ pub mod screen {
 
     pub fn pixel(x: i32, y: i32, color: Color) { unsafe { sys::pixel(x, y, color as i32) } }
 
-    pub fn line(x0: i32, y0: i32, x1: i32, y1: i32, color: Color) { unsafe { sys::line(x0, y0, x1, y1, color as i32) } }
+    pub fn line(x0: i32, y0: i32, x1: i32, y1: i32, color: Color) {
+        unsafe { sys::line(x0, y0, x1, y1, color as i32) }
+    }
 
-    pub fn rect(x: i32, y: i32, w: i32, h: i32, color: Color) { unsafe { sys::rect(x, y, w, h, color as i32, 0) } }
+    pub fn rect(x: i32, y: i32, w: i32, h: i32, color: Color) {
+        unsafe { sys::rect(x, y, w, h, color as i32, 0) }
+    }
 
     pub fn fill_rect(x: i32, y: i32, w: i32, h: i32, color: Color) {
         unsafe { sys::rect(x, y, w, h, color as i32, 1) }
@@ -220,7 +244,9 @@ pub mod screen {
         unsafe { sys::text(x, y, s.as_ptr(), s.len(), style as i32, color as i32) }
     }
 
-    pub fn text_width(s: &str, style: Style) -> i32 { unsafe { sys::text_width(s.as_ptr(), s.len(), style as i32) } }
+    pub fn text_width(s: &str, style: Style) -> i32 {
+        unsafe { sys::text_width(s.as_ptr(), s.len(), style as i32) }
+    }
 
     /// `s` centred across the screen, its top at `y`.
     pub fn text_centred(y: i32, s: &str, style: Style, color: Color) {
@@ -288,7 +314,7 @@ pub fn menu(items: &[&str]) -> Result<(), Error> {
 /// storage its manifest asked for. Only this app can read it; whether it goes in maki's
 /// backup is the owner's choice.
 pub mod storage {
-    use super::{result, sys, Error};
+    use super::{Error, result, sys};
 
     /// Copies the value into `buf` (as much as fits) and returns its whole length.
     pub fn get(key: &str, buf: &mut [u8]) -> Option<usize> {
@@ -364,7 +390,9 @@ impl<'a> Ask<'a> {
         if text.len() != self.question.len() + self.detail.len() + self.yes.len() + self.no.len() + 3 {
             return Err(Error::TooBig);
         }
-        let code = unsafe { sys::ask(text.as_str().as_ptr(), text.len(), self.timeout_s.min(i32::MAX as u32) as i32) };
+        let code = unsafe {
+            sys::ask(text.as_str().as_ptr(), text.len(), self.timeout_s.min(i32::MAX as u32) as i32)
+        };
         result(code).map(|a| match a {
             0 => Answer::Yes,
             1 => Answer::No,
@@ -445,7 +473,9 @@ impl<'a> AskPages<'a> {
             return Err(Error::TooBig);
         }
         // whole strs, one after another: UTF-8
-        let code = unsafe { sys::ask_review(self.text.as_ptr(), self.len, self.timeout_s.min(i32::MAX as u32) as i32) };
+        let code = unsafe {
+            sys::ask_review(self.text.as_ptr(), self.len, self.timeout_s.min(i32::MAX as u32) as i32)
+        };
         result(code).map(|a| match a {
             0 => Answer::Yes,
             1 => Answer::No,
@@ -461,7 +491,7 @@ impl<'a> AskPages<'a> {
 ///
 /// An app that updates keeps its keys only if it's signed with the same developer key.
 pub mod keys {
-    use super::{result, sys, Error};
+    use super::{Error, result, sys};
 
     /// The 32-byte secret itself, for the app's own cryptography.
     pub fn secret(label: &str) -> Result<[u8; 32], Error> {
@@ -481,7 +511,9 @@ pub mod keys {
     /// An Ed25519 signature of `message` (up to 16 KiB) with the key for `label`.
     pub fn sign(label: &str, message: &[u8]) -> Result<[u8; 64], Error> {
         let mut out = [0u8; 64];
-        let code = unsafe { sys::key_sign(label.as_ptr(), label.len(), message.as_ptr(), message.len(), out.as_mut_ptr()) };
+        let code = unsafe {
+            sys::key_sign(label.as_ptr(), label.len(), message.as_ptr(), message.len(), out.as_mut_ptr())
+        };
         result(code)?;
         Ok(out)
     }
@@ -499,7 +531,8 @@ pub mod keys {
     /// id, say). maki adds fresh randomness from its TRNG, as BIP340 suggests. Host API 2.
     pub fn schnorr_sign(label: &str, message: &[u8; 32]) -> Result<[u8; 64], Error> {
         let mut out = [0u8; 64];
-        let code = unsafe { sys::key_schnorr_sign(label.as_ptr(), label.len(), message.as_ptr(), out.as_mut_ptr()) };
+        let code =
+            unsafe { sys::key_schnorr_sign(label.as_ptr(), label.len(), message.as_ptr(), out.as_mut_ptr()) };
         result(code)?;
         Ok(out)
     }
@@ -518,7 +551,9 @@ pub mod keys {
     /// agreement would be all zeros. Host API 2.
     pub fn x25519_agree(label: &str, peer: &[u8; 32]) -> Result<[u8; 32], Error> {
         let mut out = [0u8; 32];
-        result(unsafe { sys::key_x25519_agree(label.as_ptr(), label.len(), peer.as_ptr(), out.as_mut_ptr()) })?;
+        result(unsafe {
+            sys::key_x25519_agree(label.as_ptr(), label.len(), peer.as_ptr(), out.as_mut_ptr())
+        })?;
         Ok(out)
     }
 }
@@ -526,7 +561,7 @@ pub mod keys {
 /// Typing into the computer as a USB keyboard (the `keyboard` permission), only while the app
 /// is in front, with "typing" in maki's bar meanwhile.
 pub mod keyboard {
-    use super::{result, sys, Error};
+    use super::{Error, result, sys};
 
     /// Types `text`: printable ASCII, newlines and tabs, up to 1024 bytes. `Error::Failed` if
     /// maki isn't plugged into a computer, or the app isn't in front.
@@ -542,7 +577,7 @@ pub mod keyboard {
 /// nothing to do for a while; the owner can still open it meanwhile. Messages and replies are
 /// up to 4096 bytes, and mean whatever the app and the software agree.
 pub mod link {
-    use super::{result, sys, Error};
+    use super::{Error, result, sys};
 
     /// The message, copied into `buf` as far as it fits; its whole length. None if there's
     /// none to read (no `Event::Message`, or it's been answered).
@@ -710,9 +745,9 @@ pub mod wallet {
     use alloc::string::String;
     use alloc::vec::Vec;
 
-    pub use maki_hd::{format_path, parse_path, Public, Tweak, HARDENED};
+    pub use maki_hd::{HARDENED, Public, Tweak, format_path, parse_path};
 
-    use super::{result, sys, Answer, Error};
+    use super::{Answer, Error, result, sys};
 
     const PUBLIC: i32 = maki_hd::op::PUBLIC as i32;
     const UNCOMPRESSED: i32 = maki_hd::op::UNCOMPRESSED as i32;
@@ -769,7 +804,9 @@ pub mod wallet {
     /// with the view key, which it keeps.
     pub fn subaddress(path: &[u32], major: u32, minor: u32) -> Result<([u8; 32], [u8; 32]), Error> {
         let mut out = [0u8; 64];
-        result(unsafe { sys::wallet_subaddress(path.as_ptr(), path.len(), major as i32, minor as i32, out.as_mut_ptr()) })?;
+        result(unsafe {
+            sys::wallet_subaddress(path.as_ptr(), path.len(), major as i32, minor as i32, out.as_mut_ptr())
+        })?;
         Ok((out[..32].try_into().unwrap(), out[32..].try_into().unwrap()))
     }
 
@@ -814,7 +851,9 @@ pub mod wallet {
         output[44..48].copy_from_slice(&minor.to_le_bytes());
         output[48..].copy_from_slice(key);
         let mut out = [0u8; 96];
-        result(unsafe { sys::wallet_monero_key_image(path.as_ptr(), path.len(), output.as_ptr(), out.as_mut_ptr()) })?;
+        result(unsafe {
+            sys::wallet_monero_key_image(path.as_ptr(), path.len(), output.as_ptr(), out.as_mut_ptr())
+        })?;
         Ok((out[..32].try_into().unwrap(), out[32..].try_into().unwrap()))
     }
 
@@ -825,7 +864,14 @@ pub mod wallet {
     pub fn monero_sign(path: &[u32], request: &[u8]) -> Result<Result<Vec<u8>, String>, Error> {
         let mut out = alloc::vec![0u8; request.len() + 8192];
         let n = result(unsafe {
-            sys::wallet_monero_sign(path.as_ptr(), path.len(), request.as_ptr(), request.len(), out.as_mut_ptr(), out.len())
+            sys::wallet_monero_sign(
+                path.as_ptr(),
+                path.len(),
+                request.as_ptr(),
+                request.len(),
+                out.as_mut_ptr(),
+                out.len(),
+            )
         })? as usize;
         out.truncate(n);
         match out.split_first() {
@@ -845,13 +891,23 @@ pub mod wallet {
     /// returned, and one of what the owner's last yes to a review allows.
     pub fn sign_ed25519(path: &[u32], message: &[u8]) -> Result<[u8; 64], Error> {
         let mut out = [0u8; 64];
-        result(unsafe { sys::wallet_sign_ed25519(path.as_ptr(), path.len(), message.as_ptr(), message.len(), out.as_mut_ptr()) })?;
+        result(unsafe {
+            sys::wallet_sign_ed25519(
+                path.as_ptr(),
+                path.len(),
+                message.as_ptr(),
+                message.len(),
+                out.as_mut_ptr(),
+            )
+        })?;
         Ok(out)
     }
 
     fn sign<const N: usize>(path: &[u32], digest: &[u8; 32], scheme: i32) -> Result<[u8; N], Error> {
         let mut out = [0u8; N];
-        let n = result(unsafe { sys::wallet_sign(path.as_ptr(), path.len(), digest.as_ptr(), scheme, out.as_mut_ptr(), N) })?;
+        let n = result(unsafe {
+            sys::wallet_sign(path.as_ptr(), path.len(), digest.as_ptr(), scheme, out.as_mut_ptr(), N)
+        })?;
         if n as usize != N {
             return Err(Error::Failed);
         }
@@ -884,8 +940,11 @@ pub mod wallet {
 
     impl Page {
         pub fn new(heading: &str) -> Page { Page { heading: heading.into(), ..Page::default() } }
+
         pub fn value(self, value: &str) -> Page { Page { value: value.into(), ..self } }
+
         pub fn mono(self, mono: &str) -> Page { Page { mono: mono.into(), ..self } }
+
         pub fn prose(self, prose: &str) -> Page { Page { prose: prose.into(), ..self } }
     }
 
@@ -907,25 +966,38 @@ pub mod wallet {
 
     impl Review {
         /// The question, up to 64 bytes.
-        pub fn new(question: &str) -> Review { Review { question: question.into(), signatures: 1, ..Review::default() } }
+        pub fn new(question: &str) -> Review {
+            Review { question: question.into(), signatures: 1, ..Review::default() }
+        }
+
         /// A line more about it, up to 128 bytes.
         pub fn detail(self, detail: &str) -> Review { Review { detail: detail.into(), ..self } }
+
         /// The answers' labels, up to 16 bytes each ("sign" and "reject" if not given).
-        pub fn answers(self, yes: &str, no: &str) -> Review { Review { yes: yes.into(), no: no.into(), ..self } }
+        pub fn answers(self, yes: &str, no: &str) -> Review {
+            Review { yes: yes.into(), no: no.into(), ..self }
+        }
+
         pub fn page(mut self, page: Page) -> Review {
             self.pages.push(page);
             self
         }
+
         /// How many signatures a yes allows (1 if not given).
         pub fn signatures(self, signatures: u32) -> Review { Review { signatures, ..self } }
+
         /// How long the owner has, 5 to 300 seconds (120 if not given).
-        pub fn timeout(self, seconds: u32) -> Review { Review { timeout_s: seconds.min(i32::MAX as u32) as i32, ..self } }
+        pub fn timeout(self, seconds: u32) -> Review {
+            Review { timeout_s: seconds.min(i32::MAX as u32) as i32, ..self }
+        }
 
         /// The text maki's `wallet_review` takes.
         pub fn text(&self) -> String {
             let mut text = alloc::format!("{}\n{}\n{}\n{}", self.question, self.detail, self.yes, self.no);
             for p in &self.pages {
-                for (sep, part) in [('\x1e', &p.heading), ('\x1f', &p.value), ('\x1f', &p.mono), ('\x1f', &p.prose)] {
+                for (sep, part) in
+                    [('\x1e', &p.heading), ('\x1f', &p.value), ('\x1f', &p.mono), ('\x1f', &p.prose)]
+                {
                     text.push(sep);
                     text.push_str(part);
                 }
@@ -937,7 +1009,9 @@ pub mod wallet {
         /// control characters where they can't be.
         pub fn show(self) -> Result<Answer, Error> {
             let text = self.text();
-            let code = unsafe { sys::wallet_review(text.as_ptr(), text.len(), self.signatures as i32, self.timeout_s) };
+            let code = unsafe {
+                sys::wallet_review(text.as_ptr(), text.len(), self.signatures as i32, self.timeout_s)
+            };
             result(code).map(|a| match a {
                 0 => Answer::Yes,
                 1 => Answer::No,
@@ -959,18 +1033,32 @@ pub mod wallet {
     }
 
     impl maki_hd::Keys for HostKeys {
-        fn fingerprint(&self) -> Result<[u8; 4], maki_hd::Error> { fingerprint().map_err(|e| keys_error(e, maki_hd::Error::Path)) }
-        fn public(&self, path: &[u32]) -> Result<Public, maki_hd::Error> { public(path).map_err(|e| keys_error(e, maki_hd::Error::Path)) }
+        fn fingerprint(&self) -> Result<[u8; 4], maki_hd::Error> {
+            fingerprint().map_err(|e| keys_error(e, maki_hd::Error::Path))
+        }
+
+        fn public(&self, path: &[u32]) -> Result<Public, maki_hd::Error> {
+            public(path).map_err(|e| keys_error(e, maki_hd::Error::Path))
+        }
+
         fn uncompressed(&self, path: &[u32]) -> Result<[u8; 65], maki_hd::Error> {
             uncompressed(path).map_err(|e| keys_error(e, maki_hd::Error::Path))
         }
+
         fn taproot_output(&self, path: &[u32]) -> Result<[u8; 32], maki_hd::Error> {
             taproot_output(path).map_err(|e| keys_error(e, maki_hd::Error::Path))
         }
+
         fn sign_ecdsa(&self, path: &[u32], digest: &[u8; 32]) -> Result<([u8; 64], u8), maki_hd::Error> {
             sign_ecdsa(path, digest).map_err(|e| keys_error(e, maki_hd::Error::NotAllowed))
         }
-        fn sign_schnorr(&self, path: &[u32], digest: &[u8; 32], tweak: Tweak) -> Result<[u8; 64], maki_hd::Error> {
+
+        fn sign_schnorr(
+            &self,
+            path: &[u32],
+            digest: &[u8; 32],
+            tweak: Tweak,
+        ) -> Result<[u8; 64], maki_hd::Error> {
             sign_schnorr(path, digest, tweak).map_err(|e| keys_error(e, maki_hd::Error::NotAllowed))
         }
     }

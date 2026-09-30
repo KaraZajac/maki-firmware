@@ -10,16 +10,15 @@
 //! commits and tags, `ssh-keygen -Y sign`). Anything else is refused without asking.
 //!
 //! Two more of maki's own:
-//! - A certificate authority's key, from the phrase too, which the agent offers once it's turned
-//!   on in the menu, for `ssh-keygen -s ca.pub -U` to sign SSH certificates with. It signs
-//!   nothing else, and each certificate is read here first: user or host, for whom, until when,
-//!   with what restrictions, and the key it certifies.
-//! - Something signed whole, as `ssh-keygen -Y sign` signs it (maki desktop's maki-ssh-keygen,
-//!   which git runs to sign commits and tags): message type 240 (`SIGN_WHOLE`), its namespace
-//!   (a string), its whole length and where this piece starts (u32s), and the piece. The app
-//!   hashes it as the pieces come (SHA-512), answers SUCCESS until the last, then shows what it
-//!   is from the same bytes (a commit's subject and author, a tag's name) and signs SSHSIG's
-//!   data for it: SIGN_RESPONSE and the signature, or FAILURE.
+//! - A certificate authority's key, from the phrase too, which the agent offers once it's turned on in the
+//!   menu, for `ssh-keygen -s ca.pub -U` to sign SSH certificates with. It signs nothing else, and each
+//!   certificate is read here first: user or host, for whom, until when, with what restrictions, and the key
+//!   it certifies.
+//! - Something signed whole, as `ssh-keygen -Y sign` signs it (maki desktop's maki-ssh-keygen, which git runs
+//!   to sign commits and tags): message type 240 (`SIGN_WHOLE`), its namespace (a string), its whole length
+//!   and where this piece starts (u32s), and the piece. The app hashes it as the pieces come (SHA-512),
+//!   answers SUCCESS until the last, then shows what it is from the same bytes (a commit's subject and
+//!   author, a tag's name) and signs SSHSIG's data for it: SIGN_RESPONSE and the signature, or FAILURE.
 
 #![no_std]
 
@@ -146,7 +145,8 @@ fn shown<const N: usize>(out: &mut Buf<N>, bytes: &[u8], most: usize) {
 
 /// A day from seconds since 1970, in UTC (the civil calendar from days since then).
 fn date<const N: usize>(out: &mut Buf<N>, secs: u64) {
-    const MONTHS: [&str; 12] = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+    const MONTHS: [&str; 12] =
+        ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
     let z = (secs / 86_400) as i64 + 719_468;
     let era = z.div_euclid(146_097);
     let doe = z - era * 146_097;
@@ -251,7 +251,15 @@ fn certificate<'a>(data: &'a [u8], ca: &[u8]) -> Option<Certificate<'a>> {
     r.string()?; // extensions: what a user's certificate allows, pty and the like
     r.string()?; // reserved
     let signer = r.string()?;
-    (signer == ca && r.done()).then_some(Certificate { host, key: key.finalize().into(), id, principals, after, before, options })
+    (signer == ca && r.done()).then_some(Certificate {
+        host,
+        key: key.finalize().into(),
+        id,
+        principals,
+        after,
+        before,
+        options,
+    })
 }
 
 /// Something being signed whole, as its pieces come.
@@ -310,7 +318,11 @@ fn whole_ask(w: &Whole, question: &mut Buf<64>, detail: &mut Buf<128>) {
         }
     };
     if git && header(head, b"tree").is_some() {
-        let parents = head.split(|&b| b == b'\n').take_while(|l| !l.is_empty()).filter(|l| l.starts_with(b"parent ")).count();
+        let parents = head
+            .split(|&b| b == b'\n')
+            .take_while(|l| !l.is_empty())
+            .filter(|l| l.starts_with(b"parent "))
+            .count();
         let _ = question.write_str(if parents > 1 { "Sign this merge?" } else { "Sign this commit?" });
         quoted(detail, subject(head).unwrap_or(b"?"), header(head, b"author").map(person));
     } else if git && header(head, b"object").is_some() {
@@ -451,7 +463,9 @@ impl App {
     }
 
     fn sign(&mut self, conn: u32, r: &mut Reader) -> Writer {
-        let (Some(key), Some(data), Some(_flags)) = (r.string(), r.string(), r.u32()) else { return failure() };
+        let (Some(key), Some(data), Some(_flags)) = (r.string(), r.string(), r.u32()) else {
+            return failure();
+        };
         if !r.done() {
             return failure();
         }
@@ -473,7 +487,11 @@ impl App {
                 // the host key the sign-in names, or else the one the session was bound to
                 let session = sha256(session);
                 let host = host.map(sha256).or_else(|| {
-                    self.bound.iter().flatten().find(|b| b.conn == conn && b.session == session).map(|b| b.host)
+                    self.bound
+                        .iter()
+                        .flatten()
+                        .find(|b| b.conn == conn && b.session == session)
+                        .map(|b| b.host)
                 });
                 if let Some(host) = host {
                     let _ = detail.write_str(", host ");
@@ -504,7 +522,8 @@ impl App {
             return failure();
         };
         let mut question = Buf::<64>::new();
-        let _ = question.write_str(if c.host { "Sign a host certificate?" } else { "Sign a user certificate?" });
+        let _ =
+            question.write_str(if c.host { "Sign a host certificate?" } else { "Sign a user certificate?" });
         let mut detail = Buf::<128>::new();
         if c.principals.is_empty() {
             let _ = detail.write_str(if c.host { "for ANY host" } else { "for EVERY user" });
@@ -546,18 +565,31 @@ impl App {
 
     /// A piece of something signed whole; when it's all come, what it is shown and signed.
     fn sign_whole(&mut self, r: &mut Reader) -> Writer {
-        let (Some(namespace), Some(total), Some(offset)) = (r.string(), r.u32(), r.u32()) else { return failure() };
+        let (Some(namespace), Some(total), Some(offset)) = (r.string(), r.u32(), r.u32()) else {
+            return failure();
+        };
         let piece = r.0;
         if offset == 0 {
             if total == 0 || total > MOST_WHOLE || namespace.is_empty() || namespace.len() > 64 {
                 return failure();
             }
-            let mut w = Whole { namespace: [0; 64], namespace_len: namespace.len(), total, got: 0, hash: Sha512::new(), head: [0; HEAD] };
+            let mut w = Whole {
+                namespace: [0; 64],
+                namespace_len: namespace.len(),
+                total,
+                got: 0,
+                hash: Sha512::new(),
+                head: [0; HEAD],
+            };
             w.namespace[..namespace.len()].copy_from_slice(namespace);
             self.whole = Some(w);
         }
         let Some(w) = self.whole.as_mut() else { return failure() };
-        if offset != w.got || total != w.total || namespace != w.namespace() || piece.len() as u32 > total - offset {
+        if offset != w.got
+            || total != w.total
+            || namespace != w.namespace()
+            || piece.len() as u32 > total - offset
+        {
             self.whole = None;
             return failure();
         }
@@ -582,7 +614,12 @@ impl App {
             Some(w) => {
                 whole_ask(w, &mut question, &mut detail);
                 let digest: [u8; 64] = w.hash.clone().finalize().into();
-                Writer::new().bytes(b"SSHSIG").string(w.namespace()).string(b"").string(b"sha512").string(&digest)
+                Writer::new()
+                    .bytes(b"SSHSIG")
+                    .string(w.namespace())
+                    .string(b"")
+                    .string(b"sha512")
+                    .string(&digest)
             }
             None => return failure(),
         };
@@ -597,7 +634,8 @@ impl App {
         if r.string() != Some(&b"session-bind@openssh.com"[..]) {
             return failure();
         }
-        let (Some(host), Some(session), Some(_signature), Some(_forwarding)) = (r.string(), r.string(), r.string(), r.u8())
+        let (Some(host), Some(session), Some(_signature), Some(_forwarding)) =
+            (r.string(), r.string(), r.string(), r.u8())
         else {
             return failure();
         };
@@ -645,7 +683,12 @@ impl App {
                     let _ = line.write_str(self.status.as_str());
                 }
                 screen::text_centred(78, line.as_str(), Style::Small, Color::Light);
-                screen::text_centred(94, if self.ca { "certificate authority: on" } else { "menu: show the key" }, Style::Small, Color::Light);
+                screen::text_centred(
+                    94,
+                    if self.ca { "certificate authority: on" } else { "menu: show the key" },
+                    Style::Small,
+                    Color::Light,
+                );
             }
         }
         screen::present();
@@ -664,7 +707,13 @@ fn main() {
         status: Buf::new(),
         showing: Showing::Home,
     };
-    let items = |ca: bool| if ca { ["Show the key", "Show the CA key", "Stop the CA key"] } else { ["Show the key", "Certificate authority", ""] };
+    let items = |ca: bool| {
+        if ca {
+            ["Show the key", "Show the CA key", "Stop the CA key"]
+        } else {
+            ["Show the key", "Certificate authority", ""]
+        }
+    };
     let set_menu = |ca: bool| {
         let all = items(ca);
         let _ = menu(if ca { &all[..] } else { &all[..2] });
@@ -681,8 +730,12 @@ fn main() {
                 };
                 let _ = link::reply(answer.as_slice());
             }
-            Event::Menu(0) => app.showing = if app.showing == Showing::Key { Showing::Home } else { Showing::Key },
-            Event::Menu(1) if app.ca => app.showing = if app.showing == Showing::CaKey { Showing::Home } else { Showing::CaKey },
+            Event::Menu(0) => {
+                app.showing = if app.showing == Showing::Key { Showing::Home } else { Showing::Key }
+            }
+            Event::Menu(1) if app.ca => {
+                app.showing = if app.showing == Showing::CaKey { Showing::Home } else { Showing::CaKey }
+            }
             // the certificate authority's key: offered to ssh-keygen once turned on
             Event::Menu(1) | Event::Menu(2) => {
                 app.ca = !app.ca;
@@ -691,7 +744,9 @@ fn main() {
                 app.showing = if app.ca { Showing::CaKey } else { Showing::Home };
                 set_menu(app.ca);
             }
-            Event::Centre | Event::Left | Event::Right if app.showing != Showing::Home => app.showing = Showing::Home,
+            Event::Centre | Event::Left | Event::Right if app.showing != Showing::Home => {
+                app.showing = Showing::Home
+            }
             Event::Exit => return,
             _ => {}
         }

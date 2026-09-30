@@ -22,8 +22,8 @@ pub(crate) const VAULT_PASSWORD_REC_VERSION: u32 = 1;
 //    - `hotp` field added. If 1, then HOTP record. If not existent or not 1, then TOTP
 //    - If HOTP, then the `timestep` field is re-purposed as the `count` field.
 //    - v1 records read directly onto v2 records, and `hotp` is always `false` for v1 records
-//  - v3 (maki) add `site`: the sites, space-separated, the owner chose this entry for when a
-//    browser asked for a code. Older records read with no sites; older vaults skip the line.
+//  - v3 (maki) add `site`: the sites, space-separated, the owner chose this entry for when a browser asked
+//    for a code. Older records read with no sites; older vaults skip the line.
 pub(crate) const VAULT_TOTP_REC_VERSION: u32 = 3;
 
 #[derive(Debug)]

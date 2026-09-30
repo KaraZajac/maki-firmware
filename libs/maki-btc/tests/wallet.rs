@@ -9,20 +9,23 @@ use bitcoin::psbt::Psbt as BPsbt;
 use bitcoin::secp256k1::{self, Message, Secp256k1};
 use bitcoin::sighash::{EcdsaSighashType, SighashCache};
 use bitcoin::{
-    absolute, transaction, Address, Amount, CompressedPublicKey, OutPoint, ScriptBuf, Sequence, Transaction,
-    TxIn, TxOut, Txid, Witness,
+    Address, Amount, CompressedPublicKey, OutPoint, ScriptBuf, Sequence, Transaction, TxIn, TxOut, Txid,
+    Witness, absolute, transaction,
 };
-use maki_btc::bip32::{xpub, HARDENED};
+use maki_btc::bip32::{HARDENED, xpub};
 use maki_btc::psbt::Psbt;
-use maki_btc::wallet::{self, descriptor_checksum, Error};
+use maki_btc::wallet::{self, Error, descriptor_checksum};
 use maki_btc::{Account, Network};
-use maki_hd::seed::SeedKeys;
 use maki_hd::Keys;
+use maki_hd::seed::SeedKeys;
 
-const ABANDON: &str = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
+const ABANDON: &str =
+    "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
 const XPUB: [u8; 4] = [0x04, 0x88, 0xb2, 0x1e];
 
-fn hex(s: &str) -> Vec<u8> { (0..s.len()).step_by(2).map(|i| u8::from_str_radix(&s[i..i + 2], 16).unwrap()).collect() }
+fn hex(s: &str) -> Vec<u8> {
+    (0..s.len()).step_by(2).map(|i| u8::from_str_radix(&s[i..i + 2], 16).unwrap()).collect()
+}
 
 /// maki's keys for a seed, for as long as the tests run.
 fn keys(seed: &[u8]) -> &'static SeedKeys { Box::leak(Box::new(SeedKeys::from_seed(seed).unwrap())) }
@@ -62,8 +65,12 @@ fn derivation_agrees_with_rust_bitcoin() {
     let secp = Secp256k1::new();
     let seeds: Vec<Vec<u8>> = vec![
         hex("000102030405060708090a0b0c0d0e0f"),
-        hex("fffcf9f6f3f0edeae7e4e1dedbd8d5d2cfccc9c6c3c0bdbab7b4b1aeaba8a5a29f9c999693908d8a8784817e7b7875726f6c696663605d5a5754514e4b484542"),
-        hex("4b381541583be4423346c643850da4b320e46a87ae3d2a4e6da11eba819cd4acba45d239319ac14f863b8d5ab5a0d0c64d2e8a1e7d1457df2e5a3c51c73235be"),
+        hex(
+            "fffcf9f6f3f0edeae7e4e1dedbd8d5d2cfccc9c6c3c0bdbab7b4b1aeaba8a5a29f9c999693908d8a8784817e7b7875726f6c696663605d5a5754514e4b484542",
+        ),
+        hex(
+            "4b381541583be4423346c643850da4b320e46a87ae3d2a4e6da11eba819cd4acba45d239319ac14f863b8d5ab5a0d0c64d2e8a1e7d1457df2e5a3c51c73235be",
+        ),
         seed(ABANDON).to_vec(),
     ];
     let paths: [&[u32]; 6] = [
@@ -83,7 +90,12 @@ fn derivation_agrees_with_rust_bitcoin() {
             let expected = BXpub::from_priv(&secp, &theirs.derive_priv(&secp, &p).unwrap());
             let got = ours.public(path).unwrap();
             let child = path.last().copied().unwrap_or(0);
-            assert_eq!(xpub(XPUB, path.len() as u8, child, &got), expected.to_string(), "{}", path_string(path));
+            assert_eq!(
+                xpub(XPUB, path.len() as u8, child, &got),
+                expected.to_string(),
+                "{}",
+                path_string(path)
+            );
             assert_eq!(got.key, expected.public_key.serialize());
         }
     }
@@ -117,9 +129,14 @@ fn testnet_keys_and_addresses_agree_with_rust_bitcoin() {
     assert_eq!(vpub[4..], tpub[4..]);
     assert!(account.zpub().starts_with("vpub"));
     for (change, index) in [(false, 0), (false, 5), (true, 0), (true, 3)] {
-        let k = key.derive_priv(&secp, &DerivationPath::from_str(&format!("m/{}/{}", change as u32, index)).unwrap()).unwrap();
+        let k = key
+            .derive_priv(&secp, &DerivationPath::from_str(&format!("m/{}/{}", change as u32, index)).unwrap())
+            .unwrap();
         let pk = CompressedPublicKey(k.private_key.public_key(&secp));
-        assert_eq!(account.address(change, index).unwrap(), Address::p2wpkh(&pk, bitcoin::Network::Testnet).to_string());
+        assert_eq!(
+            account.address(change, index).unwrap(),
+            Address::p2wpkh(&pk, bitcoin::Network::Testnet).to_string()
+        );
     }
 }
 
@@ -132,7 +149,9 @@ fn descriptor_checksums() {
 #[test]
 fn the_descriptor_is_one_wallet_software_reads() {
     use miniscript::{Descriptor, DescriptorPublicKey};
-    for (network, btc) in [(Network::Bitcoin, bitcoin::Network::Bitcoin), (Network::Testnet, bitcoin::Network::Testnet)] {
+    for (network, btc) in
+        [(Network::Bitcoin, bitcoin::Network::Bitcoin), (Network::Testnet, bitcoin::Network::Testnet)]
+    {
         let account = Account::segwit(keys(&seed(ABANDON)), network).unwrap();
         let text = account.descriptor();
         // parsing checks the checksum
@@ -195,7 +214,8 @@ impl Fixture {
         };
         let other = TxOut { value: Amount::from_sat(1_234), script_pubkey: payee.clone() };
         let prev0 = funding(1, vec![TxOut { value: Amount::from_sat(60_000), script_pubkey: script(0, 0) }]);
-        let prev1 = funding(2, vec![other, TxOut { value: Amount::from_sat(40_000), script_pubkey: script(0, 1) }]);
+        let prev1 =
+            funding(2, vec![other, TxOut { value: Amount::from_sat(40_000), script_pubkey: script(0, 1) }]);
         let tx = Transaction {
             version: transaction::Version::TWO,
             lock_time: absolute::LockTime::from_consensus(850_000),
@@ -233,7 +253,9 @@ impl Fixture {
 
     fn ours(&self) -> Psbt { Psbt::parse(&self.psbt.serialize()).unwrap() }
 
-    fn review(&self) -> Result<wallet::Review, Error> { wallet::review(&self.ours(), std::slice::from_ref(&self.account)) }
+    fn review(&self) -> Result<wallet::Review, Error> {
+        wallet::review(&self.ours(), std::slice::from_ref(&self.account))
+    }
 
     fn fingerprint(&self) -> Fingerprint { self.master.fingerprint(&self.secp) }
 }
@@ -253,7 +275,10 @@ fn review_shows_payments_change_and_fee() {
     assert_eq!(r.fee, 5_000);
     assert_eq!(r.outputs.len(), 2);
     let payee = Address::from_script(&f.payee, bitcoin::Network::Bitcoin).unwrap().to_string();
-    assert_eq!((r.outputs[0].address.as_str(), r.outputs[0].amount, r.outputs[0].change), (payee.as_str(), 70_000, false));
+    assert_eq!(
+        (r.outputs[0].address.as_str(), r.outputs[0].amount, r.outputs[0].change),
+        (payee.as_str(), 70_000, false)
+    );
     assert_eq!(
         (r.outputs[1].address.as_str(), r.outputs[1].amount, r.outputs[1].change),
         ("bc1q8c6fshw2dlwun7ekn9qwf37cu2rn755upcp6el", 25_000, true)
@@ -278,8 +303,11 @@ fn signatures_match_rust_bitcoins_and_verify() {
         let spent = input.witness_utxo.as_ref().unwrap();
         let (pk, sig) = input.partial_sigs.iter().next().unwrap();
         assert_eq!(sig.sighash_type, EcdsaSighashType::All);
-        let sighash = cache.p2wpkh_signature_hash(i, &spent.script_pubkey, spent.value, EcdsaSighashType::All).unwrap();
-        f.secp.verify_ecdsa(&Message::from_digest(sighash.to_byte_array()), &sig.signature, &pk.inner).unwrap();
+        let sighash =
+            cache.p2wpkh_signature_hash(i, &spent.script_pubkey, spent.value, EcdsaSighashType::All).unwrap();
+        f.secp
+            .verify_ecdsa(&Message::from_digest(sighash.to_byte_array()), &sig.signature, &pk.inner)
+            .unwrap();
     }
 
     // the size maki estimated covers the signed transaction's
@@ -291,7 +319,12 @@ fn signatures_match_rust_bitcoins_and_verify() {
         input.partial_sigs.clear();
     }
     let vsize = done.extract_tx().unwrap().vsize() as u64;
-    assert!(review.vbytes >= vsize && review.vbytes <= vsize + 1, "estimated {} for {}", review.vbytes, vsize);
+    assert!(
+        review.vbytes >= vsize && review.vbytes <= vsize + 1,
+        "estimated {} for {}",
+        review.vbytes,
+        vsize
+    );
     assert_eq!(review.fee_rate(), 5_000u64.div_ceil(review.vbytes));
 }
 
@@ -343,7 +376,9 @@ fn inputs_that_arent_this_wallets_are_refused() {
         let fp = f.fingerprint();
         let k = f.master.derive_priv(&f.secp, &DerivationPath::from_str(bad).unwrap()).unwrap();
         f.psbt.inputs[0].bip32_derivation.clear();
-        f.psbt.inputs[0].bip32_derivation.insert(k.private_key.public_key(&f.secp), (fp, DerivationPath::from_str(bad).unwrap()));
+        f.psbt.inputs[0]
+            .bip32_derivation
+            .insert(k.private_key.public_key(&f.secp), (fp, DerivationPath::from_str(bad).unwrap()));
         assert_eq!(f.review(), Err(Error::NotOurs(0)), "{bad}");
     }
 
@@ -386,7 +421,8 @@ fn change_is_only_what_the_change_chain_makes() {
     let mut f = Fixture::new();
     let fp = f.fingerprint();
     let k = f.master.derive_priv(&f.secp, &key_path(0, 0)).unwrap();
-    let script = ScriptBuf::new_p2wpkh(&CompressedPublicKey(k.private_key.public_key(&f.secp)).wpubkey_hash());
+    let script =
+        ScriptBuf::new_p2wpkh(&CompressedPublicKey(k.private_key.public_key(&f.secp)).wpubkey_hash());
     f.psbt.unsigned_tx.output[1].script_pubkey = script;
     f.psbt.outputs[1].bip32_derivation.clear();
     f.psbt.outputs[1].bip32_derivation.insert(k.private_key.public_key(&f.secp), (fp, key_path(0, 0)));
@@ -473,7 +509,12 @@ fn the_review_shows_each_payment_then_change_then_the_fee() {
     let f = Fixture::new();
     let r = f.review().unwrap();
     let payee = Address::from_script(&f.payee, bitcoin::Network::Bitcoin).unwrap().to_string();
-    let page = |h: &str, v: &str, m: &str| Page { heading: h.into(), value: v.into(), mono: m.into(), prose: String::new() };
+    let page = |h: &str, v: &str, m: &str| Page {
+        heading: h.into(),
+        value: v.into(),
+        mono: m.into(),
+        prose: String::new(),
+    };
     assert_eq!(
         r.pages(),
         vec![
@@ -506,7 +547,10 @@ fn refusals_say_why() {
         Error::NoPreviousTx(1).to_string(),
         "input 1 doesn't come with what it spends (the PSBT needs non_witness_utxo, or for taproot witness_utxo)"
     );
-    assert_eq!(Error::ScriptPath(2).to_string(), "input 2 spends a taproot script, and maki signs with its key alone");
+    assert_eq!(
+        Error::ScriptPath(2).to_string(),
+        "input 2 spends a taproot script, and maki signs with its key alone"
+    );
     assert!(Error::NotOurs(0).to_string().starts_with("input 0 isn't this wallet's"));
 }
 
@@ -559,5 +603,9 @@ fn bitcoin_cores_script_interpreter_accepts_what_maki_signs() {
     // and a signature over anything else is refused: the check is real
     let mut tampered = tx.clone();
     tampered.output[0].value = Amount::from_sat(69_999);
-    assert!(tampered.verify(|outpoint| prevouts.iter().position(|p| p == outpoint).map(|i| spent[i].clone())).is_err());
+    assert!(
+        tampered
+            .verify(|outpoint| prevouts.iter().position(|p| p == outpoint).map(|i| spent[i].clone()))
+            .is_err()
+    );
 }

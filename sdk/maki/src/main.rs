@@ -12,14 +12,14 @@
 
 mod icon;
 mod key;
-mod store;
 mod manifest;
 mod sim;
+mod store;
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-use maki_bundle::{fingerprint, Kind};
+use maki_bundle::{Kind, fingerprint};
 use maki_wasm::Stop;
 use sha2::{Digest, Sha256};
 
@@ -67,8 +67,26 @@ struct Args {
 impl Args {
     fn parse(argv: &[String]) -> Result<Args, String> {
         const VALUED: &[&str] = &[
-            "--key", "-o", "--manifest", "--code", "--icon", "--press", "--shot", "--frames", "--scale", "--storage", "--id",
-            "--name", "--motion", "--keys", "--threshold", "--catalogue", "--expires-days", "--sign", "--version", "--list",
+            "--key",
+            "-o",
+            "--manifest",
+            "--code",
+            "--icon",
+            "--press",
+            "--shot",
+            "--frames",
+            "--scale",
+            "--storage",
+            "--id",
+            "--name",
+            "--motion",
+            "--keys",
+            "--threshold",
+            "--catalogue",
+            "--expires-days",
+            "--sign",
+            "--version",
+            "--list",
         ];
         let mut positional = Vec::new();
         let mut flags = Vec::new();
@@ -113,7 +131,13 @@ fn describe(stop: &Stop) -> String {
 }
 
 /// Packs and signs, checking the code as maki will.
-fn pack(manifest_path: &Path, code_path: &Path, icon_flag: Option<&str>, key_flag: Option<&str>, out: &Path) -> Result<(), String> {
+fn pack(
+    manifest_path: &Path,
+    code_path: &Path,
+    icon_flag: Option<&str>,
+    key_flag: Option<&str>,
+    out: &Path,
+) -> Result<(), String> {
     let project = manifest::load(manifest_path)?;
     let m = &project.manifest;
     let code = std::fs::read(code_path).map_err(|e| format!("{}: {e}", code_path.display()))?;
@@ -124,7 +148,8 @@ fn pack(manifest_path: &Path, code_path: &Path, icon_flag: Option<&str>, key_fla
     });
     let icon = icon_path.as_deref().map(icon::load).transpose()?;
     let key = key::load(key_flag)?;
-    let bundle = maki_bundle::write(m, &code, icon.as_ref(), &key).map_err(|e| format!("can't pack it: {e}"))?;
+    let bundle =
+        maki_bundle::write(m, &code, icon.as_ref(), &key).map_err(|e| format!("can't pack it: {e}"))?;
     if let Some(dir) = out.parent() {
         std::fs::create_dir_all(dir).ok();
     }
@@ -153,7 +178,10 @@ fn reproduce(bundle_path: &Path, dir: &Path) -> Result<(), String> {
     let project = manifest::load(&manifest_path)?;
     let (wasm, _) = build_code(dir, project.manifest.kind)?;
     let code = std::fs::read(&wasm).map_err(|e| format!("{}: {e}", wasm.display()))?;
-    let icon_path = project.icon.clone().or_else(|| ["icon.png", "icon.pbm"].iter().map(|n| dir.join(n)).find(|p| p.exists()));
+    let icon_path = project
+        .icon
+        .clone()
+        .or_else(|| ["icon.png", "icon.pbm"].iter().map(|n| dir.join(n)).find(|p| p.exists()));
     let icon = icon_path.as_deref().map(icon::load).transpose()?;
     let rustc = std::process::Command::new(std::env::var("RUSTC").unwrap_or("rustc".into()))
         .arg("-V")
@@ -196,7 +224,9 @@ fn reproduce(bundle_path: &Path, dir: &Path) -> Result<(), String> {
 }
 
 /// Whether maki would take this code for this manifest (`maki_wasm::admit`).
-fn admit(m: &maki_bundle::Manifest, code: &[u8]) -> Result<(), String> { maki_wasm::admit(m, code).map(|_| ()) }
+fn admit(m: &maki_bundle::Manifest, code: &[u8]) -> Result<(), String> {
+    maki_wasm::admit(m, code).map(|_| ())
+}
 
 /// The target native apps are built for: Xous's, as maki's own programs are.
 const NATIVE_TARGET: &str = "riscv32imac-unknown-xous-elf";
@@ -226,7 +256,8 @@ fn native_build(dir: &Path) -> Result<(PathBuf, PathBuf), String> {
     let app_dir = std::fs::canonicalize(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
     // the app's workspace's target directory, as for a WebAssembly build
     let app_meta = metadata(&app_dir)?;
-    let target = app_meta["target_directory"].as_str().map(PathBuf::from).unwrap_or_else(|| app_dir.join("target"));
+    let target =
+        app_meta["target_directory"].as_str().map(PathBuf::from).unwrap_or_else(|| app_dir.join("target"));
     let wrapper = wrapper_dir("maki-native", &package, &app_dir, &target)?;
     let name = format!("{package}-native");
     let app_path = linked_source(&wrapper, &app_dir, &app_meta)?;
@@ -260,7 +291,9 @@ fn native_build(dir: &Path) -> Result<(PathBuf, PathBuf), String> {
         .status()
         .map_err(|e| format!("cargo: {e}"))?;
     if !status.success() {
-        return Err(format!("cargo build failed (native apps need Rust's {NATIVE_TARGET} target, which Xous's toolchain has)"));
+        return Err(format!(
+            "cargo build failed (native apps need Rust's {NATIVE_TARGET} target, which Xous's toolchain has)"
+        ));
     }
     let elf = wrapper.join("target").join(NATIVE_TARGET).join("release").join(&name);
     if !elf.exists() {
@@ -285,7 +318,9 @@ fn wrapper_dir(kind: &str, package: &str, app_dir: &Path, target: &Path) -> Resu
     let cache = std::env::var_os("XDG_CACHE_HOME")
         .filter(|d| !d.is_empty())
         .map(PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").filter(|d| !d.is_empty()).map(|h| PathBuf::from(h).join(".cache")))
+        .or_else(|| {
+            std::env::var_os("HOME").filter(|d| !d.is_empty()).map(|h| PathBuf::from(h).join(".cache"))
+        })
         .unwrap_or_else(std::env::temp_dir);
     let digest = Sha256::digest(app_dir.to_string_lossy().as_bytes());
     let copy: String = digest[..6].iter().map(|b| format!("{b:02x}")).collect();
@@ -379,9 +414,9 @@ fn builds_from_outside(dir: &Path, meta: &serde_json::Value) -> Result<bool, Str
     }
     // a local package: `name vX.Y.Z (/its/directory)`, perhaps with ` (*)` after
     Ok(String::from_utf8_lossy(&out.stdout).lines().any(|line| {
-        line.split_once(" (").and_then(|(_, rest)| rest.split_once(')')).is_some_and(|(path, _)| {
-            Path::new(path).is_absolute() && !Path::new(path).starts_with(root)
-        })
+        line.split_once(" (")
+            .and_then(|(_, rest)| rest.split_once(')'))
+            .is_some_and(|(path, _)| Path::new(path).is_absolute() && !Path::new(path).starts_with(root))
     }))
 }
 
@@ -408,8 +443,10 @@ fn wasm_wrapper_build(app_dir: &Path, app_meta: &serde_json::Value) -> Result<(P
             cargo_toml.display()
         ));
     }
-    let root = PathBuf::from(app_meta["workspace_root"].as_str().ok_or("cargo metadata named no workspace root")?);
-    let target = app_meta["target_directory"].as_str().map(PathBuf::from).unwrap_or_else(|| app_dir.join("target"));
+    let root =
+        PathBuf::from(app_meta["workspace_root"].as_str().ok_or("cargo metadata named no workspace root")?);
+    let target =
+        app_meta["target_directory"].as_str().map(PathBuf::from).unwrap_or_else(|| app_dir.join("target"));
     let wrapper = wrapper_dir("maki-wasm", &package, app_dir, &target)?;
     let app_path = linked_source(&wrapper, app_dir, app_meta)?;
     // the release profile the app's workspace builds with
@@ -444,7 +481,8 @@ fn wasm_wrapper_build(app_dir: &Path, app_meta: &serde_json::Value) -> Result<(P
     if let Ok(lock) = std::fs::read(root.join("Cargo.lock")) {
         write(wrapper.join("Cargo.lock"), &lock)?;
     }
-    let theirs = std::env::var("RUSTFLAGS").or_else(|_| std::env::var("CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS"));
+    let theirs = std::env::var("RUSTFLAGS")
+        .or_else(|_| std::env::var("CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS"));
     let mut flags: Vec<String> = match theirs {
         Ok(f) => f.split_whitespace().map(String::from).collect(),
         Err(_) => vec!["-C".into(), "link-arg=-zstack-size=16384".into()],
@@ -460,7 +498,11 @@ fn wasm_wrapper_build(app_dir: &Path, app_meta: &serde_json::Value) -> Result<(P
     if !status.success() {
         return Err("cargo build failed".into());
     }
-    let wasm = wrapper.join("target").join("wasm32-unknown-unknown").join("release").join(format!("{}_wasm.wasm", package.replace('-', "_")));
+    let wasm = wrapper
+        .join("target")
+        .join("wasm32-unknown-unknown")
+        .join("release")
+        .join(format!("{}_wasm.wasm", package.replace('-', "_")));
     if !wasm.exists() {
         return Err(format!("cargo built no {}", wasm.display()));
     }
@@ -541,7 +583,8 @@ fn cargo_build(dir: &Path) -> Result<(PathBuf, PathBuf), String> {
     // the developer's flags if they set any, else the stack; and every source named as it is
     // everywhere (remaps: the registry's crates, local packages, Rust's own library), as cargo
     // takes a list with spaces in it
-    let theirs = std::env::var("RUSTFLAGS").or_else(|_| std::env::var("CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS"));
+    let theirs = std::env::var("RUSTFLAGS")
+        .or_else(|_| std::env::var("CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS"));
     let mut flags: Vec<String> = match theirs {
         Ok(f) => f.split_whitespace().map(String::from).collect(),
         Err(_) => vec!["-C".into(), "link-arg=-zstack-size=16384".into()],
@@ -549,7 +592,13 @@ fn cargo_build(dir: &Path) -> Result<(PathBuf, PathBuf), String> {
     flags.extend(remaps(dir)?);
     cargo.env("CARGO_ENCODED_RUSTFLAGS", flags.join("\x1f")).env_remove("RUSTFLAGS");
     let output = cargo
-        .args(["build", "--release", "--target", "wasm32-unknown-unknown", "--message-format=json-render-diagnostics"])
+        .args([
+            "build",
+            "--release",
+            "--target",
+            "wasm32-unknown-unknown",
+            "--message-format=json-render-diagnostics",
+        ])
         .current_dir(dir)
         .stderr(std::process::Stdio::inherit())
         .output()
@@ -563,7 +612,8 @@ fn cargo_build(dir: &Path) -> Result<(PathBuf, PathBuf), String> {
         if msg["reason"] != "compiler-artifact" {
             continue;
         }
-        let manifest_dir = msg["manifest_path"].as_str().map(|p| Path::new(p).parent().unwrap().to_path_buf());
+        let manifest_dir =
+            msg["manifest_path"].as_str().map(|p| Path::new(p).parent().unwrap().to_path_buf());
         let here = std::fs::canonicalize(dir).ok();
         if manifest_dir.as_ref().and_then(|d| std::fs::canonicalize(d).ok()) != here {
             continue;
@@ -584,7 +634,16 @@ fn inspect(path: &Path) -> Result<(), String> {
     let bytes = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
     let b = maki_bundle::read(&bytes).map_err(|e| format!("{}: {e}", path.display()))?;
     let m = &b.manifest;
-    println!("{} {} ({})", m.name, if m.label.is_empty() { format!("version {}", m.version) } else { format!("{} (version {})", m.label, m.version) }, m.id);
+    println!(
+        "{} {} ({})",
+        m.name,
+        if m.label.is_empty() {
+            format!("version {}", m.version)
+        } else {
+            format!("{} (version {})", m.label, m.version)
+        },
+        m.id
+    );
     if !m.description.is_empty() {
         println!("  {}", m.description);
     }
@@ -595,13 +654,20 @@ fn inspect(path: &Path) -> Result<(), String> {
             "  where from    the maki store, stamped at {} (unix; maki checks the stamp against its root)",
             s.stamp.issued
         ),
-        Some(Err(e)) => println!("  where from    a store stamp maki can't read ({e}): maki won't install it"),
+        Some(Err(e)) => {
+            println!("  where from    a store stamp maki can't read ({e}): maki won't install it")
+        }
     }
     match m.kind {
         Kind::Wasm => println!("  code          WebAssembly, {} bytes, host API {}", b.code.len(), m.api),
         Kind::Native => println!("  code          native, {} bytes, for {}", b.code.len(), m.firmware),
     }
-    println!("  memory        {} KiB, storage {} KiB, backup {}", m.memory_kib, m.storage_kib, if m.backup { "on" } else { "off" });
+    println!(
+        "  memory        {} KiB, storage {} KiB, backup {}",
+        m.memory_kib,
+        m.storage_kib,
+        if m.backup { "on" } else { "off" }
+    );
     if m.permissions.is_empty() {
         println!("  permissions   none beyond the basics");
     }
@@ -645,12 +711,20 @@ fn run(args: &Args) -> Result<(), String> {
         presses: args.value("--press").map(sim::parse_presses).transpose()?,
         shot: args.value("--shot").map(PathBuf::from),
         frames: args.value("--frames").map(PathBuf::from),
-        scale: args.value("--scale").map(|s| s.parse().map_err(|_| "--scale: a number")).transpose()?.unwrap_or(4),
+        scale: args
+            .value("--scale")
+            .map(|s| s.parse().map_err(|_| "--scale: a number"))
+            .transpose()?
+            .unwrap_or(4),
         verified: args.has("--verified"),
         storage: args.value("--storage").map(PathBuf::from),
         sideloaded: true,
         developer: b.developer,
-        motion: args.value("--motion").map(|m| sim::parse_xyz(m).ok_or("--motion X,Y,Z in milli-g")).transpose()?.unwrap_or([0, 0, 1000]),
+        motion: args
+            .value("--motion")
+            .map(|m| sim::parse_xyz(m).ok_or("--motion X,Y,Z in milli-g"))
+            .transpose()?
+            .unwrap_or([0, 0, 1000]),
     };
     if let Some(dir) = &options.frames {
         std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
@@ -712,7 +786,11 @@ fn new_app(dir: &Path, id: Option<&str>, name: Option<&str>) -> Result<(), Strin
                 "#![no_std]\n\nuse maki_app::*;\n\nfn main() {{\n    let mut presses = 0u32;\n    loop {{\n        screen::clear(Color::Dark);\n        screen::text_centred(30, {name:?}, Style::Bold, Color::Light);\n        let mut line = Buf::<32>::new();\n        let _ = core::fmt::Write::write_fmt(&mut line, format_args!(\"{{presses}} presses\"));\n        screen::text_centred(56, line.as_str(), Style::Regular, Color::Light);\n        screen::present();\n        match wait(None) {{\n            Event::Centre => presses += 1,\n            Event::Exit => return,\n            _ => {{}}\n        }}\n    }}\n}}\n\nmaki_app::main!(main);\n"
             ),
         ),
-        (".cargo/config.toml", "[target.wasm32-unknown-unknown]\nrustflags = [\"-C\", \"link-arg=-zstack-size=16384\"]\n".to_string()),
+        (
+            ".cargo/config.toml",
+            "[target.wasm32-unknown-unknown]\nrustflags = [\"-C\", \"link-arg=-zstack-size=16384\"]\n"
+                .to_string(),
+        ),
         (".gitignore", "/target\n*.maki\n".to_string()),
     ];
     for (path, text) in files {
@@ -730,14 +808,19 @@ fn desktop() -> Result<std::os::unix::net::UnixStream, String> {
     let dir = std::env::var_os("XDG_RUNTIME_DIR").map(PathBuf::from).unwrap_or_else(std::env::temp_dir);
     // SAFETY: getuid has no preconditions and can't fail
     let path = dir.join(format!("maki-{}.sock", unsafe { libc::getuid() }));
-    std::os::unix::net::UnixStream::connect(&path).map_err(|e| format!("maki desktop isn't running ({}: {e})", path.display()))
+    std::os::unix::net::UnixStream::connect(&path)
+        .map_err(|e| format!("maki desktop isn't running ({}: {e})", path.display()))
 }
 
 #[cfg(windows)]
 fn desktop() -> Result<std::fs::File, String> {
     let user = std::env::var("USERNAME").map_err(|_| "no USERNAME".to_string())?;
     let path = format!(r"\\.\pipe\maki-{user}");
-    std::fs::OpenOptions::new().read(true).write(true).open(&path).map_err(|e| format!("maki desktop isn't running ({path}: {e})"))
+    std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&path)
+        .map_err(|e| format!("maki desktop isn't running ({path}: {e})"))
 }
 
 fn install(path: &Path) -> Result<(), String> {
@@ -752,12 +835,17 @@ fn install(path: &Path) -> Result<(), String> {
     println!(
         "{} {}: go through it on maki (developer key {})",
         b.manifest.name,
-        if b.manifest.label.is_empty() { format!("version {}", b.manifest.version) } else { b.manifest.label.clone() },
+        if b.manifest.label.is_empty() {
+            format!("version {}", b.manifest.version)
+        } else {
+            b.manifest.label.clone()
+        },
         fingerprint(&b.developer)
     );
     let mut line = String::new();
     std::io::BufReader::new(stream).read_line(&mut line).map_err(|e| format!("maki desktop: {e}"))?;
-    let reply: serde_json::Value = serde_json::from_str(&line).map_err(|_| format!("maki desktop said: {line}"))?;
+    let reply: serde_json::Value =
+        serde_json::from_str(&line).map_err(|_| format!("maki desktop said: {line}"))?;
     if reply["ok"] != true {
         return Err(format!("maki desktop: {}", reply["error"].as_str().unwrap_or("failed")));
     }
@@ -779,20 +867,31 @@ fn main_inner(argv: &[String]) -> Result<(), String> {
         Some("keygen") => {
             args.only(&["--key", "--force"])?;
             let (path, key) = key::generate(args.value("--key"), args.has("--force"))?;
-            println!("{}: your developer key, {}", path.display(), fingerprint(key.verifying_key().as_bytes()));
+            println!(
+                "{}: your developer key, {}",
+                path.display(),
+                fingerprint(key.verifying_key().as_bytes())
+            );
             println!("Keep it safe and back it up: updates to your apps must be signed with it.");
             Ok(())
         }
         Some("new") => {
             args.only(&["--id", "--name"])?;
-            new_app(Path::new(args.positional.get(1).ok_or("where? maki new DIR")?), args.value("--id"), args.value("--name"))
+            new_app(
+                Path::new(args.positional.get(1).ok_or("where? maki new DIR")?),
+                args.value("--id"),
+                args.value("--name"),
+            )
         }
         Some("pack") => {
             args.only(&["--manifest", "--code", "--icon", "--key", "-o"])?;
             let manifest = PathBuf::from(args.value("--manifest").unwrap_or("maki.toml"));
             let code = PathBuf::from(args.value("--code").ok_or("--code: the .wasm to pack")?);
             let project = manifest::load(&manifest)?;
-            let out = args.value("-o").map(PathBuf::from).unwrap_or_else(|| PathBuf::from(format!("{}.maki", project.manifest.id)));
+            let out = args
+                .value("-o")
+                .map(PathBuf::from)
+                .unwrap_or_else(|| PathBuf::from(format!("{}.maki", project.manifest.id)));
             pack(&manifest, &code, args.value("--icon"), args.value("--key"), &out)
         }
         Some("build") => {
@@ -836,7 +935,9 @@ fn main_inner(argv: &[String]) -> Result<(), String> {
 
 /// `maki store ...`: see STORE_USAGE.
 fn store_command(args: &Args) -> Result<(), String> {
-    let arg = |i: usize, what: &str| args.positional.get(i).map(String::as_str).ok_or_else(|| format!("{what}?\n\n{STORE_USAGE}"));
+    let arg = |i: usize, what: &str| {
+        args.positional.get(i).map(String::as_str).ok_or_else(|| format!("{what}?\n\n{STORE_USAGE}"))
+    };
     let num = |name: &str| -> Result<u64, String> {
         args.value(name).ok_or_else(|| format!("{name}?"))?.parse().map_err(|_| format!("{name}: a number"))
     };
@@ -850,23 +951,58 @@ fn store_command(args: &Args) -> Result<(), String> {
             store::recover(arg(2, "which file")?)
         }
         Some("root") => {
-            args.only(&["--version", "--threshold", "--keys", "--catalogue", "--expires-days", "--sign", "-o"])?;
-            let keys = args.value("--keys").ok_or("--keys: the root keys, comma-separated")?.split(',').map(store::public).collect::<Result<Vec<_>, _>>()?;
-            let catalogue = store::public(args.value("--catalogue").ok_or("--catalogue: the catalogue key")?)?;
-            let sign = args.value("--sign").ok_or("--sign: the root key files that sign it")?.split(',').map(store::load).collect::<Result<Vec<_>, _>>()?;
-            store::root(num("--version")? as u32, num("--threshold")? as u8, keys, catalogue, num("--expires-days")?, &sign, args.value("-o").unwrap_or("root.bin"))
+            args.only(&[
+                "--version",
+                "--threshold",
+                "--keys",
+                "--catalogue",
+                "--expires-days",
+                "--sign",
+                "-o",
+            ])?;
+            let keys = args
+                .value("--keys")
+                .ok_or("--keys: the root keys, comma-separated")?
+                .split(',')
+                .map(store::public)
+                .collect::<Result<Vec<_>, _>>()?;
+            let catalogue =
+                store::public(args.value("--catalogue").ok_or("--catalogue: the catalogue key")?)?;
+            let sign = args
+                .value("--sign")
+                .ok_or("--sign: the root key files that sign it")?
+                .split(',')
+                .map(store::load)
+                .collect::<Result<Vec<_>, _>>()?;
+            store::root(
+                num("--version")? as u32,
+                num("--threshold")? as u8,
+                keys,
+                catalogue,
+                num("--expires-days")?,
+                &sign,
+                args.value("-o").unwrap_or("root.bin"),
+            )
         }
         Some("stamp") => {
             args.only(&["--catalogue", "-o"])?;
             let bundle = arg(2, "which bundle")?;
-            let catalogue = store::load(args.value("--catalogue").ok_or("--catalogue: the catalogue key file")?)?;
+            let catalogue =
+                store::load(args.value("--catalogue").ok_or("--catalogue: the catalogue key file")?)?;
             store::stamp(bundle, &catalogue, args.value("-o").unwrap_or(bundle))
         }
         Some("revoke") => {
             args.only(&["--catalogue", "--version", "--expires-days", "--list", "-o"])?;
-            let catalogue = store::load(args.value("--catalogue").ok_or("--catalogue: the catalogue key file")?)?;
+            let catalogue =
+                store::load(args.value("--catalogue").ok_or("--catalogue: the catalogue key file")?)?;
             let list = args.value("--list").ok_or("--list: the entries, a line each")?;
-            store::revoke(&catalogue, num("--version")? as u32, num("--expires-days")?, list, args.value("-o").unwrap_or("revocations.bin"))
+            store::revoke(
+                &catalogue,
+                num("--version")? as u32,
+                num("--expires-days")?,
+                list,
+                args.value("-o").unwrap_or("revocations.bin"),
+            )
         }
         Some("show") => {
             args.only(&[])?;
@@ -875,15 +1011,18 @@ fn store_command(args: &Args) -> Result<(), String> {
         Some("index") => {
             args.only(&["--catalogue", "--version", "--expires-days"])?;
             let dir = arg(2, "which store directory")?;
-            let catalogue = store::load(args.value("--catalogue").ok_or("--catalogue: the catalogue key file")?)?;
-            let version = if args.value("--version").is_some() { Some(num("--version")? as u32) } else { None };
+            let catalogue =
+                store::load(args.value("--catalogue").ok_or("--catalogue: the catalogue key file")?)?;
+            let version =
+                if args.value("--version").is_some() { Some(num("--version")? as u32) } else { None };
             let days = if args.value("--expires-days").is_some() { num("--expires-days")? } else { 30 };
             store::index(std::path::Path::new(dir), &catalogue, version, days)
         }
         Some("add") => {
             args.only(&["--catalogue", "--expires-days"])?;
             let (dir, bundle) = (arg(2, "which store directory")?, arg(3, "which bundle")?);
-            let catalogue = store::load(args.value("--catalogue").ok_or("--catalogue: the catalogue key file")?)?;
+            let catalogue =
+                store::load(args.value("--catalogue").ok_or("--catalogue: the catalogue key file")?)?;
             let days = if args.value("--expires-days").is_some() { num("--expires-days")? } else { 30 };
             store::add(std::path::Path::new(dir), bundle, &catalogue, days)
         }
@@ -891,7 +1030,8 @@ fn store_command(args: &Args) -> Result<(), String> {
     }
 }
 
-const STORE_USAGE: &str = "maki store: the maki store's side. Root keys stay offline and sign roots; the catalogue key
+const STORE_USAGE: &str =
+    "maki store: the maki store's side. Root keys stay offline and sign roots; the catalogue key
 signs stamps and revocation lists.
 
   maki store keygen FILE

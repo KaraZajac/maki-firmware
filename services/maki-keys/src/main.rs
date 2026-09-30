@@ -1,10 +1,10 @@
 //! maki-keys server. See lib.rs for what it keeps and why.
 //!
 //! In the system basis (open whenever the PDDB is mounted), dictionary `maki.keys`:
-//!   - `lock`: which secret basis is maki's, the salt and round count for the PIN's key
-//!     derivation, and the basis key wrapped under that derived key (AES-GCM-SIV);
-//!   - `tries`: wrong PINs since the last right one, written before each try is checked, so
-//!     pulling the plug mid-check doesn't give a free guess.
+//!   - `lock`: which secret basis is maki's, the salt and round count for the PIN's key derivation, and the
+//!     basis key wrapped under that derived key (AES-GCM-SIV);
+//!   - `tries`: wrong PINs since the last right one, written before each try is checked, so pulling the plug
+//!     mid-check doesn't give a free guess.
 //!
 //! The secret basis gets a fresh random name at each setup: after a wipe, the old one can't be
 //! opened (its key is gone), and its name mustn't collide with the new one.
@@ -19,7 +19,7 @@ use aes_gcm_siv::aead::{Aead, KeyInit, Payload};
 use aes_gcm_siv::{Aes256GcmSiv, Nonce};
 use maki_keys_api::*;
 use num_traits::FromPrimitive;
-use pddb::{BasisRetentionPolicy, Pddb, PDDB_DEFAULT_SYSTEM_BASIS};
+use pddb::{BasisRetentionPolicy, PDDB_DEFAULT_SYSTEM_BASIS, Pddb};
 use xous_ipc::Buffer;
 use zeroize::Zeroize;
 
@@ -101,7 +101,9 @@ fn gather(store: &Store, basis: &str) -> Vec<u8> {
             if *dict == passkeys::DICT && !passkeys::backed_up(&key) {
                 continue;
             }
-            let Ok(mut k) = store.pddb.get(dict, &key, Some(basis), false, false, None, None::<fn()>) else { continue };
+            let Ok(mut k) = store.pddb.get(dict, &key, Some(basis), false, false, None, None::<fn()>) else {
+                continue;
+            };
             let mut value = Vec::new();
             if k.read_to_end(&mut value).is_err() {
                 continue;
@@ -221,7 +223,10 @@ fn credentials(store: &Store, basis: &str) -> Vec<(usize, Vec<u8>)> {
 fn restore(store: &Store, basis: &str, entries: &[Entry], write: bool) -> Added {
     let mut added = Added::default();
     let mut have = credentials(store, basis);
-    let mut free = passkeys::CREDENTIALS.filter(|n| !have.iter().any(|(slot, _)| slot == n)).collect::<Vec<_>>().into_iter();
+    let mut free = passkeys::CREDENTIALS
+        .filter(|n| !have.iter().any(|(slot, _)| slot == n))
+        .collect::<Vec<_>>()
+        .into_iter();
     let put = |dict: &str, key: &str, value: &[u8]| -> bool {
         store
             .pddb
@@ -238,7 +243,8 @@ fn restore(store: &Store, basis: &str, entries: &[Entry], write: bool) -> Added 
             .and_then(|e| maki_app_host_api::Record::decode(&e.value))
     };
     let installed = |id: &str| {
-        read_key(store, maki_app_host_api::APPS, id, basis).and_then(|b| maki_app_host_api::Record::decode(&b))
+        read_key(store, maki_app_host_api::APPS, id, basis)
+            .and_then(|b| maki_app_host_api::Record::decode(&b))
     };
     let mut apps_back: Vec<String> = Vec::new();
     for e in entries.iter().filter(|e| e.dict == APP_DATA) {
@@ -248,7 +254,9 @@ fn restore(store: &Store, basis: &str, entries: &[Entry], write: bool) -> Added 
             Some(now) if now.developer != record.developer => continue,
             Some(_) => {}
             // not installed: the data waits, with whose it is
-            None => match read_key(store, RESTORED, id, basis).and_then(|b| maki_app_host_api::Record::decode(&b)) {
+            None => match read_key(store, RESTORED, id, basis)
+                .and_then(|b| maki_app_host_api::Record::decode(&b))
+            {
                 // another developer's data already waits under this ID: leave it be
                 Some(waiting) if waiting.developer != record.developer => continue,
                 Some(_) => {}
@@ -359,8 +367,15 @@ impl Lock {
 
 /// A wallet op on the keys (`KeysOp::Wallet`). Every path starts with a hardened purpose and
 /// coin type (the app host holds each app to its own paths too); the fingerprint's takes none.
-fn wallet_op(keys: &maki_hd::seed::SeedKeys, op: u8, path: &[u32], digest: &[u8]) -> Result<Vec<u8>, maki_hd::Error> {
-    if op != WALLET_FINGERPRINT && (!maki_hd::prefix_ok(&path[..path.len().min(2)]) || path.len() > maki_hd::MAX_DEPTH) {
+fn wallet_op(
+    keys: &maki_hd::seed::SeedKeys,
+    op: u8,
+    path: &[u32],
+    digest: &[u8],
+) -> Result<Vec<u8>, maki_hd::Error> {
+    if op != WALLET_FINGERPRINT
+        && (!maki_hd::prefix_ok(&path[..path.len().min(2)]) || path.len() > maki_hd::MAX_DEPTH)
+    {
         return Err(maki_hd::Error::Path);
     }
     // fresh randomness in each Schnorr signature, as BIP340 advises
@@ -386,7 +401,10 @@ struct Store {
 
 impl Store {
     fn read(&self, key: &str) -> Option<Vec<u8>> {
-        let mut k = self.pddb.get(DICT, key, Some(PDDB_DEFAULT_SYSTEM_BASIS), false, false, None, None::<fn()>).ok()?;
+        let mut k = self
+            .pddb
+            .get(DICT, key, Some(PDDB_DEFAULT_SYSTEM_BASIS), false, false, None, None::<fn()>)
+            .ok()?;
         let mut v = Vec::new();
         k.read_to_end(&mut v).ok()?;
         Some(v)
@@ -395,8 +413,15 @@ impl Store {
     /// Replace a key's value in the system basis, and make sure it's on flash.
     fn write(&self, key: &str, value: &[u8]) -> std::io::Result<()> {
         self.pddb.delete_key(DICT, key, Some(PDDB_DEFAULT_SYSTEM_BASIS)).ok();
-        let mut k =
-            self.pddb.get(DICT, key, Some(PDDB_DEFAULT_SYSTEM_BASIS), true, true, Some(value.len()), None::<fn()>)?;
+        let mut k = self.pddb.get(
+            DICT,
+            key,
+            Some(PDDB_DEFAULT_SYSTEM_BASIS),
+            true,
+            true,
+            Some(value.len()),
+            None::<fn()>,
+        )?;
         k.write_all(value)?;
         drop(k);
         self.pddb.sync()
@@ -418,7 +443,8 @@ impl Store {
 
     /// The recovery phrase's entropy, from the secret basis (open only while unlocked).
     fn entropy(&self, basis: &str) -> Option<Vec<u8>> {
-        let mut k = self.pddb.get(SEED_DICT, KEY_ENTROPY, Some(basis), false, false, None, None::<fn()>).ok()?;
+        let mut k =
+            self.pddb.get(SEED_DICT, KEY_ENTROPY, Some(basis), false, false, None, None::<fn()>).ok()?;
         let mut v = Vec::new();
         k.read_to_end(&mut v).ok()?;
         (!v.is_empty()).then_some(v)
@@ -426,14 +452,24 @@ impl Store {
 
     fn set_entropy(&self, basis: &str, entropy: &[u8]) -> std::io::Result<()> {
         self.pddb.delete_key(SEED_DICT, KEY_ENTROPY, Some(basis)).ok();
-        let mut k = self.pddb.get(SEED_DICT, KEY_ENTROPY, Some(basis), true, true, Some(entropy.len()), None::<fn()>)?;
+        let mut k = self.pddb.get(
+            SEED_DICT,
+            KEY_ENTROPY,
+            Some(basis),
+            true,
+            true,
+            Some(entropy.len()),
+            None::<fn()>,
+        )?;
         k.write_all(entropy)?;
         drop(k);
         self.pddb.sync()
     }
 
     fn tries(&self) -> u32 {
-        self.read(KEY_TRIES).and_then(|b| b.get(..4).map(|s| u32::from_le_bytes(s.try_into().unwrap()))).unwrap_or(0)
+        self.read(KEY_TRIES)
+            .and_then(|b| b.get(..4).map(|s| u32::from_le_bytes(s.try_into().unwrap())))
+            .unwrap_or(0)
     }
 
     fn set_tries(&self, n: u32) -> std::io::Result<()> { self.write(KEY_TRIES, &n.to_le_bytes()) }
@@ -467,7 +503,8 @@ impl Store {
 fn open_lock(lock: &Lock, pin: &str) -> Option<[u8; 32]> {
     let mut kek = derive(pin, &lock.salt, lock.rounds);
     let opened = Aes256GcmSiv::new_from_slice(&kek).ok().and_then(|c| {
-        c.decrypt(Nonce::from_slice(&lock.nonce), Payload { msg: &lock.wrapped, aad: lock.basis.as_bytes() }).ok()
+        c.decrypt(Nonce::from_slice(&lock.nonce), Payload { msg: &lock.wrapped, aad: lock.basis.as_bytes() })
+            .ok()
     });
     kek.zeroize();
     let mut opened = opened?;
@@ -497,9 +534,10 @@ fn set_pin(store: &Store, pin: &str) -> Result<(), u32> {
     let suffix: [u8; 4] = random();
     let basis = format!("maki-{:02x}{:02x}{:02x}{:02x}", suffix[0], suffix[1], suffix[2], suffix[3]);
     let lock = seal_lock(&basis, &basis_key, pin);
-    let made = store.pddb.create_basis(&basis, &basis_key).and_then(|_| {
-        store.pddb.unlock_basis(&basis, &basis_key, Some(BasisRetentionPolicy::Persist))
-    });
+    let made = store
+        .pddb
+        .create_basis(&basis, &basis_key)
+        .and_then(|_| store.pddb.unlock_basis(&basis, &basis_key, Some(BasisRetentionPolicy::Persist)));
     basis_key.zeroize();
     let lock = lock?;
     if let Err(e) = made {
@@ -585,10 +623,14 @@ fn main() -> ! {
     const HEAP: usize = 2 * 1024 * 1024 + 512 * 1024;
     let heap = xous::Limits::HeapMaximum as usize;
     match xous::rsyscall(xous::SysCall::AdjustProcessLimit(heap, 0, HEAP)) {
-        Ok(xous::Result::Scalar2(1, now)) => match xous::rsyscall(xous::SysCall::AdjustProcessLimit(heap, now, HEAP)) {
-            Ok(xous::Result::Scalar2(1, set)) => log::info!("heap up to {} KiB (from {})", set / 1024, now / 1024),
-            other => log::warn!("the heap stays as it was: {other:?}"),
-        },
+        Ok(xous::Result::Scalar2(1, now)) => {
+            match xous::rsyscall(xous::SysCall::AdjustProcessLimit(heap, now, HEAP)) {
+                Ok(xous::Result::Scalar2(1, set)) => {
+                    log::info!("heap up to {} KiB (from {})", set / 1024, now / 1024)
+                }
+                other => log::warn!("the heap stays as it was: {other:?}"),
+            }
+        }
         other => log::warn!("the heap stays as it was: {other:?}"),
     }
     if option_env!("MAKI_DEMO_XMR_BENCH").is_some() {
@@ -662,7 +704,8 @@ fn main() -> ! {
                 let has_phrase = state == State::Unlocked && phrase_made(&mut phrase_known);
                 let rest = tries_left as usize
                     | if has_phrase { HAS_PHRASE } else { 0 }
-                    | (generation.load(Ordering::SeqCst) as usize & STORE_GENERATION_MASK) << STORE_GENERATION_SHIFT;
+                    | (generation.load(Ordering::SeqCst) as usize & STORE_GENERATION_MASK)
+                        << STORE_GENERATION_SHIFT;
                 xous::return_scalar2(msg.sender, state as usize, rest).ok();
             }
             Some(KeysOp::BackupChunk) => {
@@ -673,11 +716,16 @@ fn main() -> ! {
                 req.result = match (state, store.lock()) {
                     (State::Unlocked, Some(lock)) => {
                         if req.offset == 0 || sealed.is_none() {
-                            let planted = option_env!("MAKI_DEMO_BACKUP").is_some() && passkeys::plant_demo(&store.pddb, &lock.basis);
+                            let planted = option_env!("MAKI_DEMO_BACKUP").is_some()
+                                && passkeys::plant_demo(&store.pddb, &lock.basis);
                             sealed = backup_key(seed.get(&store, state)).and_then(|mut key| {
                                 let mut plain = gather(&store, &lock.basis);
                                 let blob = seal(&key, &plain);
-                                log::debug!("backup: {} bytes of records, sealed {:?}", plain.len(), blob.as_ref().map(|b| b.len()));
+                                log::debug!(
+                                    "backup: {} bytes of records, sealed {:?}",
+                                    plain.len(),
+                                    blob.as_ref().map(|b| b.len())
+                                );
                                 plain.zeroize();
                                 key.zeroize();
                                 blob
@@ -745,7 +793,8 @@ fn main() -> ! {
                     plain
                 });
                 let Some(mut plain) = opened else {
-                    req.result = if store.entropy(&basis).is_none() { RESULT_NO_PHRASE } else { RESULT_NOT_YOURS };
+                    req.result =
+                        if store.entropy(&basis).is_none() { RESULT_NO_PHRASE } else { RESULT_NOT_YOURS };
                     req.done = true;
                     buffer.replace(req).ok();
                     continue;
@@ -769,17 +818,37 @@ fn main() -> ! {
                         (RESULT_OK, restore(&store, &basis, &entries, true))
                     } else {
                         let xns = xous_names::XousNames::new().unwrap();
-                        let count = |n: u32, one: &str| format!("{} {}{}", n, one, if n == 1 { "" } else { "s" });
-                        let mut what = [count(would.logins, "login"), count(would.codes, "code"), count(would.passkeys, "passkey")]
-                            .join("\n");
+                        let count =
+                            |n: u32, one: &str| format!("{} {}{}", n, one, if n == 1 { "" } else { "s" });
+                        let mut what = [
+                            count(would.logins, "login"),
+                            count(would.codes, "code"),
+                            count(would.passkeys, "passkey"),
+                        ]
+                        .join("\n");
                         if would.apps > 0 {
                             what.push_str(&format!("\n{}'s data", count(would.apps, "app")));
                         }
-                        let page = maki_launcher::Page { heading: "Restore".into(), value: "from a backup".into(), mono: what, prose: String::new() };
+                        let page = maki_launcher::Page {
+                            heading: "Restore".into(),
+                            value: "from a backup".into(),
+                            mono: what,
+                            prose: String::new(),
+                        };
                         match maki_launcher::Launcher::new(&xns).map(|l| {
-                            l.review("maki desktop", "Restore backup?", "adds what's missing", vec![page], "restore", "cancel", RESTORE_TIMEOUT_S)
+                            l.review(
+                                "maki desktop",
+                                "Restore backup?",
+                                "adds what's missing",
+                                vec![page],
+                                "restore",
+                                "cancel",
+                                RESTORE_TIMEOUT_S,
+                            )
                         }) {
-                            Ok(Ok(maki_launcher::Answer::Allowed(_))) => (RESULT_OK, restore(&store, &basis, &entries, true)),
+                            Ok(Ok(maki_launcher::Answer::Allowed(_))) => {
+                                (RESULT_OK, restore(&store, &basis, &entries, true))
+                            }
                             Ok(Ok(maki_launcher::Answer::Denied)) => (RESULT_DENIED, Added::default()),
                             Ok(Ok(maki_launcher::Answer::TimedOut)) => (RESULT_TIMED_OUT, Added::default()),
                             _ => (RESULT_FAILED, Added::default()),
@@ -837,7 +906,8 @@ fn main() -> ! {
                     None if state == State::Unlocked => RESULT_NO_PHRASE,
                     None => RESULT_NOT_NOW,
                     Some(mut s) => {
-                        let secret = developer.and_then(|d| maki_seed::app_secret(&s, &req.id, &d, &req.label));
+                        let secret =
+                            developer.and_then(|d| maki_seed::app_secret(&s, &req.id, &d, &req.label));
                         s.zeroize();
                         match secret {
                             Some(mut secret) => {
@@ -934,7 +1004,8 @@ fn main() -> ! {
                             (RESULT_NOT_NOW, Vec::new())
                         } else {
                             let mut entropy: [u8; 32] = random();
-                            let words: Vec<String> = maki_seed::to_words(&entropy).iter().map(|w| w.to_string()).collect();
+                            let words: Vec<String> =
+                                maki_seed::to_words(&entropy).iter().map(|w| w.to_string()).collect();
                             let stored = store.set_entropy(&lock.basis, &entropy);
                             entropy.zeroize();
                             match stored {

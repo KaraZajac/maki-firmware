@@ -4,16 +4,17 @@
 use alloy::consensus::{SignableTransaction, TxEip1559, TxEnvelope, TxLegacy};
 use alloy::eips::eip2718::Encodable2718;
 use alloy::eips::eip2930::{AccessList, AccessListItem};
-use alloy::primitives::{Address, Bytes, TxKind, B256, U256};
-use alloy::signers::local::PrivateKeySigner;
+use alloy::primitives::{Address, B256, Bytes, TxKind, U256};
 use alloy::signers::SignerSync;
+use alloy::signers::local::PrivateKeySigner;
 use maki_eth::display::{self, Call};
 use maki_eth::tx::{Error, Kind};
-use maki_eth::{checksum, Account, Tx};
-use maki_hd::seed::{OneKey, SeedKeys};
+use maki_eth::{Account, Tx, checksum};
 use maki_hd::HARDENED;
+use maki_hd::seed::{OneKey, SeedKeys};
 
-const ABANDON: &str = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
+const ABANDON: &str =
+    "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
 
 fn hex(s: &str) -> Vec<u8> {
     let s = s.trim_start_matches("0x");
@@ -37,7 +38,8 @@ fn alloy_signer(index: u32) -> PrivateKeySigner {
     let secp = bitcoin::secp256k1::Secp256k1::new();
     let master = bitcoin::bip32::Xpriv::new_master(bitcoin::NetworkKind::Main, &seed()).unwrap();
     let path: bitcoin::bip32::DerivationPath = format!("m/44'/60'/0'/0/{index}").parse().unwrap();
-    PrivateKeySigner::from_slice(&master.derive_priv(&secp, &path).unwrap().private_key.secret_bytes()).unwrap()
+    PrivateKeySigner::from_slice(&master.derive_priv(&secp, &path).unwrap().private_key.secret_bytes())
+        .unwrap()
 }
 
 #[test]
@@ -46,7 +48,7 @@ fn the_test_phrases_first_account_is_the_one_everyone_gets() {
     assert_eq!(account.address_string(), "0x9858EfFD232B4033E47d90003D41EC34EcaEda94");
     for i in [0, 1, 7] {
         let a = Account::new(keys(&seed()), i).unwrap();
-        assert_eq!(a.address(), alloy_signer(i).address().0 .0, "{i}");
+        assert_eq!(a.address(), alloy_signer(i).address().0.0, "{i}");
     }
     assert!(Account::new(keys(&seed()), HARDENED).is_err());
 }
@@ -65,14 +67,20 @@ fn addresses_are_checksummed_as_eip55_says() {
 
 #[test]
 fn eip155s_example_signs_as_published() {
-    let unsigned = hex("ec098504a817c800825208943535353535353535353535353535353535353535880de0b6b3a764000080018080");
+    let unsigned =
+        hex("ec098504a817c800825208943535353535353535353535353535353535353535880de0b6b3a764000080018080");
     let tx = Tx::parse(&unsigned).unwrap();
     assert_eq!((tx.kind, tx.chain_id, tx.nonce, tx.value), (Kind::Legacy, 1, 9, 1_000_000_000_000_000_000));
-    assert_eq!(tx.sighash().to_vec(), hex("daf5a779ae972f972197303d7b574746c7ef83eadac0f2791ad23db92e4c8e53"));
+    assert_eq!(
+        tx.sighash().to_vec(),
+        hex("daf5a779ae972f972197303d7b574746c7ef83eadac0f2791ad23db92e4c8e53")
+    );
     let account = Account::new(one(&[0x46; 32]), 0).unwrap();
     assert_eq!(
         tx.sign(&account).unwrap(),
-        hex("f86c098504a817c800825208943535353535353535353535353535353535353535880de0b6b3a76400008025a028ef61340bd939bc2195fe537567866003e1a15d3c71ff63e1590620aa636276a067cbe9d8997f761aecb703304b3800ccf555c9f3dc64214b297fb1966a3b6d83")
+        hex(
+            "f86c098504a817c800825208943535353535353535353535353535353535353535880de0b6b3a76400008025a028ef61340bd939bc2195fe537567866003e1a15d3c71ff63e1590620aa636276a067cbe9d8997f761aecb703304b3800ccf555c9f3dc64214b297fb1966a3b6d83"
+        )
     );
 }
 
@@ -96,7 +104,7 @@ fn bob() -> Address { "0x70997970C51812dc3A010C7d01b50e0d17dc79C8".parse().unwra
 fn erc20(selector: [u8; 4], who: Address, amount: U256) -> Vec<u8> {
     let mut d = selector.to_vec();
     d.extend([0u8; 12]);
-    d.extend(who.0 .0);
+    d.extend(who.0.0);
     d.extend(amount.to_be_bytes::<32>());
     d
 }
@@ -105,10 +113,18 @@ fn erc20(selector: [u8; 4], who: Address, amount: U256) -> Vec<u8> {
 fn eip1559_transactions_sign_as_alloy_signs_them() {
     let signer = alloy_signer(0);
     let account = Account::new(keys(&seed()), 0).unwrap();
-    let list = AccessList(vec![AccessListItem { address: usdc(), storage_keys: vec![B256::repeat_byte(7), B256::ZERO] }]);
+    let list = AccessList(vec![AccessListItem {
+        address: usdc(),
+        storage_keys: vec![B256::repeat_byte(7), B256::ZERO],
+    }]);
     let cases = [
         eip1559(Some(bob()), 50_000_000_000_000_000, vec![], AccessList::default()),
-        eip1559(Some(usdc()), 0, erc20([0xa9, 0x05, 0x9c, 0xbb], bob(), U256::from(1_500_000u64)), AccessList::default()),
+        eip1559(
+            Some(usdc()),
+            0,
+            erc20([0xa9, 0x05, 0x9c, 0xbb], bob(), U256::from(1_500_000u64)),
+            AccessList::default(),
+        ),
         eip1559(Some(usdc()), 0, vec![0xde, 0xad, 0xbe, 0xef, 1, 2, 3], list),
         eip1559(None, 0, vec![0x60; 300], AccessList::default()),
     ];
@@ -147,7 +163,12 @@ fn legacy_transactions_sign_as_alloy_signs_them() {
 fn messages_sign_as_alloy_signs_them() {
     let signer = alloy_signer(0);
     let account = Account::new(keys(&seed()), 0).unwrap();
-    for m in [&b"hello"[..], b"", &[0u8, 1, 2, 0xff][..], "example.com wants you to sign in with your Ethereum account".as_bytes()] {
+    for m in [
+        &b"hello"[..],
+        b"",
+        &[0u8, 1, 2, 0xff][..],
+        "example.com wants you to sign in with your Ethereum account".as_bytes(),
+    ] {
         let theirs = signer.sign_message_sync(m).unwrap().as_bytes();
         assert_eq!(account.sign_message(m).unwrap(), theirs);
     }
@@ -195,20 +216,39 @@ fn the_review_says_what_the_transaction_does() {
     assert_eq!(pages[2].mono, "65000 gas\n30 gwei");
     assert_eq!(summary, "up to 0.05195 ETH");
 
-    let transfer = tx(eip1559(Some(usdc()), 0, erc20([0xa9, 0x05, 0x9c, 0xbb], bob(), U256::from(1_500_000u64)), AccessList::default()));
-    assert_eq!(display::call(&transfer), Call::Transfer { to: bob().0 .0, amount: U256::from(1_500_000u64).to_be_bytes() });
+    let transfer = tx(eip1559(
+        Some(usdc()),
+        0,
+        erc20([0xa9, 0x05, 0x9c, 0xbb], bob(), U256::from(1_500_000u64)),
+        AccessList::default(),
+    ));
+    assert_eq!(
+        display::call(&transfer),
+        Call::Transfer { to: bob().0.0, amount: U256::from(1_500_000u64).to_be_bytes() }
+    );
     // USDC on Ethereum: maki knows it by its contract, and says how much in USDC
     let (pages, _) = display::review(&transfer).unwrap();
     let headings: Vec<&str> = pages.iter().map(|p| p.heading.as_str()).collect();
     assert_eq!(headings, ["Network", "Send tokens", "Token", "Max fee"]);
-    assert_eq!((pages[1].value.as_str(), pages[1].mono.as_str()), ("1.5 USDC", "0x70997970C51812dc3A010C7d01b50e0d17dc79C8"));
-    assert_eq!((pages[2].value.as_str(), pages[2].mono.as_str()), ("USDC", "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48"));
+    assert_eq!(
+        (pages[1].value.as_str(), pages[1].mono.as_str()),
+        ("1.5 USDC", "0x70997970C51812dc3A010C7d01b50e0d17dc79C8")
+    );
+    assert_eq!(
+        (pages[2].value.as_str(), pages[2].mono.as_str()),
+        ("USDC", "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48")
+    );
 
     // the same contract on another network is just a contract: its smallest units
     let elsewhere = Tx::parse(
         &TxEip1559 {
             chain_id: 8453,
-            ..eip1559(Some(usdc()), 0, erc20([0xa9, 0x05, 0x9c, 0xbb], bob(), U256::from(1_500_000u64)), AccessList::default())
+            ..eip1559(
+                Some(usdc()),
+                0,
+                erc20([0xa9, 0x05, 0x9c, 0xbb], bob(), U256::from(1_500_000u64)),
+                AccessList::default(),
+            )
         }
         .encoded_for_signing(),
     )
@@ -218,11 +258,21 @@ fn the_review_says_what_the_transaction_does() {
     assert_eq!(headings, ["Network", "Send tokens", "Token amount", "Token", "Max fee"]);
     assert_eq!(pages[2].mono, "1500000");
 
-    let approve = tx(eip1559(Some(usdc()), 0, erc20([0x09, 0x5e, 0xa7, 0xb3], bob(), U256::MAX), AccessList::default()));
+    let approve = tx(eip1559(
+        Some(usdc()),
+        0,
+        erc20([0x09, 0x5e, 0xa7, 0xb3], bob(), U256::MAX),
+        AccessList::default(),
+    ));
     let (pages, _) = display::review(&approve).unwrap();
     assert_eq!((pages[1].heading.as_str(), pages[2].mono.as_str()), ("Approve!", "any amount"));
     assert_eq!(pages[3].value, "USDC");
-    let some = tx(eip1559(Some(usdc()), 0, erc20([0x09, 0x5e, 0xa7, 0xb3], bob(), U256::from(25_000_000u64)), AccessList::default()));
+    let some = tx(eip1559(
+        Some(usdc()),
+        0,
+        erc20([0x09, 0x5e, 0xa7, 0xb3], bob(), U256::from(25_000_000u64)),
+        AccessList::default(),
+    ));
     let (pages, _) = display::review(&some).unwrap();
     assert_eq!(pages[2].mono, "25 USDC");
 
@@ -232,7 +282,8 @@ fn the_review_says_what_the_transaction_does() {
     assert!(pages[1].mono.ends_with("function deadbeef\n5 bytes"));
 
     let polygon = Tx::parse(
-        &TxEip1559 { chain_id: 137, ..eip1559(Some(bob()), 10u128.pow(18), vec![], AccessList::default()) }.encoded_for_signing(),
+        &TxEip1559 { chain_id: 137, ..eip1559(Some(bob()), 10u128.pow(18), vec![], AccessList::default()) }
+            .encoded_for_signing(),
     )
     .unwrap();
     let (pages, _) = display::review(&polygon).unwrap();
@@ -242,7 +293,7 @@ fn the_review_says_what_the_transaction_does() {
 
 #[test]
 fn known_tokens_say_their_amounts_exactly() {
-    use maki_eth::tokens::{amount, known, TOKENS};
+    use maki_eth::tokens::{TOKENS, amount, known};
     let usdc = known(1, &TOKENS[0].contract).unwrap();
     let wei = |n: u128| U256::from(n).to_be_bytes::<32>();
     assert_eq!(amount(usdc, &wei(0)), "0 USDC");
@@ -261,7 +312,10 @@ fn known_tokens_say_their_amounts_exactly() {
 
 #[test]
 fn messages_show_as_text_or_hex() {
-    assert_eq!(display::message(b"Sign in to example.com\nNonce: 12").mono, "Sign in to example.com\nNonce: 12");
+    assert_eq!(
+        display::message(b"Sign in to example.com\nNonce: 12").mono,
+        "Sign in to example.com\nNonce: 12"
+    );
     let binary = display::message(&[0x19, 0x01, 0xff]);
     assert_eq!((binary.value.as_str(), binary.mono.as_str()), ("in hex", "1901ff"));
 }
@@ -269,8 +323,8 @@ fn messages_show_as_text_or_hex() {
 const FIXTURES: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures");
 
 /// The emulator demo's transaction (0.05 ETH to Bob on Ethereum), unsigned and as maki signs it
-/// for the test phrase's first account, and its message's and typed data's signatures. Regenerate (only if the fixture changes) with
-///     cargo test -p maki-eth -- --ignored write_fixtures
+/// for the test phrase's first account, and its message's and typed data's signatures. Regenerate (only if
+/// the fixture changes) with     cargo test -p maki-eth -- --ignored write_fixtures
 fn fixture_tx() -> TxEip1559 { eip1559(Some(bob()), 50_000_000_000_000_000, vec![], AccessList::default()) }
 const FIXTURE_MESSAGE: &[u8] = b"Sign in to demo.maki";
 /// Typed data: a permit to spend 1 USDC on Ethereum, from the test phrase's first account.
@@ -283,8 +337,13 @@ fn write_fixtures() {
     let unsigned = fixture_tx().encoded_for_signing();
     std::fs::create_dir_all(FIXTURES).unwrap();
     std::fs::write(format!("{FIXTURES}/abandon-tx-unsigned.bin"), &unsigned).unwrap();
-    std::fs::write(format!("{FIXTURES}/abandon-tx-signed.bin"), Tx::parse(&unsigned).unwrap().sign(&account).unwrap()).unwrap();
-    std::fs::write(format!("{FIXTURES}/abandon-message.sig"), account.sign_message(FIXTURE_MESSAGE).unwrap()).unwrap();
+    std::fs::write(
+        format!("{FIXTURES}/abandon-tx-signed.bin"),
+        Tx::parse(&unsigned).unwrap().sign(&account).unwrap(),
+    )
+    .unwrap();
+    std::fs::write(format!("{FIXTURES}/abandon-message.sig"), account.sign_message(FIXTURE_MESSAGE).unwrap())
+        .unwrap();
     std::fs::write(format!("{FIXTURES}/abandon-typed.json"), FIXTURE_TYPED).unwrap();
     let typed = maki_eth::TypedData::parse(FIXTURE_TYPED).unwrap();
     std::fs::write(format!("{FIXTURES}/abandon-typed.sig"), account.sign_typed(&typed).unwrap()).unwrap();
@@ -307,9 +366,16 @@ fn the_fixtures_are_current() {
 
 #[test]
 fn a_sign_in_for_another_site_is_called_out() {
-    let siwe = |first: &str| format!("{first} wants you to sign in with your Ethereum account:\n0x9858EfFD232B4033E47d90003D41EC34EcaEda94\n\nURI: https://app.example.com\nVersion: 1\nChain ID: 1\nNonce: 32891756\nIssued At: 2026-09-26T12:00:00Z");
+    let siwe = |first: &str| {
+        format!(
+            "{first} wants you to sign in with your Ethereum account:\n0x9858EfFD232B4033E47d90003D41EC34EcaEda94\n\nURI: https://app.example.com\nVersion: 1\nChain ID: 1\nNonce: 32891756\nIssued At: 2026-09-26T12:00:00Z"
+        )
+    };
     assert_eq!(display::sign_in_site(siwe("app.example.com").as_bytes()).as_deref(), Some("app.example.com"));
-    assert_eq!(display::sign_in_site(siwe("https://App.Example.com:8443").as_bytes()).as_deref(), Some("app.example.com"));
+    assert_eq!(
+        display::sign_in_site(siwe("https://App.Example.com:8443").as_bytes()).as_deref(),
+        Some("app.example.com")
+    );
     assert_eq!(display::sign_in_site(b"just a message"), None);
     // from the site it names: just the message
     let pages = display::message_pages("app.example.com", siwe("app.example.com").as_bytes());

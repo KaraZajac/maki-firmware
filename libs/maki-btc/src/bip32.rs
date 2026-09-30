@@ -141,7 +141,11 @@ impl Xpub {
 
     /// Written with `version`'s bytes.
     pub fn encode(&self, version: [u8; 4]) -> String {
-        let public = Public { key: self.key, chain_code: self.chain_code, parent_fingerprint: self.parent_fingerprint };
+        let public = Public {
+            key: self.key,
+            chain_code: self.chain_code,
+            parent_fingerprint: self.parent_fingerprint,
+        };
         xpub(version, self.depth, self.child_number, &public)
     }
 
@@ -152,9 +156,9 @@ impl Xpub {
     /// 2^-127 case that it's no key.
     pub fn child(&self, index: u32) -> Option<Xpub> {
         use hmac::{Hmac, Mac};
+        use k256::elliptic_curve::PrimeField;
         use k256::elliptic_curve::group::prime::PrimeCurveAffine;
         use k256::elliptic_curve::sec1::ToEncodedPoint;
-        use k256::elliptic_curve::PrimeField;
         if index >= HARDENED || self.depth == u8::MAX {
             return None;
         }
@@ -162,7 +166,8 @@ impl Xpub {
         mac.update(&self.key);
         mac.update(&index.to_be_bytes());
         let i = mac.finalize().into_bytes();
-        let tweak: k256::Scalar = Option::from(k256::Scalar::from_repr(*k256::FieldBytes::from_slice(&i[..32])))?;
+        let tweak: k256::Scalar =
+            Option::from(k256::Scalar::from_repr(*k256::FieldBytes::from_slice(&i[..32])))?;
         let parent = k256::PublicKey::from_sec1_bytes(&self.key).ok()?;
         let child = (k256::ProjectivePoint::GENERATOR * tweak + parent.to_projective()).to_affine();
         if bool::from(child.is_identity()) {

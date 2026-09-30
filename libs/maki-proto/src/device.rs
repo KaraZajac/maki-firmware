@@ -118,12 +118,27 @@ pub enum Handled {
 /// Installed apps (ARCHITECTURE.md, "Apps you can install").
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Apps {
-    List { index: u32 },
-    Install { total: u32, offset: u32, data: Vec<u8> },
-    Remove { id: String },
-    Message { id: String, message: Vec<u8> },
+    List {
+        index: u32,
+    },
+    Install {
+        total: u32,
+        offset: u32,
+        data: Vec<u8>,
+    },
+    Remove {
+        id: String,
+    },
+    Message {
+        id: String,
+        message: Vec<u8>,
+    },
     /// `total` 0: just what maki has.
-    StoreUpdate { total: u32, offset: u32, data: Vec<u8> },
+    StoreUpdate {
+        total: u32,
+        offset: u32,
+        data: Vec<u8>,
+    },
     Space,
 }
 
@@ -284,14 +299,25 @@ pub mod reply {
     /// `NoPhrase`, `Unavailable`) with nothing.
     pub fn backup_piece(status: Approval, total: u32, offset: u32, data: &[u8]) -> (u8, Vec<u8>) {
         let data = if status == Approval::Approved { data } else { &[] };
-        (kind::BACKUP_GET | kind::REPLY, Writer::new().u8(status as u8).u32(total).u32(offset).bytes16(data).finish())
+        (
+            kind::BACKUP_GET | kind::REPLY,
+            Writer::new().u8(status as u8).u32(total).u32(offset).bytes16(data).finish(),
+        )
     }
 
     /// A restore piece taken in (`done` false), or the restore's outcome (`done` true): the
     /// approval, and what it added.
-    pub fn restore_piece(done: bool, status: Approval, logins: u16, codes: u16, passkeys: u16) -> (u8, Vec<u8>) {
-        let (logins, codes, passkeys) = if status == Approval::Approved { (logins, codes, passkeys) } else { (0, 0, 0) };
-        let body = Writer::new().u8(done as u8).u8(status as u8).u16(logins).u16(codes).u16(passkeys).finish();
+    pub fn restore_piece(
+        done: bool,
+        status: Approval,
+        logins: u16,
+        codes: u16,
+        passkeys: u16,
+    ) -> (u8, Vec<u8>) {
+        let (logins, codes, passkeys) =
+            if status == Approval::Approved { (logins, codes, passkeys) } else { (0, 0, 0) };
+        let body =
+            Writer::new().u8(done as u8).u8(status as u8).u16(logins).u16(codes).u16(passkeys).finish();
         (kind::BACKUP_PUT | kind::REPLY, body)
     }
 
@@ -322,7 +348,8 @@ pub mod reply {
     /// with nothing.
     pub fn app_space(status: Approval, space: &super::AppSpace) -> (u8, Vec<u8>) {
         let s = if status == Approval::Approved { *space } else { super::AppSpace::default() };
-        let body = Writer::new().u8(status as u8).u32(s.apps).u32(s.max_apps).u32(s.space).u32(s.taken).finish();
+        let body =
+            Writer::new().u8(status as u8).u32(s.apps).u32(s.max_apps).u32(s.space).u32(s.taken).finish();
         (kind::APP_SPACE | kind::REPLY, body)
     }
 
@@ -334,7 +361,10 @@ pub mod reply {
         while !reason.is_char_boundary(end) {
             end -= 1;
         }
-        (kind::APP_INSTALL | kind::REPLY, Writer::new().u8(done as u8).u8(approval as u8).str8(&reason[..end]).finish())
+        (
+            kind::APP_INSTALL | kind::REPLY,
+            Writer::new().u8(done as u8).u8(approval as u8).str8(&reason[..end]).finish(),
+        )
     }
 
     pub fn app_remove(approval: Approval) -> (u8, Vec<u8>) {
@@ -343,15 +373,28 @@ pub mod reply {
 
     /// The app's answer (`Approved`), or why there's none, with nothing.
     pub fn app_message(status: Approval, answer: &[u8]) -> (u8, Vec<u8>) {
-        let answer = if status == Approval::Approved { &answer[..answer.len().min(super::MAX_APP_MESSAGE)] } else { &[] };
+        let answer = if status == Approval::Approved {
+            &answer[..answer.len().min(super::MAX_APP_MESSAGE)]
+        } else {
+            &[]
+        };
         (kind::APP_MESSAGE | kind::REPLY, Writer::new().u8(status as u8).bytes16(answer).finish())
     }
 
     /// A piece of a store record taken (`done` false), or the outcome: taken (`Approved`), or
     /// `Refused` with maki's reason (at most 255 bytes, cut at a character); and what maki has
     /// now, unless it's `Locked` or `Unavailable`.
-    pub fn store_update(done: bool, status: Approval, state: super::StoreState, reason: &str) -> (u8, Vec<u8>) {
-        let state = if matches!(status, Approval::Approved | Approval::Refused) { state } else { super::StoreState::default() };
+    pub fn store_update(
+        done: bool,
+        status: Approval,
+        state: super::StoreState,
+        reason: &str,
+    ) -> (u8, Vec<u8>) {
+        let state = if matches!(status, Approval::Approved | Approval::Refused) {
+            state
+        } else {
+            super::StoreState::default()
+        };
         let reason = if status == Approval::Refused { reason } else { "" };
         let mut end = reason.len().min(255);
         while !reason.is_char_boundary(end) {
@@ -406,7 +449,14 @@ fn malformed(_: Truncated) -> Reply { error(ErrorCode::Malformed, "malformed mes
 impl<P: Platform> Device<P> {
     /// `name` is this maki's own (`names`), which HELLO gives the computer.
     pub fn new(platform: P, name: impl Into<String>, version: String) -> Self {
-        Device { platform, name: name.into(), version, challenge: None, state: TimeState::Unset, tz_offset_s: 0 }
+        Device {
+            platform,
+            name: name.into(),
+            version,
+            challenge: None,
+            state: TimeState::Unset,
+            tz_offset_s: 0,
+        }
     }
 
     pub fn state(&self) -> TimeState { self.state }
@@ -433,9 +483,12 @@ impl<P: Platform> Device<P> {
             kind::TIME_UNVERIFIED => self.time_unverified(body),
             kind::GET_LOGIN | kind::GET_TOTP | kind::SAVE_LOGIN => return self.ask(packet.kind, body),
             kind::BACKUP_GET | kind::BACKUP_PUT => return Self::backup(packet.kind, body),
-            kind::APP_LIST | kind::APP_INSTALL | kind::APP_REMOVE | kind::APP_MESSAGE | kind::STORE_UPDATE | kind::APP_SPACE => {
-                return Self::apps(packet.kind, body)
-            }
+            kind::APP_LIST
+            | kind::APP_INSTALL
+            | kind::APP_REMOVE
+            | kind::APP_MESSAGE
+            | kind::STORE_UPDATE
+            | kind::APP_SPACE => return Self::apps(packet.kind, body),
             _ => Ok(error(ErrorCode::UnknownKind, "unknown message kind")),
         };
         let (kind, body) = result.unwrap_or_else(malformed);
@@ -449,7 +502,11 @@ impl<P: Platform> Device<P> {
             let ask = match kind {
                 kind::GET_LOGIN => Ask::Login { site: site.clone() },
                 kind::GET_TOTP => Ask::Totp { site: site.clone() },
-                _ => Ask::SaveLogin { site: site.clone(), username: r.str8()?.into(), password: r.str8()?.into() },
+                _ => Ask::SaveLogin {
+                    site: site.clone(),
+                    username: r.str8()?.into(),
+                    password: r.str8()?.into(),
+                },
             };
             r.end()?;
             Ok::<_, Truncated>((site, ask))
@@ -463,7 +520,9 @@ impl<P: Platform> Device<P> {
                 let (k, b) = error(ErrorCode::BadArgument, "site must be a lowercase ASCII hostname");
                 Handled::Reply(k, b)
             }
-            Ok((_, Ask::SaveLogin { username, password, .. })) if username.is_empty() || password.is_empty() => {
+            Ok((_, Ask::SaveLogin { username, password, .. }))
+                if username.is_empty() || password.is_empty() =>
+            {
                 let (k, b) = error(ErrorCode::BadArgument, "username or password is empty");
                 Handled::Reply(k, b)
             }
@@ -488,9 +547,15 @@ impl<P: Platform> Device<P> {
             let mut r = Reader::new(body);
             let request = match kind {
                 kind::APP_LIST => Apps::List { index: r.u32()? },
-                kind::APP_INSTALL => Apps::Install { total: r.u32()?, offset: r.u32()?, data: r.bytes16()?.to_vec() },
-                kind::APP_MESSAGE => Apps::Message { id: r.str8()?.to_string(), message: r.bytes16()?.to_vec() },
-                kind::STORE_UPDATE => Apps::StoreUpdate { total: r.u32()?, offset: r.u32()?, data: r.bytes16()?.to_vec() },
+                kind::APP_INSTALL => {
+                    Apps::Install { total: r.u32()?, offset: r.u32()?, data: r.bytes16()?.to_vec() }
+                }
+                kind::APP_MESSAGE => {
+                    Apps::Message { id: r.str8()?.to_string(), message: r.bytes16()?.to_vec() }
+                }
+                kind::STORE_UPDATE => {
+                    Apps::StoreUpdate { total: r.u32()?, offset: r.u32()?, data: r.bytes16()?.to_vec() }
+                }
                 kind::APP_SPACE => Apps::Space,
                 _ => Apps::Remove { id: r.str8()?.to_string() },
             };
@@ -514,8 +579,12 @@ impl<P: Platform> Device<P> {
             {
                 bad("bundle piece out of range")
             }
-            Ok(Apps::Remove { ref id } | Apps::Message { ref id, .. }) if !app_id_valid(id) => bad("not an app ID"),
-            Ok(Apps::Message { ref message, .. }) if message.len() > MAX_APP_MESSAGE => bad("message too big"),
+            Ok(Apps::Remove { ref id } | Apps::Message { ref id, .. }) if !app_id_valid(id) => {
+                bad("not an app ID")
+            }
+            Ok(Apps::Message { ref message, .. }) if message.len() > MAX_APP_MESSAGE => {
+                bad("message too big")
+            }
             Ok(Apps::StoreUpdate { total: 0, offset, ref data }) if offset != 0 || !data.is_empty() => {
                 bad("a store status request carries nothing")
             }
@@ -547,7 +616,9 @@ impl<P: Platform> Device<P> {
                 Handled::Reply(k, b)
             }
             Ok(Backup::Put { total, offset, ref data })
-                if total > MAX_BACKUP || data.len() > BACKUP_PIECE || offset as u64 + data.len() as u64 > total as u64 =>
+                if total > MAX_BACKUP
+                    || data.len() > BACKUP_PIECE
+                    || offset as u64 + data.len() as u64 > total as u64 =>
             {
                 let (k, b) = error(ErrorCode::BadArgument, "restore piece out of range");
                 Handled::Reply(k, b)
@@ -558,7 +629,8 @@ impl<P: Platform> Device<P> {
 
     fn hello(&mut self, body: &[u8]) -> Result<Reply, Truncated> {
         Reader::new(body).end()?;
-        let reply = Writer::new().u8(crate::frame::PROTOCOL_VERSION).str8(&self.name).str8(&self.version).finish();
+        let reply =
+            Writer::new().u8(crate::frame::PROTOCOL_VERSION).str8(&self.name).str8(&self.version).finish();
         Ok((kind::HELLO | kind::REPLY, reply))
     }
 
@@ -612,9 +684,13 @@ impl<P: Platform> Device<P> {
         let mut seen: Vec<u8> = Vec::new();
         let mut results = Writer::new().u8(answers.len() as u8);
         for (id, response) in answers {
-            let status = match (challenge.requests.iter().find(|(i, _)| *i == id), SERVERS.iter().find(|s| s.id == id)) {
+            let status = match (
+                challenge.requests.iter().find(|(i, _)| *i == id),
+                SERVERS.iter().find(|s| s.id == id),
+            ) {
                 _ if seen.contains(&id) => AnswerStatus::Duplicate,
-                (Some((_, request)), Some(server)) => match roughtime::verify(request, response, &server.key) {
+                (Some((_, request)), Some(server)) => match roughtime::verify(request, response, &server.key)
+                {
                     Ok(v) if v.radius <= MAX_RADIUS_S => {
                         verified.push(v);
                         AnswerStatus::Verified

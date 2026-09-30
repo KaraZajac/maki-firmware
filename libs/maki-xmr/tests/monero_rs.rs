@@ -1,6 +1,6 @@
 //! Addresses and subaddresses for many keys, held to monero-rs's.
-use maki_xmr::{address, Keys, Kind, Network};
-use monero::cryptonote::subaddress::{get_subaddress, Index};
+use maki_xmr::{Keys, Kind, Network, address};
+use monero::cryptonote::subaddress::{Index, get_subaddress};
 use monero::util::key::{KeyPair, PrivateKey, PublicKey, ViewPair};
 
 #[test]
@@ -30,7 +30,10 @@ fn addresses_and_subaddresses_are_monero_rss() {
             (Network::Testnet, monero::Network::Testnet),
             (Network::Stagenet, monero::Network::Stagenet),
         ] {
-            assert_eq!(address(network, Kind::Standard, &spend, &view), monero::Address::from_keypair(net, &theirs).to_string());
+            assert_eq!(
+                address(network, Kind::Standard, &spend, &view),
+                monero::Address::from_keypair(net, &theirs).to_string()
+            );
             let pair = ViewPair::from(theirs);
             for (major, minor) in [(0, 1), (0, 9), (3, 0), (7, 1234)] {
                 let (d, c) = ours.subaddress(major, minor);

@@ -17,8 +17,20 @@ const GAP: i32 = 4;
 const LEAD: i32 = 6;
 /// Where the clock sits, minute by minute: a few pixels this way and that, so no pixel is lit
 /// for long in one place.
-const DRIFT: [(i32, i32); 12] =
-    [(0, 0), (5, -2), (-5, 2), (2, 3), (-3, -3), (7, 1), (-7, -1), (1, -3), (-2, 3), (6, 3), (-6, -2), (3, -1)];
+const DRIFT: [(i32, i32); 12] = [
+    (0, 0),
+    (5, -2),
+    (-5, 2),
+    (2, 3),
+    (-3, -3),
+    (7, 1),
+    (-7, -1),
+    (1, -3),
+    (-2, 3),
+    (6, 3),
+    (-6, -2),
+    (3, -1),
+];
 /// The dash glyph: no time yet.
 const DASH: usize = 10;
 
@@ -72,8 +84,12 @@ mod tests {
         // every drift keeps the clock on the screen
         for (dx, dy) in DRIFT {
             let (w, h) = (CELL_W as i32, CELL_H as i32);
-            assert!((128 - (2 * w + GAP)) / 2 + dx >= 0 && (128 - (2 * w + GAP)) / 2 + dx + 2 * w + GAP <= 128);
-            assert!((128 - (2 * h + LEAD)) / 2 + dy >= 0 && (128 - (2 * h + LEAD)) / 2 + dy + 2 * h + LEAD <= 128);
+            assert!(
+                (128 - (2 * w + GAP)) / 2 + dx >= 0 && (128 - (2 * w + GAP)) / 2 + dx + 2 * w + GAP <= 128
+            );
+            assert!(
+                (128 - (2 * h + LEAD)) / 2 + dy >= 0 && (128 - (2 * h + LEAD)) / 2 + dy + 2 * h + LEAD <= 128
+            );
         }
     }
 }

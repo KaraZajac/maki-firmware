@@ -13,6 +13,7 @@ unsafe impl GlobalAlloc for Counting {
         BIGGEST.fetch_max(l.size(), SeqCst);
         unsafe { System.alloc(l) }
     }
+
     unsafe fn dealloc(&self, p: *mut u8, l: Layout) {
         NOW.fetch_sub(l.size(), SeqCst);
         unsafe { System.dealloc(p, l) }

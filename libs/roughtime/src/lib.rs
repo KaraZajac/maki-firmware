@@ -184,10 +184,10 @@ pub fn request(nonce: &[u8; 32]) -> [u8; REQUEST_LEN] {
     p[8..12].copy_from_slice(&((REQUEST_LEN - 12) as u32).to_le_bytes());
     let m = &mut p[12..];
     let words: [u32; 8] = [
-        4,                // N
-        4,                // NONC starts after VER
-        4 + 32,           // TYPE
-        4 + 32 + 4,       // ZZZZ
+        4,          // N
+        4,          // NONC starts after VER
+        4 + 32,     // TYPE
+        4 + 32 + 4, // ZZZZ
         tag_value(VER),
         tag_value(NONC),
         tag_value(TYPE),
@@ -256,7 +256,8 @@ pub fn verify(request: &[u8], response: &[u8], server_key: &[u8; 32]) -> Result<
     }
     let mut node = hash(&[&[0x00], request]);
     for sibling in path.chunks_exact(32) {
-        node = if index & 1 == 0 { hash(&[&[0x01], &node, sibling]) } else { hash(&[&[0x01], sibling, &node]) };
+        node =
+            if index & 1 == 0 { hash(&[&[0x01], &node, sibling]) } else { hash(&[&[0x01], sibling, &node]) };
         index >>= 1;
     }
     if node != srep.fixed::<32>(ROOT)? {

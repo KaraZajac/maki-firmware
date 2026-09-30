@@ -868,7 +868,9 @@ fn is_confined(pid: PID) -> bool { SystemServices::with(|ss| ss.is_confined(pid)
 /// these would leave it (and the kernel, retrying) stuck. The trap says where the call came
 /// from, and user code can't come from supervisor mode.
 #[cfg(all(baremetal, target_arch = "riscv32"))]
-fn from_kernel() -> bool { riscv::register::sstatus::read().spp() == riscv::register::sstatus::SPP::Supervisor }
+fn from_kernel() -> bool {
+    riscv::register::sstatus::read().spp() == riscv::register::sstatus::SPP::Supervisor
+}
 
 #[cfg(not(all(baremetal, target_arch = "riscv32")))]
 fn from_kernel() -> bool { false }
@@ -881,7 +883,9 @@ fn spend_budget(pages: usize) -> core::result::Result<(), xous_kernel::Error> {
     })
 }
 
-fn refund_budget(pages: usize) { ArchProcess::with_inner_mut(|p| p.page_budget = p.page_budget.saturating_add(pages)) }
+fn refund_budget(pages: usize) {
+    ArchProcess::with_inner_mut(|p| p.page_budget = p.page_budget.saturating_add(pages))
+}
 
 pub fn handle(pid: PID, tid: TID, in_irq: bool, call: SysCall) -> SysCallResult {
     klog!("KERNEL({}:{}): Syscall {:x?}, in_irq={}", pid, tid, call, in_irq);
@@ -949,7 +953,8 @@ pub fn handle_inner(pid: PID, tid: TID, in_irq: bool, call: SysCall) -> SysCallR
                         return Err(xous_kernel::Error::AccessDenied);
                     }
                     spend_budget(size.get() / PAGE_SIZE)?;
-                    let mapped = mm.map_range(phys_ptr, virt_ptr, size.get(), pid, req_flags, MemoryType::Default);
+                    let mapped =
+                        mm.map_range(phys_ptr, virt_ptr, size.get(), pid, req_flags, MemoryType::Default);
                     if mapped.is_err() {
                         refund_budget(size.get() / PAGE_SIZE);
                     }
@@ -1065,7 +1070,10 @@ pub fn handle_inner(pid: PID, tid: TID, in_irq: bool, call: SysCall) -> SysCallR
                     }
                     // never past the user area, into page tables or the kernel
                     if cfg!(baremetal)
-                        && process_inner.mem_heap_base.checked_add(new_size).is_none_or(|end| end > USER_AREA_END)
+                        && process_inner
+                            .mem_heap_base
+                            .checked_add(new_size)
+                            .is_none_or(|end| end > USER_AREA_END)
                     {
                         return Err(xous_kernel::Error::BadAddress);
                     }
@@ -1214,7 +1222,10 @@ pub fn handle_inner(pid: PID, tid: TID, in_irq: bool, call: SysCall) -> SysCallR
         }
         SysCall::TryConnect(sid) => SystemServices::with_mut(|ss| {
             if ss.is_confined(pid) {
-                return ss.existing_connection(sid).map(xous_kernel::Result::ConnectionID).ok_or(xous_kernel::Error::AccessDenied);
+                return ss
+                    .existing_connection(sid)
+                    .map(xous_kernel::Result::ConnectionID)
+                    .ok_or(xous_kernel::Error::AccessDenied);
             }
             ss.connect_to_server(sid).map(xous_kernel::Result::ConnectionID)
         }),
@@ -1250,14 +1261,20 @@ pub fn handle_inner(pid: PID, tid: TID, in_irq: bool, call: SysCall) -> SysCallR
             SystemServices::with_mut(|ss| ss.terminate_child(pid, target)).map(|_| xous_kernel::Result::Ok)
         }
         SysCall::ChildRunning(target) => {
-            Ok(xous_kernel::Result::Scalar1(SystemServices::with(|ss| ss.child_running(pid, target)) as usize))
+            Ok(
+                xous_kernel::Result::Scalar1(
+                    SystemServices::with(|ss| ss.child_running(pid, target)) as usize
+                ),
+            )
         }
         SysCall::ConfineSelf(budget) => SystemServices::with_mut(|ss| {
             let process = ss.get_process_mut(pid)?;
             let already = process.confined;
             process.confined = true;
             // for good: a second call can only lower the budget
-            ArchProcess::with_inner_mut(|p| p.page_budget = if already { p.page_budget.min(budget) } else { budget });
+            ArchProcess::with_inner_mut(|p| {
+                p.page_budget = if already { p.page_budget.min(budget) } else { budget }
+            });
             klog!("PID {} confined, {} pages to map", pid, budget);
             Ok(xous_kernel::Result::Ok)
         }),
@@ -1338,7 +1355,8 @@ pub fn handle_inner(pid: PID, tid: TID, in_irq: bool, call: SysCall) -> SysCallR
         SysCall::AdjustProcessLimit(index, current, new) => match index {
             1 => arch::process::Process::with_inner_mut(|p| {
                 // never past the user area, into page tables or the kernel
-                let fits = !cfg!(baremetal) || p.mem_heap_base.checked_add(new).is_some_and(|end| end <= USER_AREA_END);
+                let fits = !cfg!(baremetal)
+                    || p.mem_heap_base.checked_add(new).is_some_and(|end| end <= USER_AREA_END);
                 if p.mem_heap_max == current && fits {
                     p.mem_heap_max = new;
                 }

@@ -3,7 +3,7 @@
 use alloc::format;
 use alloc::string::String;
 
-use maki_hd::{Keys, HARDENED};
+use maki_hd::{HARDENED, Keys};
 use sha3::{Digest, Keccak256};
 
 pub fn keccak256(data: &[u8]) -> [u8; 32] { Keccak256::digest(data).into() }
@@ -51,7 +51,7 @@ impl<'k> Account<'k> {
         Ok((sig[..32].try_into().unwrap(), sig[32..].try_into().unwrap(), recid))
     }
 
-/// EIP-191 `personal_sign`: r, s and v (27 or 28), 65 bytes.
+    /// EIP-191 `personal_sign`: r, s and v (27 or 28), 65 bytes.
     pub fn sign_message(&self, message: &[u8]) -> Result<[u8; 65], Error> {
         let (r, s, v) = self.sign(&message_hash(message))?;
         let mut out = [0u8; 65];

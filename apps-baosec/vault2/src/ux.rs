@@ -299,7 +299,13 @@ impl VaultUi {
                 self.band(26, 34, TotpLayout::totp_font(), false, &code);
 
                 // the time the code has left
-                let step = item.extra.split(':').nth(2).and_then(|s| s.parse::<u64>().ok()).filter(|&s| s > 0).unwrap_or(30);
+                let step = item
+                    .extra
+                    .split(':')
+                    .nth(2)
+                    .and_then(|s| s.parse::<u64>().ok())
+                    .filter(|&s| s > 0)
+                    .unwrap_or(30);
                 let now_ms = std::time::SystemTime::now()
                     .duration_since(std::time::SystemTime::UNIX_EPOCH)
                     .map(|d| d.as_millis() as u64)
@@ -370,9 +376,15 @@ impl VaultUi {
         }
         for i in 0..6 {
             let style = DrawStyle::new(PixelColor::Light, PixelColor::Light, 1);
-            self.gfx.draw_line(Line::new_with_style(Point::new(3 + i, y - i), Point::new(3 + i, y + i), style)).ok();
             self.gfx
-                .draw_line(Line::new_with_style(Point::new(124 - i, y - i), Point::new(124 - i, y + i), style))
+                .draw_line(Line::new_with_style(Point::new(3 + i, y - i), Point::new(3 + i, y + i), style))
+                .ok();
+            self.gfx
+                .draw_line(Line::new_with_style(
+                    Point::new(124 - i, y - i),
+                    Point::new(124 - i, y + i),
+                    style,
+                ))
                 .ok();
         }
     }

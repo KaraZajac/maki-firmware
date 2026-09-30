@@ -63,9 +63,13 @@ impl<'a> Cursor<'a> {
 
     pub(crate) fn u8(&mut self) -> Result<u8, ParseError> { Ok(self.take(1)?[0]) }
 
-    pub(crate) fn u32(&mut self) -> Result<u32, ParseError> { Ok(u32::from_le_bytes(self.take(4)?.try_into().unwrap())) }
+    pub(crate) fn u32(&mut self) -> Result<u32, ParseError> {
+        Ok(u32::from_le_bytes(self.take(4)?.try_into().unwrap()))
+    }
 
-    pub(crate) fn u64(&mut self) -> Result<u64, ParseError> { Ok(u64::from_le_bytes(self.take(8)?.try_into().unwrap())) }
+    pub(crate) fn u64(&mut self) -> Result<u64, ParseError> {
+        Ok(u64::from_le_bytes(self.take(8)?.try_into().unwrap()))
+    }
 
     /// CompactSize, minimally encoded.
     pub(crate) fn varint(&mut self) -> Result<u64, ParseError> {

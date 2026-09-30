@@ -37,7 +37,7 @@ fn typical() -> Vec<(u32, u32, u32, u32, u32, u32)> {
         (1, 0x1000, 0x10000, 0x1000, 0x1000, RX),
         (1, 0x2000, 0x11000, 0x800, 0x800, R),
         (1, 0x2800, 0x12000, 0x100, 0x3000, RW),
-        (0x6474_e551, 0, 0, 0, 0, RW), // GNU_STACK
+        (0x6474_e551, 0, 0, 0, 0, RW),           // GNU_STACK
         (0x7000_0003, 0x2900, 0, 0x40, 0x40, R), // RISCV_ATTRIBUTES
     ]
 }
@@ -48,7 +48,10 @@ fn a_typical_program_checks_out() {
     assert_eq!(p.entry, 0x10010);
     let segments: Vec<_> = p.segments().collect();
     assert_eq!(segments.len(), 3);
-    assert_eq!(*segments[2], Segment { memory: 0x12000..0x15000, file: 0x2800..0x2900, writable: true, executable: false });
+    assert_eq!(
+        *segments[2],
+        Segment { memory: 0x12000..0x15000, file: 0x2800..0x2900, writable: true, executable: false }
+    );
     assert_eq!(p.pages(), 5);
     // 20 KiB of pages: not in 16
     assert_eq!(check(&elf(0x10010, &typical(), 0x3000), 16), Err(Error::TooBig(5)));
@@ -118,7 +121,10 @@ fn the_entry_is_in_code() {
 /// toolchain makes.
 #[test]
 fn a_real_xous_program_checks_out() {
-    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../target/riscv32imac-unknown-xous-elf/release/maki-app-host");
+    let path = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../target/riscv32imac-unknown-xous-elf/release/maki-app-host"
+    );
     let Ok(bytes) = std::fs::read(path) else { return };
     let p = check(&bytes, 4096).unwrap();
     assert_eq!(p.segments().filter(|s| s.executable).count(), 1);

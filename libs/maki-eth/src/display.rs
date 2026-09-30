@@ -7,8 +7,8 @@ use alloc::vec;
 use alloc::vec::Vec;
 
 use crate::account::checksum;
-use crate::tokens;
 use crate::json::Value;
+use crate::tokens;
 use crate::tx::{Error, Tx};
 use crate::typed::{self, TypedData};
 
@@ -88,12 +88,24 @@ pub enum Call {
     /// deploys a contract of this many bytes
     Deploy(usize),
     /// ERC-20 `transfer(to, amount)`
-    Transfer { to: [u8; 20], amount: [u8; 32] },
+    Transfer {
+        to: [u8; 20],
+        amount: [u8; 32],
+    },
     /// ERC-20 `approve(spender, amount)`: the spender may take up to the amount, later
-    Approve { spender: [u8; 20], amount: [u8; 32] },
+    Approve {
+        spender: [u8; 20],
+        amount: [u8; 32],
+    },
     /// ERC-721/1155 `setApprovalForAll(operator, approved)`: every item of the collection
-    ApproveAll { operator: [u8; 20], approved: bool },
-    Unknown { selector: [u8; 4], len: usize },
+    ApproveAll {
+        operator: [u8; 20],
+        approved: bool,
+    },
+    Unknown {
+        selector: [u8; 4],
+        len: usize,
+    },
 }
 
 /// An ABI address argument: 12 zero bytes, then the address.
@@ -114,10 +126,14 @@ pub fn call(tx: &Tx) -> Call {
     if d.len() == 68 {
         let (a, b) = (&d[4..36], &d[36..68]);
         match (selector, address_arg(a)) {
-            ([0xa9, 0x05, 0x9c, 0xbb], Some(to)) => return Call::Transfer { to, amount: b.try_into().unwrap() },
-            ([0x09, 0x5e, 0xa7, 0xb3], Some(spender)) => return Call::Approve { spender, amount: b.try_into().unwrap() },
+            ([0xa9, 0x05, 0x9c, 0xbb], Some(to)) => {
+                return Call::Transfer { to, amount: b.try_into().unwrap() };
+            }
+            ([0x09, 0x5e, 0xa7, 0xb3], Some(spender)) => {
+                return Call::Approve { spender, amount: b.try_into().unwrap() };
+            }
             ([0xa2, 0x2c, 0xb4, 0x65], Some(operator)) if b[..31].iter().all(|&x| x == 0) && b[31] <= 1 => {
-                return Call::ApproveAll { operator, approved: b[31] == 1 }
+                return Call::ApproveAll { operator, approved: b[31] == 1 };
             }
             _ => {}
         }
@@ -126,7 +142,9 @@ pub fn call(tx: &Tx) -> Call {
 }
 
 /// The token the transaction's contract is, if maki knows it on this network.
-fn known(tx: &Tx) -> Option<&'static tokens::Token> { tx.to.as_ref().and_then(|to| tokens::known(tx.chain_id, to)) }
+fn known(tx: &Tx) -> Option<&'static tokens::Token> {
+    tx.to.as_ref().and_then(|to| tokens::known(tx.chain_id, to))
+}
 
 /// The pages the owner goes through before signing, and the line that goes with sign and
 /// reject (the most that can leave the account in coins).
@@ -142,7 +160,9 @@ pub fn review(tx: &Tx) -> Result<(Vec<Page>, String), Error> {
     }
     match c {
         Call::None => {}
-        Call::Deploy(len) => pages.push(page("New contract", format!("{} bytes of code", len), String::new())),
+        Call::Deploy(len) => {
+            pages.push(page("New contract", format!("{} bytes of code", len), String::new()))
+        }
         Call::Transfer { to, amount } => match known(tx) {
             // a token maki knows by its contract: how much of it, in its own units
             Some(t) => {
@@ -163,8 +183,16 @@ pub fn review(tx: &Tx) -> Result<(Vec<Page>, String), Error> {
                 None => decimal(&amount),
             };
             pages.push(page("Approve!", String::from("lets it spend tokens"), checksum(&spender)));
-            pages.push(page("Up to", String::from(if t.is_some() { "of the token" } else { "in its smallest units" }), how_much));
-            pages.push(page("Token", String::from(t.map(|t| t.symbol).unwrap_or("its contract")), contract.clone()));
+            pages.push(page(
+                "Up to",
+                String::from(if t.is_some() { "of the token" } else { "in its smallest units" }),
+                how_much,
+            ));
+            pages.push(page(
+                "Token",
+                String::from(t.map(|t| t.symbol).unwrap_or("its contract")),
+                contract.clone(),
+            ));
         }
         Call::ApproveAll { operator, approved: true } => {
             pages.push(page("Approve all!", String::from("takes every item"), checksum(&operator)));
@@ -176,7 +204,11 @@ pub fn review(tx: &Tx) -> Result<(Vec<Page>, String), Error> {
         }
         Call::Unknown { selector, len } => {
             let hex: String = selector.iter().map(|b| format!("{:02x}", b)).collect();
-            pages.push(page("Contract call", String::from("maki can't read it"), format!("{}\nfunction {}\n{} bytes", contract, hex, len)));
+            pages.push(page(
+                "Contract call",
+                String::from("maki can't read it"),
+                format!("{}\nfunction {}\n{} bytes", contract, hex, len),
+            ));
         }
     }
     pages.push(page(
@@ -191,7 +223,9 @@ pub fn review(tx: &Tx) -> Result<(Vec<Page>, String), Error> {
 /// A message to sign, as the owner reads it: text if it's text, else hex.
 pub fn message(message: &[u8]) -> Page {
     match core::str::from_utf8(message) {
-        Ok(text) if !text.chars().any(|c| c.is_control() && c != '\n') => page("Message", String::new(), text.into()),
+        Ok(text) if !text.chars().any(|c| c.is_control() && c != '\n') => {
+            page("Message", String::new(), text.into())
+        }
         _ => page("Message", String::from("in hex"), message.iter().map(|b| format!("{:02x}", b)).collect()),
     }
 }
@@ -303,21 +337,37 @@ fn token_page(heading: &str, contract: Option<&Value>, token: Option<&tokens::To
 
 /// Whether `name` is declared exactly so: these fields, of these types, in this order.
 fn declared(td: &TypedData, name: &str, fields: &[(&str, &str)]) -> bool {
-    td.fields(name)
-        .is_some_and(|f| f.len() == fields.len() && f.iter().zip(fields).all(|(a, (n, t))| a.name == *n && a.ty == *t))
+    td.fields(name).is_some_and(|f| {
+        f.len() == fields.len() && f.iter().zip(fields).all(|(a, (n, t))| a.name == *n && a.ty == *t)
+    })
 }
 
-const PERMIT: [(&str, &str); 5] =
-    [("owner", "address"), ("spender", "address"), ("value", "uint256"), ("nonce", "uint256"), ("deadline", "uint256")];
+const PERMIT: [(&str, &str); 5] = [
+    ("owner", "address"),
+    ("spender", "address"),
+    ("value", "uint256"),
+    ("nonce", "uint256"),
+    ("deadline", "uint256"),
+];
 const PERMIT_DETAILS: [(&str, &str); 4] =
     [("token", "address"), ("amount", "uint160"), ("expiration", "uint48"), ("nonce", "uint48")];
-const PERMIT_SINGLE: [(&str, &str); 3] = [("details", "PermitDetails"), ("spender", "address"), ("sigDeadline", "uint256")];
-const PERMIT_BATCH: [(&str, &str); 3] = [("details", "PermitDetails[]"), ("spender", "address"), ("sigDeadline", "uint256")];
+const PERMIT_SINGLE: [(&str, &str); 3] =
+    [("details", "PermitDetails"), ("spender", "address"), ("sigDeadline", "uint256")];
+const PERMIT_BATCH: [(&str, &str); 3] =
+    [("details", "PermitDetails[]"), ("spender", "address"), ("sigDeadline", "uint256")];
 const TOKEN_PERMISSIONS: [(&str, &str); 2] = [("token", "address"), ("amount", "uint256")];
-const PERMIT_TRANSFER: [(&str, &str); 4] =
-    [("permitted", "TokenPermissions"), ("spender", "address"), ("nonce", "uint256"), ("deadline", "uint256")];
-const PERMIT_BATCH_TRANSFER: [(&str, &str); 4] =
-    [("permitted", "TokenPermissions[]"), ("spender", "address"), ("nonce", "uint256"), ("deadline", "uint256")];
+const PERMIT_TRANSFER: [(&str, &str); 4] = [
+    ("permitted", "TokenPermissions"),
+    ("spender", "address"),
+    ("nonce", "uint256"),
+    ("deadline", "uint256"),
+];
+const PERMIT_BATCH_TRANSFER: [(&str, &str); 4] = [
+    ("permitted", "TokenPermissions[]"),
+    ("spender", "address"),
+    ("nonce", "uint256"),
+    ("deadline", "uint256"),
+];
 
 /// A permit, spelled out: who may spend what, of which token, until when. Known by its types'
 /// exact shape, not their names alone. None for anything else.
@@ -339,7 +389,8 @@ fn permit_pages(td: &TypedData) -> Option<Vec<Page>> {
         // Uniswap's Permit2, allowances: for each token, how much and until when
         "PermitSingle" | "PermitBatch"
             if declared(td, "PermitDetails", &PERMIT_DETAILS)
-                && (declared(td, "PermitSingle", &PERMIT_SINGLE) || declared(td, "PermitBatch", &PERMIT_BATCH)) =>
+                && (declared(td, "PermitSingle", &PERMIT_SINGLE)
+                    || declared(td, "PermitBatch", &PERMIT_BATCH)) =>
         {
             pages.push(page("Permit!", String::from("lets it spend tokens"), spender()));
             let details: Vec<&Value> = match m.get("details")? {
@@ -388,11 +439,19 @@ fn permit_pages(td: &TypedData) -> Option<Vec<Page>> {
 
 /// Text as maki shows it: control characters (but new lines) as `\u{..}`.
 fn shown_text(s: &str) -> String {
-    s.chars().map(|c| if c.is_control() && c != '\n' { format!("\\u{{{:x}}}", c as u32) } else { String::from(c) }).collect()
+    s.chars()
+        .map(|c| if c.is_control() && c != '\n' { format!("\\u{{{:x}}}", c as u32) } else { String::from(c) })
+        .collect()
 }
 
 /// A field's page: its path as the heading, what kind of value, and the value.
-fn value_page(td: &TypedData, ty: &str, v: &Value, path: &str, pages: &mut Vec<Page>) -> Result<(), typed::Error> {
+fn value_page(
+    td: &TypedData,
+    ty: &str,
+    v: &Value,
+    path: &str,
+    pages: &mut Vec<Page>,
+) -> Result<(), typed::Error> {
     if pages.len() > MAX_TYPED_PAGES {
         return Err(typed::Error::Shape(String::from("too much to show on maki")));
     }
@@ -430,7 +489,13 @@ fn value_page(td: &TypedData, ty: &str, v: &Value, path: &str, pages: &mut Vec<P
     Ok(())
 }
 
-fn struct_pages(td: &TypedData, ty: &str, v: &Value, path: &str, pages: &mut Vec<Page>) -> Result<(), typed::Error> {
+fn struct_pages(
+    td: &TypedData,
+    ty: &str,
+    v: &Value,
+    path: &str,
+    pages: &mut Vec<Page>,
+) -> Result<(), typed::Error> {
     for f in td.fields(ty).unwrap_or(&[]) {
         let p = if path.is_empty() { f.name.clone() } else { format!("{}.{}", path, f.name) };
         value_page(td, &f.ty, v.get(&f.name).unwrap_or(&Value::Null), &p, pages)?;
@@ -449,7 +514,9 @@ pub fn typed_review(td: &TypedData) -> Result<(Vec<Page>, &'static str, &'static
             let (name, _) = network(id);
             pages.push(page("Network", name, format!("chain ID {}", id)));
         }
-        (None, Some(v)) => pages.push(page("Network", String::from("unknown"), typed::integer_text(v).unwrap_or_default())),
+        (None, Some(v)) => {
+            pages.push(page("Network", String::from("unknown"), typed::integer_text(v).unwrap_or_default()))
+        }
         (None, None) => {}
     }
     let name = td.domain.get("name").and_then(Value::as_str).map(shown_text).unwrap_or_default();

@@ -22,7 +22,8 @@ const PIECE: usize = 1024;
 
 /// What a code's text is, by how it starts.
 fn kind(text: &str) -> &'static str {
-    let starts = |p: &str| text.len() >= p.len() && text.as_bytes()[..p.len()].eq_ignore_ascii_case(p.as_bytes());
+    let starts =
+        |p: &str| text.len() >= p.len() && text.as_bytes()[..p.len()].eq_ignore_ascii_case(p.as_bytes());
     if starts("https://") || starts("http://") {
         "Link"
     } else if starts("WIFI:") {
@@ -161,7 +162,13 @@ fn draw_text(text: &str, pages: &[u16], page: usize, note: &str) {
     if pages.len() > 1 {
         let mut at = Buf::<12>::new();
         let _ = write!(at, "{}/{}", page + 1, pages.len());
-        screen::text(WIDTH - 2 - screen::text_width(at.as_str(), Style::Small), 2, at.as_str(), Style::Small, Color::Light);
+        screen::text(
+            WIDTH - 2 - screen::text_width(at.as_str(), Style::Small),
+            2,
+            at.as_str(),
+            Style::Small,
+            Color::Light,
+        );
     }
     let mut start = pages[page] as usize;
     for row in 0..LINES {
@@ -190,7 +197,8 @@ fn draw_check(enters: usize, tabs: usize) {
     screen::text_centred(6, "Type it?", Style::Bold, Color::Light);
     let mut line = Buf::<40>::new();
     let mut y = 32;
-    for (n, one, many, key) in [(enters, "line break", "line breaks", "Enter"), (tabs, "tab", "tabs", "Tab")] {
+    for (n, one, many, key) in [(enters, "line break", "line breaks", "Enter"), (tabs, "tab", "tabs", "Tab")]
+    {
         if n == 0 {
             continue;
         }

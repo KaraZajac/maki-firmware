@@ -16,7 +16,10 @@ fn dice() -> Manifest {
         kind: Kind::Wasm,
         api: 1,
         firmware: String::new(),
-        permissions: vec![(Permission::Keys, "to sign your rolls".into()), (Permission::Motion, "shake to roll".into())],
+        permissions: vec![
+            (Permission::Keys, "to sign your rolls".into()),
+            (Permission::Motion, "shake to roll".into()),
+        ],
         storage_kib: 4,
         memory_kib: 128,
         backup: true,
@@ -32,8 +35,14 @@ fn wallet_app() -> Manifest {
     Manifest {
         id: "org.example.wallet".into(),
         name: "Wallet".into(),
-        permissions: vec![(Permission::Link, "for wallet software".into()), (Permission::Wallet, "to sign what you approve".into())],
-        wallet: Some(Wallet { curve: Curve::Secp256k1, paths: vec![vec![84 | H, H], vec![86 | H, H], vec![84 | H, 1 | H]] }),
+        permissions: vec![
+            (Permission::Link, "for wallet software".into()),
+            (Permission::Wallet, "to sign what you approve".into()),
+        ],
+        wallet: Some(Wallet {
+            curve: Curve::Secp256k1,
+            paths: vec![vec![84 | H, H], vec![86 | H, H], vec![84 | H, 1 | H]],
+        }),
         ..dice()
     }
 }
@@ -53,7 +62,10 @@ fn a_wallet_app_names_its_paths() {
     let odd = Wallet { curve: Curve::Secp256k1, paths: vec![vec![44 | H, 60 | H], vec![44 | H, 9999 | H]] };
     assert_eq!(odd.coins(), vec!["Ethereum", "coin type 9999"]);
     // Solana's, on Ed25519
-    let solana = Manifest { wallet: Some(Wallet { curve: Curve::Ed25519, paths: vec![vec![44 | H, 501 | H]] }), ..wallet_app() };
+    let solana = Manifest {
+        wallet: Some(Wallet { curve: Curve::Ed25519, paths: vec![vec![44 | H, 501 | H]] }),
+        ..wallet_app()
+    };
     let back = read(&write(&solana, CODE, None, &key()).unwrap()).unwrap().manifest;
     assert_eq!(back, solana);
     assert_eq!(back.wallet.unwrap().coins(), vec!["Solana"]);
@@ -65,7 +77,10 @@ fn wallet_paths_go_with_the_wallet_permission_and_are_checked() {
     // the permission without paths, and paths without the permission
     bad(Manifest { wallet: None, ..wallet_app() });
     bad(Manifest { permissions: vec![(Permission::Link, "because".into())], ..wallet_app() });
-    let paths = |paths: Vec<Vec<u32>>| Manifest { wallet: Some(Wallet { curve: Curve::Secp256k1, paths }), ..wallet_app() };
+    let paths = |paths: Vec<Vec<u32>>| Manifest {
+        wallet: Some(Wallet { curve: Curve::Secp256k1, paths }),
+        ..wallet_app()
+    };
     // a purpose alone would be every coin under it; the whole tree, everything
     bad(paths(vec![vec![84 | H]]));
     bad(paths(vec![vec![]]));
@@ -142,7 +157,13 @@ fn what_write_makes_read_takes_back() {
     assert_eq!(b.hash, <[u8; 32]>::from(Sha256::digest(&bundle)));
     assert!(b.manifest.wants(Permission::Keys) && !b.manifest.wants(Permission::Keyboard));
 
-    let plain = write(&Manifest { permissions: vec![], label: String::new(), description: String::new(), ..dice() }, CODE, None, &key()).unwrap();
+    let plain = write(
+        &Manifest { permissions: vec![], label: String::new(), description: String::new(), ..dice() },
+        CODE,
+        None,
+        &key(),
+    )
+    .unwrap();
     assert_eq!(read(&plain).unwrap().icon, None);
 }
 
@@ -204,30 +225,118 @@ fn the_plain_manifest_reads() {
 #[test]
 fn manifest_fields_are_strict() {
     let cases: Vec<(&str, Vec<Vec<u8>>)> = vec![
-        ("unknown field", { let mut f = fields(); f.push(field(13, b"x")); f }),
-        ("repeated", { let mut f = fields(); f.insert(1, field(1, b"org.example.dice")); f }),
-        ("out of order", { let mut f = fields(); f.swap(0, 1); f }),
+        ("unknown field", {
+            let mut f = fields();
+            f.push(field(13, b"x"));
+            f
+        }),
+        ("repeated", {
+            let mut f = fields();
+            f.insert(1, field(1, b"org.example.dice"));
+            f
+        }),
+        ("out of order", {
+            let mut f = fields();
+            f.swap(0, 1);
+            f
+        }),
         ("no id", fields()[1..].to_vec()),
         ("no backup", fields()[..7].to_vec()),
-        ("upper-case id", { let mut f = fields(); f[0] = field(1, b"org.Example.dice"); f }),
-        ("id without a dot", { let mut f = fields(); f[0] = field(1, b"dice"); f }),
-        ("id with an empty part", { let mut f = fields(); f[0] = field(1, b"org..dice"); f }),
-        ("id too long", { let mut f = fields(); f[0] = field(1, format!("org.{}", "a".repeat(61)).as_bytes()); f }),
-        ("name with a newline", { let mut f = fields(); f[1] = field(2, b"Di\nce"); f }),
-        ("name of spaces", { let mut f = fields(); f[1] = field(2, b"   "); f }),
-        ("name too long", { let mut f = fields(); f[1] = field(2, "D".repeat(25).as_bytes()); f }),
-        ("name not UTF-8", { let mut f = fields(); f[1] = field(2, b"\xff"); f }),
-        ("version 0", { let mut f = fields(); f[2] = field(3, &0u32.to_le_bytes()); f }),
-        ("version too short", { let mut f = fields(); f[2] = field(3, &[3, 0]); f }),
-        ("kind 3", { let mut f = fields(); f[3] = field(5, &[3]); f }),
-        ("api 0", { let mut f = fields(); f[4] = field(6, &0u16.to_le_bytes()); f }),
-        ("wasm with firmware", { let mut f = fields(); f.insert(5, field(7, b"0.9")); f }),
-        ("native with an api", { let mut f = fields(); f[3] = field(5, &[2]); f }),
-        ("memory 0", { let mut f = fields(); f[6] = field(10, &0u32.to_le_bytes()); f }),
-        ("storage too big", { let mut f = fields(); f[5] = field(9, &(MAX_STORAGE_KIB + 1).to_le_bytes()); f }),
-        ("backup 2", { let mut f = fields(); f[7] = field(11, &[2]); f }),
-        ("unknown permission", { let mut f = fields(); f.insert(5, field(8, &[9])); f }),
-        ("empty permission", { let mut f = fields(); f.insert(5, field(8, &[])); f }),
+        ("upper-case id", {
+            let mut f = fields();
+            f[0] = field(1, b"org.Example.dice");
+            f
+        }),
+        ("id without a dot", {
+            let mut f = fields();
+            f[0] = field(1, b"dice");
+            f
+        }),
+        ("id with an empty part", {
+            let mut f = fields();
+            f[0] = field(1, b"org..dice");
+            f
+        }),
+        ("id too long", {
+            let mut f = fields();
+            f[0] = field(1, format!("org.{}", "a".repeat(61)).as_bytes());
+            f
+        }),
+        ("name with a newline", {
+            let mut f = fields();
+            f[1] = field(2, b"Di\nce");
+            f
+        }),
+        ("name of spaces", {
+            let mut f = fields();
+            f[1] = field(2, b"   ");
+            f
+        }),
+        ("name too long", {
+            let mut f = fields();
+            f[1] = field(2, "D".repeat(25).as_bytes());
+            f
+        }),
+        ("name not UTF-8", {
+            let mut f = fields();
+            f[1] = field(2, b"\xff");
+            f
+        }),
+        ("version 0", {
+            let mut f = fields();
+            f[2] = field(3, &0u32.to_le_bytes());
+            f
+        }),
+        ("version too short", {
+            let mut f = fields();
+            f[2] = field(3, &[3, 0]);
+            f
+        }),
+        ("kind 3", {
+            let mut f = fields();
+            f[3] = field(5, &[3]);
+            f
+        }),
+        ("api 0", {
+            let mut f = fields();
+            f[4] = field(6, &0u16.to_le_bytes());
+            f
+        }),
+        ("wasm with firmware", {
+            let mut f = fields();
+            f.insert(5, field(7, b"0.9"));
+            f
+        }),
+        ("native with an api", {
+            let mut f = fields();
+            f[3] = field(5, &[2]);
+            f
+        }),
+        ("memory 0", {
+            let mut f = fields();
+            f[6] = field(10, &0u32.to_le_bytes());
+            f
+        }),
+        ("storage too big", {
+            let mut f = fields();
+            f[5] = field(9, &(MAX_STORAGE_KIB + 1).to_le_bytes());
+            f
+        }),
+        ("backup 2", {
+            let mut f = fields();
+            f[7] = field(11, &[2]);
+            f
+        }),
+        ("unknown permission", {
+            let mut f = fields();
+            f.insert(5, field(8, &[9]));
+            f
+        }),
+        ("empty permission", {
+            let mut f = fields();
+            f.insert(5, field(8, &[]));
+            f
+        }),
         ("permissions out of order", {
             let mut f = fields();
             f.insert(5, field(8, &[3]));
@@ -240,11 +349,24 @@ fn manifest_fields_are_strict() {
             f.insert(6, field(8, &[3]));
             f
         }),
-        ("reason too long", { let mut f = fields(); let mut v = vec![3]; v.extend(std::iter::repeat_n(b'a', 101)); f.insert(5, field(8, &v)); f }),
-        ("field cut short", { let mut f = fields(); f[7] = vec![11, 5, 0, 1]; f }),
+        ("reason too long", {
+            let mut f = fields();
+            let mut v = vec![3];
+            v.extend(std::iter::repeat_n(b'a', 101));
+            f.insert(5, field(8, &v));
+            f
+        }),
+        ("field cut short", {
+            let mut f = fields();
+            f[7] = vec![11, 5, 0, 1];
+            f
+        }),
     ];
     for (what, f) in cases {
-        assert!(matches!(read_fields(&f), Err(Error::Manifest(_)) | Err(Error::Truncated)), "{what} was accepted");
+        assert!(
+            matches!(read_fields(&f), Err(Error::Manifest(_)) | Err(Error::Truncated)),
+            "{what} was accepted"
+        );
     }
 }
 
@@ -261,7 +383,10 @@ fn native_bundles_read_for_the_host_to_refuse() {
 fn write_refuses_what_read_would() {
     let bad = Manifest { id: "Dice".into(), ..dice() };
     assert!(write(&bad, CODE, None, &key()).is_err());
-    let unsorted = Manifest { permissions: vec![(Permission::Motion, String::new()), (Permission::Ask, String::new())], ..dice() };
+    let unsorted = Manifest {
+        permissions: vec![(Permission::Motion, String::new()), (Permission::Ask, String::new())],
+        ..dice()
+    };
     assert!(write(&unsorted, CODE, None, &key()).is_err());
 }
 

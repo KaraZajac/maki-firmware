@@ -2,21 +2,19 @@
 //! "The store"). maki desktop fetches them and passes them along; it's as untrusted as the rest
 //! of the computer, so everything here is checked on maki against keys it already trusts.
 //!
-//! - The **root** names the root keys (offline, any `threshold` of them sign it) and the
-//!   **catalogue key**, which does the everyday signing until it expires. maki starts from the
-//!   root its firmware carries, and moves to a newer one only if `threshold` of the old root
-//!   keys and `threshold` of the new ones signed it.
-//! - A **stamp**, from the catalogue key, is what makes a bundle "from the maki store": it names
-//!   the app's ID, version, developer key and permissions and the bundle's hash, so it vouches
-//!   for exactly that bundle. It travels in the bundle, after the developer's signature
-//!   (`maki_bundle`, `Bundle::stamp`): a store app is signed twice.
-//! - The **revocation list**, from the catalogue key, names apps, versions and developer keys
-//!   found to be bad, with the reason, and expires within weeks; its version only goes up, so
-//!   an older one can't be replayed.
+//! - The **root** names the root keys (offline, any `threshold` of them sign it) and the **catalogue key**,
+//!   which does the everyday signing until it expires. maki starts from the root its firmware carries, and
+//!   moves to a newer one only if `threshold` of the old root keys and `threshold` of the new ones signed it.
+//! - A **stamp**, from the catalogue key, is what makes a bundle "from the maki store": it names the app's
+//!   ID, version, developer key and permissions and the bundle's hash, so it vouches for exactly that bundle.
+//!   It travels in the bundle, after the developer's signature (`maki_bundle`, `Bundle::stamp`): a store app
+//!   is signed twice.
+//! - The **revocation list**, from the catalogue key, names apps, versions and developer keys found to be
+//!   bad, with the reason, and expires within weeks; its version only goes up, so an older one can't be
+//!   replayed.
 //!
-//! - The **index** lists the store's apps for maki desktop to show: JSON, signed by the
-//!   catalogue key with a detached signature (`sign_index`). maki never reads it: the stamp in
-//!   each bundle is what it checks.
+//! - The **index** lists the store's apps for maki desktop to show: JSON, signed by the catalogue key with a
+//!   detached signature (`sign_index`). maki never reads it: the stamp in each bundle is what it checks.
 //!
 //! Every record is a magic, a format byte, its fields (little-endian integers, UTF-8 strings
 //! after a length byte) and then its signatures, over a domain string and everything before.
@@ -144,7 +142,9 @@ impl<'a> Reader<'a> {
         }
     }
 
-    fn end(&self) -> Result<(), Error> { if self.at == self.b.len() { Ok(()) } else { Err(Error::Malformed) } }
+    fn end(&self) -> Result<(), Error> {
+        if self.at == self.b.len() { Ok(()) } else { Err(Error::Malformed) }
+    }
 }
 
 fn str8(out: &mut Vec<u8>, s: &str) {
@@ -223,7 +223,10 @@ impl SignedRoot {
     /// Signs `root` with each of `keys` (root keys: its own, and to replace another, that one's).
     pub fn sign(root: Root, keys: &[&SigningKey]) -> SignedRoot {
         let body = root.body();
-        let signatures = keys.iter().map(|k| (k.verifying_key().to_bytes(), k.sign(&signed(ROOT_DOMAIN, &body)).to_bytes())).collect();
+        let signatures = keys
+            .iter()
+            .map(|k| (k.verifying_key().to_bytes(), k.sign(&signed(ROOT_DOMAIN, &body)).to_bytes()))
+            .collect();
         SignedRoot { root, signatures }
     }
 
@@ -379,8 +382,9 @@ impl SignedStamp {
         let bundle = r.key()?;
         let developer = r.key()?;
         let n = r.u8()? as usize;
-        let permissions =
-            (0..n).map(|_| r.u8().and_then(|b| Permission::from_u8(b).ok_or(Error::Malformed))).collect::<Result<Vec<_>, _>>()?;
+        let permissions = (0..n)
+            .map(|_| r.u8().and_then(|b| Permission::from_u8(b).ok_or(Error::Malformed)))
+            .collect::<Result<Vec<_>, _>>()?;
         let issued = r.u64()?;
         let signature = r.sig()?;
         r.end()?;
@@ -515,7 +519,12 @@ impl SignedRevocations {
     /// signed whatever its version, so a stolen catalogue key can't block every list after it
     /// with a huge version. (An expired list is still better than an older one: maki takes it
     /// and says it's stale.)
-    pub fn replaces(&self, root: &Root, now: Option<u64>, current: Option<&SignedRevocations>) -> Result<&Revocations, Error> {
+    pub fn replaces(
+        &self,
+        root: &Root,
+        now: Option<u64>,
+        current: Option<&SignedRevocations>,
+    ) -> Result<&Revocations, Error> {
         if !self.signed_by(root) {
             return Err(Error::Signature);
         }
@@ -526,14 +535,20 @@ impl SignedRevocations {
         Ok(&self.list)
     }
 
-    fn signed_by(&self, root: &Root) -> bool { verify(&root.catalogue, REVOKED_DOMAIN, &self.list.body(), &self.signature) }
+    fn signed_by(&self, root: &Root) -> bool {
+        verify(&root.catalogue, REVOKED_DOMAIN, &self.list.body(), &self.signature)
+    }
 }
 
 // ------------------------------------------------------------------------------------------
 // The index
 
 /// The catalogue key's signature over an index file, exactly as published.
-pub fn sign_index(index: &[u8], catalogue: &SigningKey) -> [u8; 64] { catalogue.sign(&signed(INDEX_DOMAIN, index)).to_bytes() }
+pub fn sign_index(index: &[u8], catalogue: &SigningKey) -> [u8; 64] {
+    catalogue.sign(&signed(INDEX_DOMAIN, index)).to_bytes()
+}
 
 /// Whether `root`'s catalogue key signed this index file.
-pub fn index_signed(root: &Root, index: &[u8], signature: &[u8; 64]) -> bool { verify(&root.catalogue, INDEX_DOMAIN, index, signature) }
+pub fn index_signed(root: &Root, index: &[u8], signature: &[u8; 64]) -> bool {
+    verify(&root.catalogue, INDEX_DOMAIN, index, signature)
+}

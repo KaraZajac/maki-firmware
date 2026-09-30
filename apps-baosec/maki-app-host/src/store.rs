@@ -6,7 +6,7 @@
 
 use std::io::{Read, Write};
 
-pub use maki_app_host_api::{data_dict, Record, APPS, RESTORED};
+pub use maki_app_host_api::{APPS, RESTORED, Record, data_dict};
 
 const BUNDLE: &str = "bundle";
 
@@ -59,7 +59,9 @@ impl Store {
 
     pub fn record(&self, id: &str) -> Option<Record> { Record::decode(&self.read(APPS, id)?) }
 
-    pub fn put_record(&self, id: &str, record: &Record) -> std::io::Result<()> { self.write(APPS, id, &record.encode()) }
+    pub fn put_record(&self, id: &str, record: &Record) -> std::io::Result<()> {
+        self.write(APPS, id, &record.encode())
+    }
 
     pub fn bundle(&self, id: &str) -> Option<Vec<u8>> { self.read(&bundle_dict(id), BUNDLE) }
 
@@ -99,7 +101,9 @@ impl Store {
     /// The newest revocation list maki took, if any.
     pub fn revocations(&self) -> Option<maki_store::Revocations> { self.signed_revocations().map(|s| s.list) }
 
-    pub fn put_revocations(&self, bytes: &[u8]) -> std::io::Result<()> { self.write(STORE, STORE_REVOCATIONS, bytes) }
+    pub fn put_revocations(&self, bytes: &[u8]) -> std::io::Result<()> {
+        self.write(STORE, STORE_REVOCATIONS, bytes)
+    }
 
     /// What a restore left for an app of this ID that wasn't installed then.
     pub fn restored(&self, id: &str) -> Option<Record> { Record::decode(&self.read(RESTORED, id)?) }

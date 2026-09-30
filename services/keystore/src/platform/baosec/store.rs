@@ -280,7 +280,8 @@ impl KeyStore {
                 log::error!(
                     "{}COLLATERAL.ABSENT,{}: refusing to derive the master key — this build needs \
                      maki's boot1 to provision the collateral keys. Storage stays locked.",
-                    BOOKEND_START, BOOKEND_END
+                    BOOKEND_START,
+                    BOOKEND_END
                 );
                 return; // fail closed: master_key stays None, every key op returns UseBeforeInit
             }

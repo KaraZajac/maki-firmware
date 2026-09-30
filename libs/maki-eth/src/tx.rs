@@ -2,7 +2,7 @@
 
 use alloc::vec::Vec;
 
-use crate::account::{keccak256, Account};
+use crate::account::{Account, keccak256};
 use crate::rlp::{self, Item};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -183,7 +183,11 @@ impl Tx {
         let (r, s, recid) = account.sign(&self.sighash()).map_err(|_| Error::Key)?;
         let v = match self.kind {
             Kind::Eip1559 => recid as u64,
-            Kind::Legacy => self.chain_id.checked_mul(2).and_then(|v| v.checked_add(35 + recid as u64)).ok_or(Error::Fee)?,
+            Kind::Legacy => self
+                .chain_id
+                .checked_mul(2)
+                .and_then(|v| v.checked_add(35 + recid as u64))
+                .ok_or(Error::Fee)?,
         };
         Ok((r, s, v))
     }

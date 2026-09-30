@@ -132,7 +132,9 @@ impl fmt::Display for Error {
             Error::Header(t) => write!(f, "a program header maki doesn't run (type {t:#x})"),
             Error::Layout(why) => write!(f, "its segments don't fit: {why}"),
             Error::WritableCode => write!(f, "a segment is both writable and executable"),
-            Error::TooBig(pages) => write!(f, "its code and data need {} KiB, more than its memory", pages * 4),
+            Error::TooBig(pages) => {
+                write!(f, "its code and data need {} KiB, more than its memory", pages * 4)
+            }
         }
     }
 }
@@ -177,8 +179,13 @@ pub fn check(elf: &[u8], memory_kib: u32) -> Result<Program, Error> {
     for i in 0..phnum {
         let at = phoff.checked_add(i * 32).ok_or(Error::Format("cut short"))?;
         let kind = u32_at(elf, at)?;
-        let (offset, vaddr, filesz, memsz, flags) =
-            (u32_at(elf, at + 4)?, u32_at(elf, at + 8)?, u32_at(elf, at + 16)?, u32_at(elf, at + 20)?, u32_at(elf, at + 24)?);
+        let (offset, vaddr, filesz, memsz, flags) = (
+            u32_at(elf, at + 4)?,
+            u32_at(elf, at + 8)?,
+            u32_at(elf, at + 16)?,
+            u32_at(elf, at + 20)?,
+            u32_at(elf, at + 24)?,
+        );
         match kind {
             PT_LOAD => {}
             // read by nothing but the app itself, if anything
@@ -193,7 +200,8 @@ pub fn check(elf: &[u8], memory_kib: u32) -> Result<Program, Error> {
         if filesz > memsz {
             return Err(Error::Layout("more bytes in the file than in memory"));
         }
-        let file_end = (offset as usize).checked_add(filesz as usize).ok_or(Error::Layout("bytes outside the file"))?;
+        let file_end =
+            (offset as usize).checked_add(filesz as usize).ok_or(Error::Layout("bytes outside the file"))?;
         if file_end > elf.len() {
             return Err(Error::Layout("bytes outside the file"));
         }

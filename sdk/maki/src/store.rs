@@ -44,7 +44,8 @@ fn write_key(path: &str, seed: &[u8; 32]) -> Result<(), String> {
     if Path::new(path).exists() {
         return Err(format!("{path} exists: a store key is never replaced by accident"));
     }
-    crate::key::write_private(Path::new(path), format!("{}\n", hex(seed)).as_bytes()).map_err(|e| format!("{path}: {e}"))?;
+    crate::key::write_private(Path::new(path), format!("{}\n", hex(seed)).as_bytes())
+        .map_err(|e| format!("{path}: {e}"))?;
     println!("{path}: public key {}", hex(Key::from_bytes(seed).verifying_key().as_bytes()));
     Ok(())
 }
@@ -56,7 +57,8 @@ pub fn keygen(path: &str) -> Result<(), String> {
     write_key(path, &seed)?;
     println!("\nIts 24 words, to keep on paper (`maki store recover` makes the key again from them):\n");
     for (row, words) in maki_seed::to_words(&seed).chunks(4).enumerate() {
-        let line: Vec<String> = words.iter().enumerate().map(|(i, w)| format!("{:>2}. {w:<9}", row * 4 + i + 1)).collect();
+        let line: Vec<String> =
+            words.iter().enumerate().map(|(i, w)| format!("{:>2}. {w:<9}", row * 4 + i + 1)).collect();
         println!("  {}", line.join(" "));
     }
     Ok(())
@@ -81,12 +83,25 @@ pub fn recover(path: &str) -> Result<(), String> {
 
 /// A root, signed by `sign` (its own keys; to replace another root, that one's too).
 #[allow(clippy::too_many_arguments)]
-pub fn root(version: u32, threshold: u8, keys: Vec<[u8; 32]>, catalogue: [u8; 32], expires_days: u64, sign: &[Key], out: &str) -> Result<(), String> {
+pub fn root(
+    version: u32,
+    threshold: u8,
+    keys: Vec<[u8; 32]>,
+    catalogue: [u8; 32],
+    expires_days: u64,
+    sign: &[Key],
+    out: &str,
+) -> Result<(), String> {
     let root = Root { version, threshold, keys, catalogue, catalogue_expires: now() + expires_days * 86400 };
     let signed = SignedRoot::sign(root, &sign.iter().collect::<Vec<_>>());
     signed.trust_first().map_err(|e| format!("this root wouldn't be trusted: {e}"))?;
     std::fs::write(out, signed.encode()).map_err(|e| format!("{out}: {e}"))?;
-    println!("{out}: root {version}, {} of {} keys, catalogue key {} for {expires_days} days", threshold, signed.root.keys.len(), hex(&catalogue));
+    println!(
+        "{out}: root {version}, {} of {} keys, catalogue key {} for {expires_days} days",
+        threshold,
+        signed.root.keys.len(),
+        hex(&catalogue)
+    );
     Ok(())
 }
 
@@ -127,7 +142,8 @@ pub fn revoke(catalogue: &Key, version: u32, expires_days: u64, list: &str, out:
             }
             "up-to" => {
                 let mut w = rest.splitn(3, ' ');
-                let (id, v, why) = (w.next().ok_or_else(bad)?, w.next().ok_or_else(bad)?, w.next().ok_or_else(bad)?);
+                let (id, v, why) =
+                    (w.next().ok_or_else(bad)?, w.next().ok_or_else(bad)?, w.next().ok_or_else(bad)?);
                 (Revoked::UpTo(id.into(), v.parse().map_err(|_| bad())?), why)
             }
             "developer" => {
@@ -139,7 +155,10 @@ pub fn revoke(catalogue: &Key, version: u32, expires_days: u64, list: &str, out:
         entries.push((what, why.trim().to_string()));
     }
     let n = entries.len();
-    let signed = SignedRevocations::sign(Revocations { version, expires: now() + expires_days * 86400, entries }, catalogue);
+    let signed = SignedRevocations::sign(
+        Revocations { version, expires: now() + expires_days * 86400, entries },
+        catalogue,
+    );
     std::fs::write(out, signed.encode()).map_err(|e| format!("{out}: {e}"))?;
     println!("{out}: revocation list {version}, {n} entries");
     Ok(())
@@ -152,7 +171,11 @@ pub fn show(path: &str) -> Result<(), String> {
         let root = &r.root;
         println!("root {}: {} of these keys sign the next", root.version, root.threshold);
         for k in &root.keys {
-            println!("  {}{}", hex(k), if r.signatures.iter().any(|(s, _)| s == k) { " (signed this)" } else { "" });
+            println!(
+                "  {}{}",
+                hex(k),
+                if r.signatures.iter().any(|(s, _)| s == k) { " (signed this)" } else { "" }
+            );
         }
         println!("catalogue key {} until {} (unix)", hex(&root.catalogue), root.catalogue_expires);
         match r.trust_first() {
@@ -168,9 +191,13 @@ pub fn show(path: &str) -> Result<(), String> {
         }
         return Ok(());
     }
-    let b = maki_bundle::read(&bytes).map_err(|e| format!("{path}: not a root, a revocation list or a bundle ({e})"))?;
+    let b = maki_bundle::read(&bytes)
+        .map_err(|e| format!("{path}: not a root, a revocation list or a bundle ({e})"))?;
     match b.stamp.map(SignedStamp::decode) {
-        Some(Ok(s)) => println!("{} {}: stamped at {} (unix); check it with a root on maki", s.stamp.id, s.stamp.version, s.stamp.issued),
+        Some(Ok(s)) => println!(
+            "{} {}: stamped at {} (unix); check it with a root on maki",
+            s.stamp.id, s.stamp.version, s.stamp.issued
+        ),
         Some(Err(e)) => println!("{}: a stamp maki can't read ({e})", b.manifest.id),
         None => println!("{}: sideloaded, no stamp", b.manifest.id),
     }
@@ -254,9 +281,17 @@ fn about(dir: &Path, id: &str) -> Result<Option<About>, String> {
     let Ok(text) = std::fs::read_to_string(&path) else { return Ok(None) };
     let about: About = toml::from_str(&text).map_err(|e| format!("{}: {e}", path.display()))?;
     if let Some(s) = &about.source {
-        let hex = s.commit.len() == 40 && s.commit.bytes().all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase());
-        if !s.repo.starts_with("https://") || !hex || s.path.starts_with('/') || s.path.split('/').any(|p| p == "..") {
-            return Err(format!("{}: a source is an https repository, a whole commit ID and a path in it", path.display()));
+        let hex = s.commit.len() == 40
+            && s.commit.bytes().all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase());
+        if !s.repo.starts_with("https://")
+            || !hex
+            || s.path.starts_with('/')
+            || s.path.split('/').any(|p| p == "..")
+        {
+            return Err(format!(
+                "{}: a source is an https repository, a whole commit ID and a path in it",
+                path.display()
+            ));
         }
     }
     Ok(Some(about))
@@ -268,7 +303,11 @@ fn about(dir: &Path, id: &str) -> Result<Option<About>, String> {
 pub fn index(dir: &Path, catalogue: &Key, version: Option<u32>, expires_days: u64) -> Result<(), String> {
     let root = latest_root(dir)?;
     if catalogue.verifying_key().to_bytes() != root.catalogue {
-        return Err(format!("that isn't the catalogue key root {} names ({})", root.version, hex(&root.catalogue)));
+        return Err(format!(
+            "that isn't the catalogue key root {} names ({})",
+            root.version,
+            hex(&root.catalogue)
+        ));
     }
     let now = now();
     let mut found = Vec::new();
@@ -282,7 +321,9 @@ pub fn index(dir: &Path, catalogue: &Key, version: Option<u32>, expires_days: u6
         let bytes = std::fs::read(&path).map_err(|e| format!("{shown}: {e}"))?;
         let b = maki_bundle::read(&bytes).map_err(|e| format!("{shown}: {e}"))?;
         let stamp = b.stamp.ok_or_else(|| format!("{shown}: not stamped"))?;
-        SignedStamp::decode(stamp).and_then(|s| s.check(&root, Some(now), &b)).map_err(|e| format!("{shown}: {e}"))?;
+        SignedStamp::decode(stamp)
+            .and_then(|s| s.check(&root, Some(now), &b))
+            .map_err(|e| format!("{shown}: {e}"))?;
         let m = &b.manifest;
         if newest.get(&m.id).is_some_and(|(v, _)| *v >= m.version) {
             continue;

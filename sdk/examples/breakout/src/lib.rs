@@ -172,7 +172,12 @@ impl Game {
             let (px, py) = (self.x.div_euclid(ONE), y.div_euclid(ONE));
             if py < CEILING || self.knock(px, py) {
                 self.vy = -self.vy;
-            } else if self.vy > 0 && py + BALL >= PADDLE_Y && py + BALL <= PADDLE_Y + PADDLE_H && px + BALL > self.paddle && px < self.paddle + PADDLE_W {
+            } else if self.vy > 0
+                && py + BALL >= PADDLE_Y
+                && py + BALL <= PADDLE_Y + PADDLE_H
+                && px + BALL > self.paddle
+                && px < self.paddle + PADDLE_W
+            {
                 // off the paddle: straight up from its middle, more to the side towards its ends
                 let off = ((px + BALL / 2) - (self.paddle + PADDLE_W / 2)) * ONE / (PADDLE_W / 2 + 1);
                 self.vx = self.speed * off.clamp(-ONE, ONE) * 3 / 4 / ONE;
@@ -235,7 +240,12 @@ fn title(best: u32, level: bool) {
     }
     screen::fill_rect(58, 50, 3, 3, Color::Light);
     screen::fill_rect(52, 58, 22, 3, Color::Light);
-    screen::text_centred(66, if level { "tilt maki: the paddle" } else { "left, right: the paddle" }, Style::Small, Color::Light);
+    screen::text_centred(
+        66,
+        if level { "tilt maki: the paddle" } else { "left, right: the paddle" },
+        Style::Small,
+        Color::Light,
+    );
     screen::text_centred(79, "centre: play", Style::Small, Color::Light);
     if best > 0 {
         let mut line = Buf::<24>::new();
@@ -284,7 +294,9 @@ fn play(best: u32) -> Option<u32> {
                 // behind (a busy moment): carry on from now rather than rushing to catch up
                 next = (next + STEP_MS as u64).max(millis());
             }
-            Event::Left | Event::Right if !paused && tilt.is_none() => g.steer(None, if event == Event::Left { -PRESS } else { PRESS }),
+            Event::Left | Event::Right if !paused && tilt.is_none() => {
+                g.steer(None, if event == Event::Left { -PRESS } else { PRESS })
+            }
             Event::Centre if g.serving && !paused => g.serve(),
             Event::Centre => {
                 paused = !paused;

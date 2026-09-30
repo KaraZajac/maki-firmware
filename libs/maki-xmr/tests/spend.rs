@@ -8,10 +8,12 @@ use curve25519_dalek::scalar::Scalar;
 use maki_xmr::request::{self, Input, Member, Payment, Request, RequestError};
 use maki_xmr::spend::{self, Paid, SpendError};
 use maki_xmr::tx::Transaction;
-use maki_xmr::{sign, Keys, Kind, Network};
+use maki_xmr::{Keys, Kind, Network, sign};
 use rand_core::OsRng;
 
-fn hex(s: &str) -> Vec<u8> { (0..s.len()).step_by(2).map(|i| u8::from_str_radix(&s[i..i + 2], 16).unwrap()).collect() }
+fn hex(s: &str) -> Vec<u8> {
+    (0..s.len()).step_by(2).map(|i| u8::from_str_radix(&s[i..i + 2], 16).unwrap()).collect()
+}
 
 /// Numbers from a seed, the same every run.
 struct Random(u64);
@@ -44,7 +46,8 @@ impl Random {
 
 /// The wallet the BIP39 test phrase gives (maki's, and Ledger's).
 fn wallet() -> Keys {
-    let spend: [u8; 32] = hex("3b094ca7218f175e91fa2402b4ae239a2fe8262792a3e718533a1a357a1e4109").try_into().unwrap();
+    let spend: [u8; 32] =
+        hex("3b094ca7218f175e91fa2402b4ae239a2fe8262792a3e718533a1a357a1e4109").try_into().unwrap();
     Keys::from_spend(Scalar::from_bytes_mod_order(spend))
 }
 
@@ -62,13 +65,21 @@ fn address_of(k: &Keys, major: u32, minor: u32) -> String {
 /// An output paid to `k`'s address (major, minor), as a sender makes one (to a subaddress alone,
 /// the transaction's key is r times its spend key), or a coinbase output (its mask 1): its
 /// transaction's key, its index there, its key and its commitment.
-fn received(random: &mut Random, k: &Keys, major: u32, minor: u32, amount: u64, coinbase: bool) -> ([u8; 32], u64, [u8; 32], [u8; 32]) {
+fn received(
+    random: &mut Random,
+    k: &Keys,
+    major: u32,
+    minor: u32,
+    amount: u64,
+    coinbase: bool,
+) -> ([u8; 32], u64, [u8; 32], [u8; 32]) {
     let r = random.scalar();
     let (spend, view) = keys_of(k, major, minor);
     let tx_key = if (major, minor) == (0, 0) { G * r } else { spend * r };
     let index = random.u64() % 5;
     let out = sign::pay(&r, &view, &spend, index, amount);
-    let commitment = if coinbase { sign::commit(&Scalar::ONE, amount).compress().to_bytes() } else { out.commitment };
+    let commitment =
+        if coinbase { sign::commit(&Scalar::ONE, amount).compress().to_bytes() } else { out.commitment };
     (tx_key.compress().to_bytes(), index, out.key, commitment)
 }
 
@@ -100,14 +111,18 @@ fn payment(address: &str, amount: u64) -> Payment {
     Payment { address: address.into(), amount, destination }
 }
 
-fn theirs(bytes: &[u8; 32]) -> monero_ed25519::CompressedPoint { monero_ed25519::CompressedPoint::from(*bytes) }
+fn theirs(bytes: &[u8; 32]) -> monero_ed25519::CompressedPoint {
+    monero_ed25519::CompressedPoint::from(*bytes)
+}
 
 /// Everything the network, and whoever's paid, checks of a signed transaction.
 fn check(request: &Request, signed: &spend::Signed, expected: &[(&Keys, u32, u32, u64)]) -> Transaction {
     let bytes = &signed.transaction;
     let tx = Transaction::from_bytes(bytes).expect("ours reads it");
     assert_eq!(&tx.to_bytes(), bytes);
-    let oxide = monero_oxide::transaction::Transaction::<monero_oxide::transaction::NotPruned>::read(&mut &bytes[..]).expect("monero-oxide reads it");
+    let oxide =
+        monero_oxide::transaction::Transaction::<monero_oxide::transaction::NotPruned>::read(&mut &bytes[..])
+            .expect("monero-oxide reads it");
     assert_eq!(oxide.hash(), tx.hash(), "the transaction's ID");
     assert_eq!(oxide.signature_hash(), Some(tx.signature_hash()), "what's signed");
     let message = tx.signature_hash();
@@ -117,18 +132,29 @@ fn check(request: &Request, signed: &spend::Signed, expected: &[(&Keys, u32, u32
     assert_eq!(inputs.len(), request.inputs.len());
     assert!(inputs.windows(2).all(|w| w[0].key_image > w[1].key_image));
     for (i, input) in inputs.iter().enumerate() {
-        let globals: Vec<u64> = input.key_offsets.iter().scan(0, |sum, o| Some(*sum + o).inspect(|s| *sum = *s)).collect();
-        let spent = request.inputs.iter().find(|r| r.ring.iter().map(|m| m.global).eq(globals.iter().copied())).expect("a ring asked for");
+        let globals: Vec<u64> =
+            input.key_offsets.iter().scan(0, |sum, o| Some(*sum + o).inspect(|s| *sum = *s)).collect();
+        let spent = request
+            .inputs
+            .iter()
+            .find(|r| r.ring.iter().map(|m| m.global).eq(globals.iter().copied()))
+            .expect("a ring asked for");
         let ring = spent.ring.iter().map(|m| [theirs(&m.key), theirs(&m.commitment)]).collect();
         let clsag = monero_clsag::Clsag::read(16, &mut &tx.clsags[i][..]).unwrap();
-        clsag.verify(ring, &theirs(&input.key_image), &theirs(&tx.pseudo_outs[i]), &message).unwrap_or_else(|e| panic!("input {i}: {e:?}"));
+        clsag
+            .verify(ring, &theirs(&input.key_image), &theirs(&tx.pseudo_outs[i]), &message)
+            .unwrap_or_else(|e| panic!("input {i}: {e:?}"));
     }
     // outputs: the range proof, and the amounts balance
     let commitments: Vec<_> = tx.base.commitments.iter().map(theirs).collect();
     let proof = monero_bulletproofs::Bulletproof::read_plus(&mut &tx.proof.to_bytes()[..]).unwrap();
     assert!(proof.verify(&mut OsRng, &commitments), "the range proof");
     let points = |v: &[[u8; 32]]| v.iter().map(|p| sign::point(p).unwrap()).sum::<EdwardsPoint>();
-    assert_eq!(points(&tx.pseudo_outs), points(&tx.base.commitments) + sign::commit(&Scalar::ZERO, tx.base.fee), "balanced");
+    assert_eq!(
+        points(&tx.pseudo_outs),
+        points(&tx.base.commitments) + sign::commit(&Scalar::ZERO, tx.base.fee),
+        "balanced"
+    );
     assert_eq!(tx.base.fee, request.fee);
     assert_eq!(tx.prefix.outputs.len(), request.outputs());
     assert_eq!(signed.outputs.len(), request.outputs());
@@ -142,7 +168,8 @@ fn check(request: &Request, signed: &spend::Signed, expected: &[(&Keys, u32, u32
         };
         let found = theirs_tx.check_outputs(&pair, 0..(major + 1), 0..(minor + 1)).unwrap();
         let index = monero::cryptonote::subaddress::Index { major: *major, minor: *minor };
-        let got: u64 = found.iter().filter(|o| o.sub_index() == index).map(|o| o.amount().unwrap().as_pico()).sum();
+        let got: u64 =
+            found.iter().filter(|o| o.sub_index() == index).map(|o| o.amount().unwrap().as_pico()).sum();
         assert_eq!(got, *amount, "paid to {major}/{minor}");
     }
     tx
@@ -153,7 +180,10 @@ fn a_payment_with_change_is_one_monero_takes() {
     let mut random = Random(0x5e7d_0001);
     let me = wallet();
     let them = Keys::from_spend(random.scalar());
-    let inputs = vec![input(&mut random, &me, 0, 3 * request::ATOMIC, false), input(&mut random, &me, 2, 250_000_000_000, false)];
+    let inputs = vec![
+        input(&mut random, &me, 0, 3 * request::ATOMIC, false),
+        input(&mut random, &me, 2, 250_000_000_000, false),
+    ];
     let request = Request {
         network: Network::Mainnet,
         account: 0,
@@ -227,7 +257,10 @@ fn to_a_subaddress_alone_the_key_is_r_times_its_spend_key() {
     let signed = spend::sign(&me, &request, &[2; 32]).unwrap();
     let tx = check(&request, &signed, &[(&me, 0, 0, 1_000_000_000), (&them, 0, 3, 2_000_000_000)]);
     let (spend, _) = keys_of(&them, 0, 3);
-    assert_eq!(&tx.prefix.extra[1..33], (spend * Scalar::from_bytes_mod_order(signed.tx_key)).compress().as_bytes());
+    assert_eq!(
+        &tx.prefix.extra[1..33],
+        (spend * Scalar::from_bytes_mod_order(signed.tx_key)).compress().as_bytes()
+    );
     assert!(signed.additional_keys.is_empty());
     assert_eq!(tx.prefix.extra.len(), 44);
 }
@@ -242,11 +275,21 @@ fn a_subaddress_and_another_address_give_each_output_its_own_key() {
         account: 0,
         fee: 80_000_000,
         change: 500_000_000,
-        payments: vec![payment(&address_of(&them, 0, 1), 1_000_000_000), payment(&address_of(&other, 0, 0), 2_000_000_000)],
-        inputs: vec![input(&mut random, &me, 0, 1_000_000_000, false), input(&mut random, &me, 0, 2_580_000_000, false)],
+        payments: vec![
+            payment(&address_of(&them, 0, 1), 1_000_000_000),
+            payment(&address_of(&other, 0, 0), 2_000_000_000),
+        ],
+        inputs: vec![
+            input(&mut random, &me, 0, 1_000_000_000, false),
+            input(&mut random, &me, 0, 2_580_000_000, false),
+        ],
     };
     let signed = spend::sign(&me, &request, &[3; 32]).unwrap();
-    let tx = check(&request, &signed, &[(&me, 0, 0, 500_000_000), (&them, 0, 1, 1_000_000_000), (&other, 0, 0, 2_000_000_000)]);
+    let tx = check(
+        &request,
+        &signed,
+        &[(&me, 0, 0, 500_000_000), (&them, 0, 1, 1_000_000_000), (&other, 0, 0, 2_000_000_000)],
+    );
     // three outputs: no dummy payment ID; a key for each output
     let extra = &tx.prefix.extra;
     assert_eq!(signed.additional_keys.len(), 3);
@@ -285,15 +328,28 @@ fn many_payments_and_inputs() {
     let mut random = Random(0x5e7d_0006);
     let me = wallet();
     let people: Vec<Keys> = (0..6).map(|_| Keys::from_spend(random.scalar())).collect();
-    let payments: Vec<Payment> =
-        people.iter().enumerate().map(|(i, k)| payment(&address_of(k, 0, (i % 2) as u32), 100_000_000 * (i as u64 + 1))).collect();
+    let payments: Vec<Payment> = people
+        .iter()
+        .enumerate()
+        .map(|(i, k)| payment(&address_of(k, 0, (i % 2) as u32), 100_000_000 * (i as u64 + 1)))
+        .collect();
     let paid: u64 = payments.iter().map(|p| p.amount).sum();
     let inputs: Vec<Input> = (0..5).map(|i| input(&mut random, &me, i, paid / 4, i == 3)).collect();
     let spent: u64 = inputs.iter().map(|i| i.amount).sum();
-    let request = Request { network: Network::Mainnet, account: 0, fee: 123_450_000, change: spent - paid - 123_450_000, payments, inputs };
+    let request = Request {
+        network: Network::Mainnet,
+        account: 0,
+        fee: 123_450_000,
+        change: spent - paid - 123_450_000,
+        payments,
+        inputs,
+    };
     let signed = spend::sign(&me, &request, &[5; 32]).unwrap();
-    let mut expected: Vec<(&Keys, u32, u32, u64)> =
-        people.iter().enumerate().map(|(i, k)| (k, 0, (i % 2) as u32, 100_000_000 * (i as u64 + 1))).collect();
+    let mut expected: Vec<(&Keys, u32, u32, u64)> = people
+        .iter()
+        .enumerate()
+        .map(|(i, k)| (k, 0, (i % 2) as u32, 100_000_000 * (i as u64 + 1)))
+        .collect();
     expected.push((&me, 0, 0, request.change));
     check(&request, &signed, &expected);
 }
@@ -365,7 +421,8 @@ fn the_pages_say_what_s_paid() {
         payments: vec![payment(&address_of(&them, 0, 0), 500_000_000_000)],
         inputs: vec![input(&mut random, &me, 0, 1_750_030_720_000, false)],
     };
-    let pages: Vec<(String, String, String)> = request.pages().into_iter().map(|p| (p.heading, p.value, p.mono)).collect();
+    let pages: Vec<(String, String, String)> =
+        request.pages().into_iter().map(|p| (p.heading, p.value, p.mono)).collect();
     assert_eq!(
         pages,
         vec![
@@ -391,7 +448,8 @@ fn key_images_come_with_what_proves_them() {
         let (spend, view) = keys_of(&me, major, minor);
         let tx_key = if (major, minor) == (0, 0) { G * r } else { spend * r };
         let out = sign::pay(&r, &view, &spend, 1, 5);
-        let (image, proof) = me.key_image_proof(&tx_key, 1, major, minor, &out.key, &random.bytes()).expect("ours");
+        let (image, proof) =
+            me.key_image_proof(&tx_key, 1, major, minor, &out.key, &random.bytes()).expect("ours");
         let secret = me.output_secret(&tx_key, 1, major, minor);
         assert_eq!(image, sign::key_image(&secret, &sign::point(&out.key).unwrap()).compress().to_bytes());
         // Monero's ring signature of one, over the image: what wallet2 checks importing it
@@ -412,7 +470,10 @@ fn the_emulator_s_request_is_the_test_phrase_s_to_sign() {
     let mut random = Random(0xab4d_0071);
     let me = wallet();
     let them = Keys::from_spend(random.scalar());
-    let inputs = vec![input(&mut random, &me, 0, 2_000_000_000_000, false), input(&mut random, &me, 1, 750_000_000_000, true)];
+    let inputs = vec![
+        input(&mut random, &me, 0, 2_000_000_000_000, false),
+        input(&mut random, &me, 1, 750_000_000_000, true),
+    ];
     let request = Request {
         network: Network::Mainnet,
         account: 0,
@@ -422,8 +483,14 @@ fn the_emulator_s_request_is_the_test_phrase_s_to_sign() {
         inputs,
     };
     let first = &request.inputs[0];
-    let output = [&first.tx_key[..], &first.index.to_le_bytes(), &0u32.to_le_bytes(), &first.subaddress.to_le_bytes(), &first.ring[first.real].key]
-        .concat();
+    let output = [
+        &first.tx_key[..],
+        &first.index.to_le_bytes(),
+        &0u32.to_le_bytes(),
+        &first.subaddress.to_le_bytes(),
+        &first.ring[first.real].key,
+    ]
+    .concat();
     let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures");
     if std::env::var("MAKI_WRITE_FIXTURES").is_ok() {
         std::fs::create_dir_all(dir).unwrap();

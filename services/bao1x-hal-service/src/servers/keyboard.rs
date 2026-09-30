@@ -1,5 +1,8 @@
 // Changed for maki (a fork of Xous: github.com/KaraZajac/maki-firmware) in 2026; its git history says what.
 #[cfg(feature = "board-baosec")]
+use std::sync::{Condvar, Mutex};
+
+#[cfg(feature = "board-baosec")]
 use arbitrary_int::{Number, u4};
 #[cfg(feature = "board-baosec")]
 use bao1x_api::IrqNotification;
@@ -17,8 +20,6 @@ use utralib::utra::irqarray2;
 use utralib::*;
 use xous::{CID, MessageSender, msg_blocking_scalar_unpack, msg_scalar_unpack};
 use xous_ipc::Buffer;
-#[cfg(feature = "board-baosec")]
-use std::sync::{Condvar, Mutex};
 
 /// maki: whether a left or right press is waiting for the other side (the menu chord). The
 /// timer that checks on it sleeps until one is: RAM is short, and a thread that wakes all the
@@ -58,8 +59,12 @@ fn deliver(kc: &[char], listeners: &[(CID, usize)], blocking_listener: &mut Vec<
         return;
     }
     for listener in blocking_listener.drain(..) {
-        xous::return_scalar2(listener, kc[0] as u32 as usize, if kc.len() >= 2 { kc[1] as u32 as usize } else { 0 })
-            .unwrap();
+        xous::return_scalar2(
+            listener,
+            kc[0] as u32 as usize,
+            if kc.len() >= 2 { kc[1] as u32 as usize } else { 0 },
+        )
+        .unwrap();
         if kc.len() > 2 {
             log::warn!(
                 "Extra keys in multi-hit event went unreported: only 2 of {} total keys reported out of {:?}",
@@ -541,7 +546,9 @@ fn keyboard_service() {
             }),
             // only from this process (the bouncer, in builds that have one): a key from anywhere
             // else would be a press nobody made, able to answer maki's asks
-            Some(KeyboardOpcode::InjectKey) if msg.sender.pid().map(|p| p.get() as u32) != Some(xous::process::id()) => {
+            Some(KeyboardOpcode::InjectKey)
+                if msg.sender.pid().map(|p| p.get() as u32) != Some(xous::process::id()) =>
+            {
                 log::warn!("refused a key injected by {:?}", msg.sender.pid());
             }
             Some(KeyboardOpcode::InjectKey) => msg_scalar_unpack!(msg, k, _, _, _, {
@@ -678,7 +685,9 @@ fn keyboard_service() {
                             // maki: wait a moment to see whether the other side joins it
                             key_tracker.register_key_down(key_down, now);
                             match side_waiting.take() {
-                                Some((other, at)) if other != key_down && now.saturating_sub(at) <= CHORD_MS => {
+                                Some((other, at))
+                                    if other != key_down && now.saturating_sub(at) <= CHORD_MS =>
+                                {
                                     kc.push(MENU);
                                     side_pending.set(false);
                                 }

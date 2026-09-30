@@ -3,13 +3,15 @@
 use curve25519_dalek::constants::ED25519_BASEPOINT_POINT as G;
 use curve25519_dalek::edwards::EdwardsPoint;
 use curve25519_dalek::scalar::Scalar;
-use maki_xmr::sign::{self, Member, SignError};
 use maki_xmr::Keys;
+use maki_xmr::sign::{self, Member, SignError};
 use monero::cryptonote::onetime_key::{KeyGenerator, KeyRecoverer};
 use monero::cryptonote::subaddress::Index;
 use monero::util::key::{KeyPair, PrivateKey, PublicKey};
 
-fn hex(s: &str) -> Vec<u8> { (0..s.len()).step_by(2).map(|i| u8::from_str_radix(&s[i..i + 2], 16).unwrap()).collect() }
+fn hex(s: &str) -> Vec<u8> {
+    (0..s.len()).step_by(2).map(|i| u8::from_str_radix(&s[i..i + 2], 16).unwrap()).collect()
+}
 fn b32(s: &str) -> [u8; 32] { hex(s).try_into().unwrap() }
 fn scalar(s: &str) -> Scalar { Scalar::from_bytes_mod_order(b32(s)) }
 
@@ -93,14 +95,27 @@ fn commitments_are_monero_oxides() {
     let mut random = Random(0xc0_1117);
     for amount in [0, 1, 1_000_000_000_000, u64::MAX, random.u64(), random.u64()] {
         let mask = random.scalar();
-        let theirs = monero_ed25519::Commitment::new(monero_ed25519::Scalar::read(&mut &mask.to_bytes()[..]).unwrap(), amount);
-        assert_eq!(sign::commit(&mask, amount).compress().to_bytes(), theirs.commit().compress().to_bytes(), "{amount}");
+        let theirs = monero_ed25519::Commitment::new(
+            monero_ed25519::Scalar::read(&mut &mask.to_bytes()[..]).unwrap(),
+            amount,
+        );
+        assert_eq!(
+            sign::commit(&mask, amount).compress().to_bytes(),
+            theirs.commit().compress().to_bytes(),
+            "{amount}"
+        );
     }
 }
 
 #[test]
 fn varints_are_monero_s() {
-    for (n, bytes) in [(0u64, &[0u8][..]), (127, &[0x7f]), (128, &[0x80, 1]), (300, &[0xac, 2]), (u64::MAX, &[0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 1])] {
+    for (n, bytes) in [
+        (0u64, &[0u8][..]),
+        (127, &[0x7f]),
+        (128, &[0x80, 1]),
+        (300, &[0xac, 2]),
+        (u64::MAX, &[0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 1]),
+    ] {
         let mut out = Vec::new();
         sign::varint(n, &mut out);
         assert_eq!(out, bytes, "{n}");
@@ -136,8 +151,9 @@ fn outputs_are_monero_rss() {
             assert_eq!(out.key, generator.one_time_key(index as usize).to_bytes());
 
             let secret = keys.output_secret(&tx_key, index, major, minor);
-            let recovered = KeyRecoverer::new(&pair, PublicKey::from_slice(tx_key.compress().as_bytes()).unwrap())
-                .recover(index as usize, Index { major, minor });
+            let recovered =
+                KeyRecoverer::new(&pair, PublicKey::from_slice(tx_key.compress().as_bytes()).unwrap())
+                    .recover(index as usize, Index { major, minor });
             assert_eq!(secret.to_bytes(), recovered.to_bytes());
             assert_eq!((G * secret).compress().to_bytes(), out.key);
 
@@ -145,13 +161,22 @@ fn outputs_are_monero_rss() {
             assert!(keys.owns(&tx_key, index, out.view_tag, &key, major, minor));
             assert!(!keys.owns(&tx_key, index + 1, out.view_tag, &key, major, minor));
             let commitment = sign::point(&out.commitment).unwrap();
-            assert_eq!(keys.open_output(&tx_key, index, &out.encrypted_amount, &commitment), Some((amount, out.mask)));
+            assert_eq!(
+                keys.open_output(&tx_key, index, &out.encrypted_amount, &commitment),
+                Some((amount, out.mask))
+            );
             assert_eq!(keys.open_output(&tx_key, index, &[0; 8], &commitment), None);
         }
     }
 }
 
-fn ring(random: &mut Random, n: usize, real: usize, key: EdwardsPoint, commitment: EdwardsPoint) -> Vec<Member> {
+fn ring(
+    random: &mut Random,
+    n: usize,
+    real: usize,
+    key: EdwardsPoint,
+    commitment: EdwardsPoint,
+) -> Vec<Member> {
     (0..n)
         .map(|i| {
             if i == real {
@@ -163,7 +188,9 @@ fn ring(random: &mut Random, n: usize, real: usize, key: EdwardsPoint, commitmen
         .collect()
 }
 
-fn theirs(p: &EdwardsPoint) -> monero_ed25519::CompressedPoint { monero_ed25519::CompressedPoint::from(p.compress().to_bytes()) }
+fn theirs(p: &EdwardsPoint) -> monero_ed25519::CompressedPoint {
+    monero_ed25519::CompressedPoint::from(p.compress().to_bytes())
+}
 
 /// Every ring size to 16 and every place in it: monero-oxide's verifier takes the signature,
 /// with its key image, and the signature's the same again for the same randomness.
@@ -178,7 +205,9 @@ fn monero_oxide_verifies_every_clsag() {
             let pseudo_out = sign::commit(&pseudo_mask, amount);
             let members = ring(&mut random, n, real, G * secret, sign::commit(&mask, amount));
             let (message, aux) = (random.bytes(), random.bytes());
-            let (clsag, image) = sign::clsag(&members, real, &secret, &(mask - pseudo_mask), &pseudo_out, &message, &aux).unwrap();
+            let (clsag, image) =
+                sign::clsag(&members, real, &secret, &(mask - pseudo_mask), &pseudo_out, &message, &aux)
+                    .unwrap();
             assert_eq!(image, sign::key_image(&secret, &(G * secret)));
 
             let signature = monero_clsag::Clsag::read(n, &mut &clsag.to_bytes()[..]).unwrap();
@@ -187,9 +216,20 @@ fn monero_oxide_verifies_every_clsag() {
                 .verify(ring, &theirs(&image), &theirs(&pseudo_out), &message)
                 .unwrap_or_else(|e| panic!("ring of {n}, signer {real}: {e:?}"));
 
-            let again = sign::clsag(&members, real, &secret, &(mask - pseudo_mask), &pseudo_out, &message, &aux).unwrap();
+            let again =
+                sign::clsag(&members, real, &secret, &(mask - pseudo_mask), &pseudo_out, &message, &aux)
+                    .unwrap();
             assert_eq!(again, (clsag.clone(), image));
-            let fresh = sign::clsag(&members, real, &secret, &(mask - pseudo_mask), &pseudo_out, &message, &random.bytes()).unwrap();
+            let fresh = sign::clsag(
+                &members,
+                real,
+                &secret,
+                &(mask - pseudo_mask),
+                &pseudo_out,
+                &message,
+                &random.bytes(),
+            )
+            .unwrap();
             assert_ne!(fresh.0, clsag);
         }
     }
@@ -213,5 +253,8 @@ fn a_clsag_isnt_made_for_the_wrong_key_amount_or_member() {
     assert_eq!(sign(16, &secret, &pseudo_out), Err(SignError::Ring));
     // a pseudo-output of another amount
     assert_eq!(sign(5, &secret, &sign::commit(&pseudo_mask, amount + 1)), Err(SignError::Commitment));
-    assert_eq!(sign::clsag(&[], 0, &secret, &difference, &pseudo_out, &[7; 32], &[0; 32]).map(|_| ()), Err(SignError::Ring));
+    assert_eq!(
+        sign::clsag(&[], 0, &secret, &difference, &pseudo_out, &[7; 32], &[0; 32]).map(|_| ()),
+        Err(SignError::Ring)
+    );
 }

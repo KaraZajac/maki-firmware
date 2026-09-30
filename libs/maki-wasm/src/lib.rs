@@ -15,10 +15,12 @@ mod session;
 
 use std::time::Duration;
 
-pub use canvas::{Canvas, Color, Style, HEIGHT, MAX_BLIT, TOP, WIDTH};
+pub use canvas::{Canvas, Color, HEIGHT, MAX_BLIT, Style, TOP, WIDTH};
 use maki_bundle::{Kind, Manifest, Permission};
-pub use session::{Session, REFUSED};
-use wasmi::{Caller, Config, Engine, Error, Extern, Linker, Memory, Module, Store, StoreLimits, StoreLimitsBuilder};
+pub use session::{REFUSED, Session};
+use wasmi::{
+    Caller, Config, Engine, Error, Extern, Linker, Memory, Module, Store, StoreLimits, StoreLimitsBuilder,
+};
 
 /// The functions this host offers apps.
 pub const API_VERSION: u16 = 7;
@@ -339,12 +341,21 @@ impl Limits {
     /// What maki gives an app whose manifest asks for this much, or why it won't.
     pub fn for_app(memory_kib: u32, storage_kib: u32) -> Result<Limits, String> {
         if memory_kib > MAX_MEMORY_KIB {
-            return Err(format!("asks for {memory_kib} KiB of memory; maki gives an app {MAX_MEMORY_KIB} KiB at most"));
+            return Err(format!(
+                "asks for {memory_kib} KiB of memory; maki gives an app {MAX_MEMORY_KIB} KiB at most"
+            ));
         }
         if storage_kib > MAX_STORAGE_KIB {
-            return Err(format!("asks for {storage_kib} KiB of storage; maki gives an app {MAX_STORAGE_KIB} KiB at most"));
+            return Err(format!(
+                "asks for {storage_kib} KiB of storage; maki gives an app {MAX_STORAGE_KIB} KiB at most"
+            ));
         }
-        Ok(Limits { memory: memory_kib as usize * 1024, storage: storage_kib as usize * 1024, fuel: FUEL, granted: Granted::NONE })
+        Ok(Limits {
+            memory: memory_kib as usize * 1024,
+            storage: storage_kib as usize * 1024,
+            fuel: FUEL,
+            granted: Granted::NONE,
+        })
     }
 }
 
@@ -376,7 +387,9 @@ fn admit_native(manifest: &Manifest, elf: &[u8]) -> Result<Limits, String> {
     let program = maki_native::check(elf, manifest.memory_kib).map_err(|e| e.to_string())?;
     let needs = (program.pages() + STACK_KIB / 4) * 4;
     if needs > manifest.memory_kib {
-        return Err(format!("its code, data and {STACK_KIB} KiB of stack take {needs} KiB, more than its memory"));
+        return Err(format!(
+            "its code, data and {STACK_KIB} KiB of stack take {needs} KiB, more than its memory"
+        ));
     }
     Ok(limits)
 }
@@ -410,7 +423,10 @@ pub fn load(manifest: &Manifest, code: &[u8]) -> Result<Loaded, String> {
         return Err("it's a native app: maki runs those in a process of their own".into());
     }
     if manifest.api > API_VERSION {
-        return Err(format!("it needs a newer maki (host API {}; this maki has {API_VERSION})", manifest.api));
+        return Err(format!(
+            "it needs a newer maki (host API {}; this maki has {API_VERSION})",
+            manifest.api
+        ));
     }
     let limits = limits(manifest)?;
     let loaded = compile(code, limits)?;
@@ -418,7 +434,10 @@ pub fn load(manifest: &Manifest, code: &[u8]) -> Result<Loaded, String> {
     for import in loaded.module.imports() {
         if let Some((name, since)) = SINCE.iter().find(|(n, _)| *n == import.name()) {
             if *since > manifest.api {
-                return Err(format!("it calls {name}, which came with host API {since}, and its manifest says {}", manifest.api));
+                return Err(format!(
+                    "it calls {name}, which came with host API {since}, and its manifest says {}",
+                    manifest.api
+                ));
             }
         }
     }
@@ -497,16 +516,17 @@ fn write(caller: &mut Caller<'_, State>, ptr: i32, bytes: &[u8], what: &str) -> 
     let mem = memory(caller)?;
     let data = mem.data_mut(caller);
     let end = ptr.checked_add(bytes.len()).ok_or_else(|| trap(format_args!("{what}: bad pointer")))?;
-    data.get_mut(ptr..end)
-        .ok_or_else(|| trap(format_args!("{what}: bad pointer")))?
-        .copy_from_slice(bytes);
+    data.get_mut(ptr..end).ok_or_else(|| trap(format_args!("{what}: bad pointer")))?.copy_from_slice(bytes);
     Ok(())
 }
 
-fn color(v: i32) -> Result<Color, Error> { Color::from_i32(v).ok_or_else(|| trap(format_args!("no color {v}"))) }
+fn color(v: i32) -> Result<Color, Error> {
+    Color::from_i32(v).ok_or_else(|| trap(format_args!("no color {v}")))
+}
 
-fn style(v: i32) -> Result<Style, Error> { Style::from_i32(v).ok_or_else(|| trap(format_args!("no text style {v}"))) }
-
+fn style(v: i32) -> Result<Style, Error> {
+    Style::from_i32(v).ok_or_else(|| trap(format_args!("no text style {v}")))
+}
 
 /// A derivation path from the app's memory: `len` little-endian u32s, at most `maki_hd::MAX_DEPTH`
 /// of them (None if more, or fewer than none).
@@ -521,7 +541,13 @@ fn read_path(caller: &Caller<'_, State>, ptr: i32, len: i32, what: &str) -> Resu
 
 /// `bytes` into the app's buffer of `cap` bytes at `out`: its length, or `TOO_BIG` if it doesn't
 /// fit.
-fn written(caller: &mut Caller<'_, State>, out: i32, cap: i32, bytes: &[u8], what: &str) -> Result<i32, Error> {
+fn written(
+    caller: &mut Caller<'_, State>,
+    out: i32,
+    cap: i32,
+    bytes: &[u8],
+    what: &str,
+) -> Result<i32, Error> {
     if bytes.len() > cap.max(0) as usize {
         return Ok(TOO_BIG);
     }
@@ -539,7 +565,6 @@ fn permitted(c: &Caller<'_, State>, p: Permission, what: &str) -> Result<(), Err
     }
 }
 
-
 /// maki's functions, as the `maki` import module: each reads its arguments from the app's
 /// memory, calls the `Session`, and writes back what it returns. A function the app hasn't
 /// the permission for traps (maki refuses an app that imports one without).
@@ -552,11 +577,15 @@ fn link(linker: &mut Linker<State>) -> Result<(), Error> {
         c.data_mut().session.canvas.clear(col);
         Ok(())
     })?;
-    linker.func_wrap(M, "pixel", |mut c: Caller<'_, State>, x: i32, y: i32, col: i32| -> Result<(), Error> {
-        let col = color(col)?;
-        c.data_mut().session.canvas.pixel(x, y, col);
-        Ok(())
-    })?;
+    linker.func_wrap(
+        M,
+        "pixel",
+        |mut c: Caller<'_, State>, x: i32, y: i32, col: i32| -> Result<(), Error> {
+            let col = color(col)?;
+            c.data_mut().session.canvas.pixel(x, y, col);
+            Ok(())
+        },
+    )?;
     linker.func_wrap(
         M,
         "line",
@@ -569,7 +598,14 @@ fn link(linker: &mut Linker<State>) -> Result<(), Error> {
     linker.func_wrap(
         M,
         "rect",
-        |mut c: Caller<'_, State>, x: i32, y: i32, w: i32, h: i32, col: i32, filled: i32| -> Result<(), Error> {
+        |mut c: Caller<'_, State>,
+         x: i32,
+         y: i32,
+         w: i32,
+         h: i32,
+         col: i32,
+         filled: i32|
+         -> Result<(), Error> {
             let col = color(col)?;
             c.data_mut().session.canvas.rect(x, y, w, h, col, filled != 0);
             Ok(())
@@ -578,17 +614,28 @@ fn link(linker: &mut Linker<State>) -> Result<(), Error> {
     linker.func_wrap(
         M,
         "text",
-        |mut c: Caller<'_, State>, x: i32, y: i32, ptr: i32, len: i32, sty: i32, col: i32| -> Result<i32, Error> {
+        |mut c: Caller<'_, State>,
+         x: i32,
+         y: i32,
+         ptr: i32,
+         len: i32,
+         sty: i32,
+         col: i32|
+         -> Result<i32, Error> {
             let (sty, col) = (style(sty)?, color(col)?);
             let s = read_str(&c, ptr, len, MAX_TEXT, "text")?;
             Ok(c.data_mut().session.canvas.text(x, y, &s, sty, col))
         },
     )?;
-    linker.func_wrap(M, "text_width", |c: Caller<'_, State>, ptr: i32, len: i32, sty: i32| -> Result<i32, Error> {
-        let sty = style(sty)?;
-        let s = read_str(&c, ptr, len, MAX_TEXT, "text_width")?;
-        Ok(Canvas::text_width(&s, sty))
-    })?;
+    linker.func_wrap(
+        M,
+        "text_width",
+        |c: Caller<'_, State>, ptr: i32, len: i32, sty: i32| -> Result<i32, Error> {
+            let sty = style(sty)?;
+            let s = read_str(&c, ptr, len, MAX_TEXT, "text_width")?;
+            Ok(Canvas::text_width(&s, sty))
+        },
+    )?;
     linker.func_wrap(
         M,
         "blit",
@@ -657,10 +704,14 @@ fn link(linker: &mut Linker<State>) -> Result<(), Error> {
             Ok(c.data_mut().session.storage_set(&key, &value))
         },
     )?;
-    linker.func_wrap(M, "storage_delete", |mut c: Caller<'_, State>, kptr: i32, klen: i32| -> Result<i32, Error> {
-        let key = read_str(&c, kptr, klen, MAX_KEY, "storage_delete")?;
-        Ok(c.data_mut().session.storage_delete(&key))
-    })?;
+    linker.func_wrap(
+        M,
+        "storage_delete",
+        |mut c: Caller<'_, State>, kptr: i32, klen: i32| -> Result<i32, Error> {
+            let key = read_str(&c, kptr, klen, MAX_KEY, "storage_delete")?;
+            Ok(c.data_mut().session.storage_delete(&key))
+        },
+    )?;
     linker.func_wrap(
         M,
         "storage_key",
@@ -676,7 +727,8 @@ fn link(linker: &mut Linker<State>) -> Result<(), Error> {
     )?;
     linker.func_wrap(M, "millis", |c: Caller<'_, State>| -> i64 { c.data().session.millis() })?;
     linker.func_wrap(M, "unix_time", |c: Caller<'_, State>| -> i64 { c.data().session.unix_time() })?;
-    linker.func_wrap(M, "time_verified", |c: Caller<'_, State>| -> i32 { c.data().session.time_verified() })?;
+    linker
+        .func_wrap(M, "time_verified", |c: Caller<'_, State>| -> i32 { c.data().session.time_verified() })?;
     linker.func_wrap(M, "random", |mut c: Caller<'_, State>, ptr: i32, len: i32| -> Result<(), Error> {
         let len = len as u32 as usize;
         let Ok(buf) = c.data_mut().session.random(len) else {
@@ -694,15 +746,19 @@ fn link(linker: &mut Linker<State>) -> Result<(), Error> {
         c.data_mut().aborted = Some(message);
         Err(trap("aborted"))
     })?;
-    linker.func_wrap(M, "ask", |mut c: Caller<'_, State>, ptr: i32, len: i32, timeout_s: i32| -> Result<i32, Error> {
-        permitted(&c, Permission::Ask, "ask")?;
-        let text = read_str(&c, ptr, len, ASK_TEXT, "ask")?;
-        let answer = c.data_mut().session.ask(&text, timeout_s);
-        // the owner's time isn't the app's work
-        let fuel = c.data().session.limits.fuel;
-        c.set_fuel(fuel)?;
-        Ok(answer)
-    })?;
+    linker.func_wrap(
+        M,
+        "ask",
+        |mut c: Caller<'_, State>, ptr: i32, len: i32, timeout_s: i32| -> Result<i32, Error> {
+            permitted(&c, Permission::Ask, "ask")?;
+            let text = read_str(&c, ptr, len, ASK_TEXT, "ask")?;
+            let answer = c.data_mut().session.ask(&text, timeout_s);
+            // the owner's time isn't the app's work
+            let fuel = c.data().session.limits.fuel;
+            c.set_fuel(fuel)?;
+            Ok(answer)
+        },
+    )?;
     linker.func_wrap(
         M,
         "ask_review",
@@ -748,7 +804,13 @@ fn link(linker: &mut Linker<State>) -> Result<(), Error> {
     linker.func_wrap(
         M,
         "key_sign",
-        |mut c: Caller<'_, State>, lptr: i32, llen: i32, mptr: i32, mlen: i32, out: i32| -> Result<i32, Error> {
+        |mut c: Caller<'_, State>,
+         lptr: i32,
+         llen: i32,
+         mptr: i32,
+         mlen: i32,
+         out: i32|
+         -> Result<i32, Error> {
             permitted(&c, Permission::Keys, "key_sign")?;
             let label = read_str(&c, lptr, llen, MAX_LABEL, "key_sign")?;
             if mlen as u32 as usize > MAX_SIGN {
@@ -814,17 +876,27 @@ fn link(linker: &mut Linker<State>) -> Result<(), Error> {
             written.map(|_| 0)
         },
     )?;
-    linker.func_wrap(M, "wallet_fingerprint", |mut c: Caller<'_, State>, out: i32| -> Result<i32, Error> {
-        permitted(&c, Permission::Wallet, "wallet_fingerprint")?;
-        match c.data_mut().session.wallet_fingerprint() {
-            Ok(fp) => write(&mut c, out, &fp, "wallet_fingerprint").map(|_| 0),
-            Err(code) => Ok(code),
-        }
-    })?;
+    linker.func_wrap(
+        M,
+        "wallet_fingerprint",
+        |mut c: Caller<'_, State>, out: i32| -> Result<i32, Error> {
+            permitted(&c, Permission::Wallet, "wallet_fingerprint")?;
+            match c.data_mut().session.wallet_fingerprint() {
+                Ok(fp) => write(&mut c, out, &fp, "wallet_fingerprint").map(|_| 0),
+                Err(code) => Ok(code),
+            }
+        },
+    )?;
     linker.func_wrap(
         M,
         "wallet_public",
-        |mut c: Caller<'_, State>, pptr: i32, plen: i32, form: i32, out: i32, cap: i32| -> Result<i32, Error> {
+        |mut c: Caller<'_, State>,
+         pptr: i32,
+         plen: i32,
+         form: i32,
+         out: i32,
+         cap: i32|
+         -> Result<i32, Error> {
             permitted(&c, Permission::Wallet, "wallet_public")?;
             let Some(path) = read_path(&c, pptr, plen, "wallet_public")? else { return Ok(INVALID) };
             let form = u8::try_from(form).unwrap_or(0);
@@ -837,7 +909,12 @@ fn link(linker: &mut Linker<State>) -> Result<(), Error> {
     linker.func_wrap(
         M,
         "wallet_review",
-        |mut c: Caller<'_, State>, tptr: i32, tlen: i32, signatures: i32, timeout_s: i32| -> Result<i32, Error> {
+        |mut c: Caller<'_, State>,
+         tptr: i32,
+         tlen: i32,
+         signatures: i32,
+         timeout_s: i32|
+         -> Result<i32, Error> {
             permitted(&c, Permission::Wallet, "wallet_review")?;
             if tlen as u32 as usize > MAX_REVIEW {
                 return Ok(TOO_BIG);
@@ -850,7 +927,14 @@ fn link(linker: &mut Linker<State>) -> Result<(), Error> {
     linker.func_wrap(
         M,
         "wallet_sign",
-        |mut c: Caller<'_, State>, pptr: i32, plen: i32, dptr: i32, scheme: i32, out: i32, cap: i32| -> Result<i32, Error> {
+        |mut c: Caller<'_, State>,
+         pptr: i32,
+         plen: i32,
+         dptr: i32,
+         scheme: i32,
+         out: i32,
+         cap: i32|
+         -> Result<i32, Error> {
             permitted(&c, Permission::Wallet, "wallet_sign")?;
             let Some(path) = read_path(&c, pptr, plen, "wallet_sign")? else { return Ok(INVALID) };
             let digest = read(&c, dptr, 32, 32, "wallet_sign")?;
@@ -864,7 +948,13 @@ fn link(linker: &mut Linker<State>) -> Result<(), Error> {
     linker.func_wrap(
         M,
         "wallet_subaddress",
-        |mut c: Caller<'_, State>, pptr: i32, plen: i32, major: i32, minor: i32, out: i32| -> Result<i32, Error> {
+        |mut c: Caller<'_, State>,
+         pptr: i32,
+         plen: i32,
+         major: i32,
+         minor: i32,
+         out: i32|
+         -> Result<i32, Error> {
             permitted(&c, Permission::Wallet, "wallet_subaddress")?;
             let Some(path) = read_path(&c, pptr, plen, "wallet_subaddress")? else { return Ok(INVALID) };
             // the indices are u32s, as Monero has them
@@ -874,29 +964,39 @@ fn link(linker: &mut Linker<State>) -> Result<(), Error> {
             }
         },
     )?;
-    linker.func_wrap(M, "wallet_show_backup", |mut c: Caller<'_, State>, pptr: i32, plen: i32| -> Result<i32, Error> {
-        permitted(&c, Permission::Wallet, "wallet_show_backup")?;
-        let Some(path) = read_path(&c, pptr, plen, "wallet_show_backup")? else { return Ok(INVALID) };
-        Ok(c.data_mut().session.wallet_show_backup(&path))
-    })?;
-    linker.func_wrap(M, "wallet_monero_view_key", |mut c: Caller<'_, State>, pptr: i32, plen: i32, out: i32| -> Result<i32, Error> {
-        permitted(&c, Permission::Wallet, "wallet_monero_view_key")?;
-        let Some(path) = read_path(&c, pptr, plen, "wallet_monero_view_key")? else { return Ok(INVALID) };
-        match c.data_mut().session.wallet_monero_view_key(&path) {
-            Ok(mut key) => {
-                let written = write(&mut c, out, &key, "wallet_monero_view_key");
-                zeroize::Zeroize::zeroize(&mut key);
-                written.map(|_| 0)
+    linker.func_wrap(
+        M,
+        "wallet_show_backup",
+        |mut c: Caller<'_, State>, pptr: i32, plen: i32| -> Result<i32, Error> {
+            permitted(&c, Permission::Wallet, "wallet_show_backup")?;
+            let Some(path) = read_path(&c, pptr, plen, "wallet_show_backup")? else { return Ok(INVALID) };
+            Ok(c.data_mut().session.wallet_show_backup(&path))
+        },
+    )?;
+    linker.func_wrap(
+        M,
+        "wallet_monero_view_key",
+        |mut c: Caller<'_, State>, pptr: i32, plen: i32, out: i32| -> Result<i32, Error> {
+            permitted(&c, Permission::Wallet, "wallet_monero_view_key")?;
+            let Some(path) = read_path(&c, pptr, plen, "wallet_monero_view_key")? else { return Ok(INVALID) };
+            match c.data_mut().session.wallet_monero_view_key(&path) {
+                Ok(mut key) => {
+                    let written = write(&mut c, out, &key, "wallet_monero_view_key");
+                    zeroize::Zeroize::zeroize(&mut key);
+                    written.map(|_| 0)
+                }
+                Err(code) => Ok(code),
             }
-            Err(code) => Ok(code),
-        }
-    })?;
+        },
+    )?;
     linker.func_wrap(
         M,
         "wallet_monero_key_image",
         |mut c: Caller<'_, State>, pptr: i32, plen: i32, optr: i32, out: i32| -> Result<i32, Error> {
             permitted(&c, Permission::Wallet, "wallet_monero_key_image")?;
-            let Some(path) = read_path(&c, pptr, plen, "wallet_monero_key_image")? else { return Ok(INVALID) };
+            let Some(path) = read_path(&c, pptr, plen, "wallet_monero_key_image")? else {
+                return Ok(INVALID);
+            };
             let output = read(&c, optr, MONERO_OUTPUT as i32, MONERO_OUTPUT, "wallet_monero_key_image")?;
             match c.data_mut().session.wallet_monero_key_image(&path, &output) {
                 Ok(image) => write(&mut c, out, &image, "wallet_monero_key_image").map(|_| 0),
@@ -907,7 +1007,14 @@ fn link(linker: &mut Linker<State>) -> Result<(), Error> {
     linker.func_wrap(
         M,
         "wallet_monero_sign",
-        |mut c: Caller<'_, State>, pptr: i32, plen: i32, rptr: i32, rlen: i32, out: i32, cap: i32| -> Result<i32, Error> {
+        |mut c: Caller<'_, State>,
+         pptr: i32,
+         plen: i32,
+         rptr: i32,
+         rlen: i32,
+         out: i32,
+         cap: i32|
+         -> Result<i32, Error> {
             permitted(&c, Permission::Wallet, "wallet_monero_sign")?;
             let Some(path) = read_path(&c, pptr, plen, "wallet_monero_sign")? else { return Ok(INVALID) };
             if rlen as u32 as usize > MAX_MONERO_REQUEST {
@@ -927,7 +1034,13 @@ fn link(linker: &mut Linker<State>) -> Result<(), Error> {
     linker.func_wrap(
         M,
         "wallet_sign_ed25519",
-        |mut c: Caller<'_, State>, pptr: i32, plen: i32, mptr: i32, mlen: i32, out: i32| -> Result<i32, Error> {
+        |mut c: Caller<'_, State>,
+         pptr: i32,
+         plen: i32,
+         mptr: i32,
+         mlen: i32,
+         out: i32|
+         -> Result<i32, Error> {
             permitted(&c, Permission::Wallet, "wallet_sign_ed25519")?;
             let Some(path) = read_path(&c, pptr, plen, "wallet_sign_ed25519")? else { return Ok(INVALID) };
             if mlen as u32 as usize > MAX_SIGN {
@@ -940,46 +1053,62 @@ fn link(linker: &mut Linker<State>) -> Result<(), Error> {
             }
         },
     )?;
-    linker.func_wrap(M, "type_text", |mut c: Caller<'_, State>, ptr: i32, len: i32| -> Result<i32, Error> {
-        permitted(&c, Permission::Keyboard, "type_text")?;
-        if len as u32 as usize > MAX_TYPE {
-            return Ok(TOO_BIG);
-        }
-        let text = read_str(&c, ptr, len, MAX_TYPE, "type_text")?;
-        Ok(c.data_mut().session.type_text(&text))
-    })?;
-    linker.func_wrap(M, "link_read", |mut c: Caller<'_, State>, ptr: i32, cap: i32| -> Result<i32, Error> {
-        permitted(&c, Permission::Link, "link_read")?;
-        let message = match c.data_mut().session.link_read() {
-            Ok(m) => m,
-            Err(code) => return Ok(code),
-        };
-        let n = message.len().min(cap.max(0) as usize);
-        write(&mut c, ptr, &message[..n], "link_read")?;
-        Ok(message.len() as i32)
-    })?;
-    linker.func_wrap(M, "link_reply", |mut c: Caller<'_, State>, ptr: i32, len: i32| -> Result<i32, Error> {
-        permitted(&c, Permission::Link, "link_reply")?;
-        if len as u32 as usize > MAX_MESSAGE {
-            return Ok(TOO_BIG);
-        }
-        let reply = read(&c, ptr, len, MAX_MESSAGE, "link_reply")?;
-        Ok(c.data_mut().session.link_reply(&reply))
-    })?;
-    linker.func_wrap(M, "camera_scan_qr", |mut c: Caller<'_, State>, ptr: i32, cap: i32| -> Result<i32, Error> {
-        permitted(&c, Permission::Camera, "camera_scan_qr")?;
-        let text = c.data_mut().session.scan_qr();
-        // the owner's time isn't the app's work
-        let fuel = c.data().session.limits.fuel;
-        c.set_fuel(fuel)?;
-        let text = match text {
-            Ok(t) => t,
-            Err(code) => return Ok(code),
-        };
-        let n = text.len().min(cap.max(0) as usize);
-        write(&mut c, ptr, &text.as_bytes()[..n], "camera_scan_qr")?;
-        Ok(text.len() as i32)
-    })?;
+    linker.func_wrap(
+        M,
+        "type_text",
+        |mut c: Caller<'_, State>, ptr: i32, len: i32| -> Result<i32, Error> {
+            permitted(&c, Permission::Keyboard, "type_text")?;
+            if len as u32 as usize > MAX_TYPE {
+                return Ok(TOO_BIG);
+            }
+            let text = read_str(&c, ptr, len, MAX_TYPE, "type_text")?;
+            Ok(c.data_mut().session.type_text(&text))
+        },
+    )?;
+    linker.func_wrap(
+        M,
+        "link_read",
+        |mut c: Caller<'_, State>, ptr: i32, cap: i32| -> Result<i32, Error> {
+            permitted(&c, Permission::Link, "link_read")?;
+            let message = match c.data_mut().session.link_read() {
+                Ok(m) => m,
+                Err(code) => return Ok(code),
+            };
+            let n = message.len().min(cap.max(0) as usize);
+            write(&mut c, ptr, &message[..n], "link_read")?;
+            Ok(message.len() as i32)
+        },
+    )?;
+    linker.func_wrap(
+        M,
+        "link_reply",
+        |mut c: Caller<'_, State>, ptr: i32, len: i32| -> Result<i32, Error> {
+            permitted(&c, Permission::Link, "link_reply")?;
+            if len as u32 as usize > MAX_MESSAGE {
+                return Ok(TOO_BIG);
+            }
+            let reply = read(&c, ptr, len, MAX_MESSAGE, "link_reply")?;
+            Ok(c.data_mut().session.link_reply(&reply))
+        },
+    )?;
+    linker.func_wrap(
+        M,
+        "camera_scan_qr",
+        |mut c: Caller<'_, State>, ptr: i32, cap: i32| -> Result<i32, Error> {
+            permitted(&c, Permission::Camera, "camera_scan_qr")?;
+            let text = c.data_mut().session.scan_qr();
+            // the owner's time isn't the app's work
+            let fuel = c.data().session.limits.fuel;
+            c.set_fuel(fuel)?;
+            let text = match text {
+                Ok(t) => t,
+                Err(code) => return Ok(code),
+            };
+            let n = text.len().min(cap.max(0) as usize);
+            write(&mut c, ptr, &text.as_bytes()[..n], "camera_scan_qr")?;
+            Ok(text.len() as i32)
+        },
+    )?;
     linker.func_wrap(M, "motion_read", |mut c: Caller<'_, State>, ptr: i32| -> Result<i32, Error> {
         permitted(&c, Permission::Motion, "motion_read")?;
         let xyz = match c.data_mut().session.motion() {
@@ -999,15 +1128,25 @@ struct Nothing;
 
 impl Platform for Nothing {
     fn wait(&mut self, _: Option<Duration>) -> Event { Event::Exit }
+
     fn present(&mut self, _: &Canvas) {}
+
     fn set_menu(&mut self, _: &[String]) {}
+
     fn millis(&self) -> u64 { 0 }
+
     fn unix_time(&self) -> Option<(u64, bool)> { None }
+
     fn random(&mut self, _: &mut [u8]) {}
+
     fn log(&mut self, _: &str) {}
+
     fn storage_get(&mut self, _: &str) -> Option<Vec<u8>> { None }
+
     fn storage_set(&mut self, _: &str, _: &[u8]) -> Result<(), ()> { Err(()) }
+
     fn storage_delete(&mut self, _: &str) -> bool { false }
+
     fn storage_keys(&mut self) -> Vec<String> { vec![] }
 }
 
@@ -1058,7 +1197,10 @@ fn compile(code: &[u8], limits: Limits) -> Result<Loaded, String> {
 }
 
 /// A fresh instance of a compiled app, linked to maki's functions on `platform`.
-fn instantiate(loaded: &Loaded, platform: Box<dyn Platform>) -> Result<(Store<State>, wasmi::TypedFunc<(), ()>), String> {
+fn instantiate(
+    loaded: &Loaded,
+    platform: Box<dyn Platform>,
+) -> Result<(Store<State>, wasmi::TypedFunc<(), ()>), String> {
     let Loaded { engine, module, limits, wallet } = loaded;
     let limits = *limits;
     let mut t = now();
@@ -1067,7 +1209,12 @@ fn instantiate(loaded: &Loaded, platform: Box<dyn Platform>) -> Result<(Store<St
     let state = State {
         session,
         memory: None,
-        limiter: StoreLimitsBuilder::new().memory_size(limits.memory).instances(1).memories(1).tables(4).build(),
+        limiter: StoreLimitsBuilder::new()
+            .memory_size(limits.memory)
+            .instances(1)
+            .memories(1)
+            .tables(4)
+            .build(),
         exited: false,
         aborted: None,
     };

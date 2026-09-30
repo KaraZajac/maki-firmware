@@ -2,22 +2,22 @@
 //! the fake maki's, the simulator's and tests'. Every signature is checked before it's returned:
 //! one a fault spoiled can give the key away.
 
+use alloc::vec::Vec;
+use core::cell::UnsafeCell;
+use core::sync::atomic::{AtomicBool, Ordering};
+
 use ed25519_dalek::{Signer, Verifier};
 use hmac::{Hmac, Mac};
 use k256::ecdsa::signature::hazmat::PrehashVerifier;
 use k256::ecdsa::{RecoveryId, Signature, SigningKey};
-use k256::elliptic_curve::sec1::ToEncodedPoint;
 use k256::elliptic_curve::PrimeField;
+use k256::elliptic_curve::sec1::ToEncodedPoint;
 use k256::{ProjectivePoint, PublicKey, Scalar, SecretKey};
 use ripemd::Ripemd160;
 use sha2::{Digest, Sha256, Sha512};
 use zeroize::Zeroize;
 
-use alloc::vec::Vec;
-use core::cell::UnsafeCell;
-use core::sync::atomic::{AtomicBool, Ordering};
-
-use crate::{op, Error, Keys, Public, Tweak, HARDENED, MAX_DEPTH};
+use crate::{Error, HARDENED, Keys, MAX_DEPTH, Public, Tweak, op};
 
 /// How many derived keys `SeedKeys` keeps: a wallet's accounts and their chains, so a key under
 /// one costs a single step rather than the whole path from the master key.
@@ -101,7 +101,6 @@ impl Xpriv {
         let public = compressed(&key.public_key());
         Ok(Xpriv { parent_fingerprint: self.fingerprint(), chain_code, key, public })
     }
-
 }
 
 /// BIP86's tweak for an internal key with no script tree: `H_TapTweak(P)`.
@@ -118,14 +117,16 @@ fn taproot_output_of(public: &[u8; 33]) -> Result<[u8; 32], Error> {
     let mut even = [0x02u8; 33];
     even[1..].copy_from_slice(&internal);
     let p = PublicKey::from_sec1_bytes(&even).map_err(|_| Error::Key)?;
-    let q = (ProjectivePoint::from(*p.as_affine()) + ProjectivePoint::GENERATOR * tap_tweak(&internal)?).to_affine();
+    let q = (ProjectivePoint::from(*p.as_affine()) + ProjectivePoint::GENERATOR * tap_tweak(&internal)?)
+        .to_affine();
     let q = PublicKey::from_affine(q).map_err(|_| Error::Key)?;
     Ok(x_only(&compressed(&q)))
 }
 
 fn ecdsa(key: &SecretKey, digest: &[u8; 32]) -> Result<([u8; 64], u8), Error> {
     let signer = SigningKey::from(key);
-    let (mut sig, mut recid): (Signature, RecoveryId) = signer.sign_prehash_recoverable(digest).map_err(|_| Error::Key)?;
+    let (mut sig, mut recid): (Signature, RecoveryId) =
+        signer.sign_prehash_recoverable(digest).map_err(|_| Error::Key)?;
     if let Some(low) = sig.normalize_s() {
         // the other s is the same point's other y
         sig = low;
@@ -133,7 +134,8 @@ fn ecdsa(key: &SecretKey, digest: &[u8; 32]) -> Result<([u8; 64], u8), Error> {
     }
     signer.verifying_key().verify_prehash(digest, &sig).map_err(|_| Error::Key)?;
     // and the recovery ID gives this key back, as a verifier using it will need
-    let recovered = k256::ecdsa::VerifyingKey::recover_from_prehash(digest, &sig, recid).map_err(|_| Error::Key)?;
+    let recovered =
+        k256::ecdsa::VerifyingKey::recover_from_prehash(digest, &sig, recid).map_err(|_| Error::Key)?;
     if recovered != *signer.verifying_key() {
         return Err(Error::Key);
     }
@@ -272,10 +274,11 @@ impl SeedKeys {
     }
 
     fn derive_from(&self, kept: &mut Vec<(Vec<u32>, Xpriv)>, path: &[u32]) -> Result<Xpriv, Error> {
-        let (mut key, from) = match kept.iter().filter(|(p, _)| crate::under(path, p)).max_by_key(|(p, _)| p.len()) {
-            Some((p, k)) => (k.clone(), p.len()),
-            None => (self.master.clone(), 0),
-        };
+        let (mut key, from) =
+            match kept.iter().filter(|(p, _)| crate::under(path, p)).max_by_key(|(p, _)| p.len()) {
+                Some((p, k)) => (k.clone(), p.len()),
+                None => (self.master.clone(), 0),
+            };
         for depth in from..path.len() {
             key = key.child(path[depth])?;
             // the key at path[..=depth], depth + 1 deep
@@ -316,7 +319,9 @@ impl SeedKeys {
 
     /// The Ed25519 public key at `path` (SLIP-10): a Solana account's address, at
     /// `m/44'/501'/account'/0'`.
-    pub fn ed25519_public(&self, path: &[u32]) -> Result<[u8; 32], Error> { Ok(self.ed25519_key(path)?.verifying_key().to_bytes()) }
+    pub fn ed25519_public(&self, path: &[u32]) -> Result<[u8; 32], Error> {
+        Ok(self.ed25519_key(path)?.verifying_key().to_bytes())
+    }
 
     /// An Ed25519 signature (RFC 8032) over the whole of `message` with the key at `path`.
     pub fn sign_ed25519(&self, path: &[u32], message: &[u8]) -> Result<[u8; 64], Error> {
@@ -329,7 +334,13 @@ impl SeedKeys {
     /// A BIP340 signature with `aux` as its auxiliary randomness: fresh random bytes, on maki,
     /// so a signature doesn't depend on the key and message alone. (Through `Keys` it's zero,
     /// which BIP340 allows, for signatures tests can compare.)
-    pub fn sign_schnorr_with(&self, path: &[u32], digest: &[u8; 32], tweak: Tweak, aux: &[u8; 32]) -> Result<[u8; 64], Error> {
+    pub fn sign_schnorr_with(
+        &self,
+        path: &[u32],
+        digest: &[u8; 32],
+        tweak: Tweak,
+        aux: &[u8; 32],
+    ) -> Result<[u8; 64], Error> {
         schnorr(&self.derive(path)?.key, digest, tweak, aux)
     }
 }
@@ -349,9 +360,13 @@ impl Keys for SeedKeys {
         Ok(out)
     }
 
-    fn taproot_output(&self, path: &[u32]) -> Result<[u8; 32], Error> { taproot_output_of(&self.derive(path)?.public) }
+    fn taproot_output(&self, path: &[u32]) -> Result<[u8; 32], Error> {
+        taproot_output_of(&self.derive(path)?.public)
+    }
 
-    fn sign_ecdsa(&self, path: &[u32], digest: &[u8; 32]) -> Result<([u8; 64], u8), Error> { ecdsa(&self.derive(path)?.key, digest) }
+    fn sign_ecdsa(&self, path: &[u32], digest: &[u8; 32]) -> Result<([u8; 64], u8), Error> {
+        ecdsa(&self.derive(path)?.key, digest)
+    }
 
     fn sign_schnorr(&self, path: &[u32], digest: &[u8; 32], tweak: Tweak) -> Result<[u8; 64], Error> {
         self.sign_schnorr_with(path, digest, tweak, &[0u8; 32])
@@ -366,7 +381,9 @@ pub struct OneKey {
 }
 
 impl OneKey {
-    pub fn new(secret: &[u8; 32]) -> Result<OneKey, Error> { Ok(OneKey { key: SecretKey::from_slice(secret).map_err(|_| Error::Key)? }) }
+    pub fn new(secret: &[u8; 32]) -> Result<OneKey, Error> {
+        Ok(OneKey { key: SecretKey::from_slice(secret).map_err(|_| Error::Key)? })
+    }
 }
 
 impl Keys for OneKey {
@@ -376,7 +393,11 @@ impl Keys for OneKey {
     }
 
     fn public(&self, _path: &[u32]) -> Result<Public, Error> {
-        Ok(Public { key: compressed(&self.key.public_key()), chain_code: [0; 32], parent_fingerprint: [0; 4] })
+        Ok(Public {
+            key: compressed(&self.key.public_key()),
+            chain_code: [0; 32],
+            parent_fingerprint: [0; 4],
+        })
     }
 
     fn uncompressed(&self, _path: &[u32]) -> Result<[u8; 65], Error> {
@@ -385,9 +406,13 @@ impl Keys for OneKey {
         Ok(out)
     }
 
-    fn taproot_output(&self, _path: &[u32]) -> Result<[u8; 32], Error> { taproot_output_of(&compressed(&self.key.public_key())) }
+    fn taproot_output(&self, _path: &[u32]) -> Result<[u8; 32], Error> {
+        taproot_output_of(&compressed(&self.key.public_key()))
+    }
 
-    fn sign_ecdsa(&self, _path: &[u32], digest: &[u8; 32]) -> Result<([u8; 64], u8), Error> { ecdsa(&self.key, digest) }
+    fn sign_ecdsa(&self, _path: &[u32], digest: &[u8; 32]) -> Result<([u8; 64], u8), Error> {
+        ecdsa(&self.key, digest)
+    }
 
     fn sign_schnorr(&self, _path: &[u32], digest: &[u8; 32], tweak: Tweak) -> Result<[u8; 64], Error> {
         schnorr(&self.key, digest, tweak, &[0u8; 32])
@@ -397,7 +422,13 @@ impl Keys for OneKey {
 /// A numbered request (`crate::op`) on `keys`, as maki-keys answers the app host (and the fake
 /// maki and the simulator answer apps): the answer's bytes. `aux` is BIP340's auxiliary
 /// randomness for a Schnorr signature. Which paths an app may use is the caller's to check.
-pub fn answer(keys: &SeedKeys, which: u8, path: &[u32], digest: &[u8], aux: &[u8; 32]) -> Result<Vec<u8>, Error> {
+pub fn answer(
+    keys: &SeedKeys,
+    which: u8,
+    path: &[u32],
+    digest: &[u8],
+    aux: &[u8; 32],
+) -> Result<Vec<u8>, Error> {
     // what's asked, whole: a Monero output, a transaction to sign, a message for Ed25519
     let asked = digest;
     let indices = || -> Result<(u32, u32), Error> {
@@ -440,9 +471,15 @@ pub fn answer(keys: &SeedKeys, which: u8, path: &[u32], digest: &[u8], aux: &[u8
             let d: &[u8; 80] = asked.try_into().map_err(|_| Error::Failed)?;
             let tx_key = maki_xmr::sign::point(d[..32].try_into().unwrap()).ok_or(Error::Key)?;
             let index = u64::from_le_bytes(d[32..40].try_into().unwrap());
-            let (major, minor) = (u32::from_le_bytes(d[40..44].try_into().unwrap()), u32::from_le_bytes(d[44..48].try_into().unwrap()));
+            let (major, minor) = (
+                u32::from_le_bytes(d[40..44].try_into().unwrap()),
+                u32::from_le_bytes(d[44..48].try_into().unwrap()),
+            );
             let key: &[u8; 32] = d[48..].try_into().unwrap();
-            let (image, proof) = keys.monero(path)?.key_image_proof(&tx_key, index, major, minor, key, aux).ok_or(Error::Key)?;
+            let (image, proof) = keys
+                .monero(path)?
+                .key_image_proof(&tx_key, index, major, minor, key, aux)
+                .ok_or(Error::Key)?;
             [&image[..], &proof[..]].concat()
         }
         op::ED25519_PUBLIC => keys.ed25519_public(path)?.to_vec(),
@@ -452,7 +489,9 @@ pub fn answer(keys: &SeedKeys, which: u8, path: &[u32], digest: &[u8], aux: &[u8
             let signed = maki_xmr::request::Request::parse(asked)
                 .map_err(|e| alloc::format!("{e}"))
                 .and_then(|request| {
-                    keys.generators.with(|g| maki_xmr::spend::sign_with(&account, &request, aux, g)).map_err(|e| alloc::format!("{e}"))
+                    keys.generators
+                        .with(|g| maki_xmr::spend::sign_with(&account, &request, aux, g))
+                        .map_err(|e| alloc::format!("{e}"))
                 });
             match signed {
                 Ok(signed) => [&[0u8][..], &signed.to_bytes()].concat(),

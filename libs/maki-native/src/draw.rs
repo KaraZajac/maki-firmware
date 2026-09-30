@@ -50,7 +50,8 @@ impl Frame {
 
     pub fn push(&mut self, op: &Draw) {
         let mut out = Vec::new();
-        let i16s = |out: &mut Vec<u8>, vs: &[i16]| vs.iter().for_each(|v| out.extend_from_slice(&v.to_le_bytes()));
+        let i16s =
+            |out: &mut Vec<u8>, vs: &[i16]| vs.iter().for_each(|v| out.extend_from_slice(&v.to_le_bytes()));
         let bytes16 = |out: &mut Vec<u8>, b: &[u8]| {
             let b = &b[..b.len().min(u16::MAX as usize)];
             out.extend_from_slice(&(b.len() as u16).to_le_bytes());
@@ -146,13 +147,27 @@ pub fn read(frame: &[u8]) -> impl Iterator<Item = Result<Draw<'_>, Malformed>> {
                 CLEAR => Draw::Clear { color: r.u8()? },
                 PIXEL => Draw::Pixel { x: r.i16()?, y: r.i16()?, color: r.u8()? },
                 LINE => Draw::Line { x0: r.i16()?, y0: r.i16()?, x1: r.i16()?, y1: r.i16()?, color: r.u8()? },
-                RECT => Draw::Rect { x: r.i16()?, y: r.i16()?, w: r.i16()?, h: r.i16()?, color: r.u8()?, filled: r.u8()? != 0 },
+                RECT => Draw::Rect {
+                    x: r.i16()?,
+                    y: r.i16()?,
+                    w: r.i16()?,
+                    h: r.i16()?,
+                    color: r.u8()?,
+                    filled: r.u8()? != 0,
+                },
                 TEXT => {
                     let (x, y, style, color) = (r.i16()?, r.i16()?, r.u8()?, r.u8()?);
                     let text = core::str::from_utf8(r.bytes16()?).map_err(|_| Malformed)?;
                     Draw::Text { x, y, style, color, text }
                 }
-                BLIT => Draw::Blit { x: r.i16()?, y: r.i16()?, w: r.i16()?, h: r.i16()?, color: r.u8()?, rows: r.bytes16()? },
+                BLIT => Draw::Blit {
+                    x: r.i16()?,
+                    y: r.i16()?,
+                    w: r.i16()?,
+                    h: r.i16()?,
+                    color: r.u8()?,
+                    rows: r.bytes16()?,
+                },
                 QR => Draw::Qr { x: r.i16()?, y: r.i16()?, size: r.i16()?, data: r.bytes16()? },
                 _ => return Err(Malformed),
             })

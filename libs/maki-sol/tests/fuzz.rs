@@ -1,10 +1,10 @@
 //! Solana transactions and messages from sites are read on maki: anything, however broken, must
 //! get an error or a review, never a panic. Random bytes, and mutations of real ones.
 
-use std::panic::{catch_unwind, AssertUnwindSafe};
+use std::panic::{AssertUnwindSafe, catch_unwind};
 
 use maki_sol::display::{message_pages, review};
-use maki_sol::{base58, Message};
+use maki_sol::{Message, base58};
 
 struct Rng(u64);
 impl Rng {
@@ -14,6 +14,7 @@ impl Rng {
         self.0 ^= self.0 << 17;
         self.0
     }
+
     fn below(&mut self, n: usize) -> usize { (self.next() % n.max(1) as u64) as usize }
 }
 
@@ -45,14 +46,19 @@ fn mutate(rng: &mut Rng, base: &[u8]) -> Vec<u8> {
     b
 }
 
-fn unhex(text: &str) -> Vec<u8> { (0..text.len()).step_by(2).map(|i| u8::from_str_radix(&text[i..i + 2], 16).unwrap()).collect() }
+fn unhex(text: &str) -> Vec<u8> {
+    (0..text.len()).step_by(2).map(|i| u8::from_str_radix(&text[i..i + 2], 16).unwrap()).collect()
+}
 
 #[test]
 fn nothing_a_site_sends_panics() {
     let me = base58::decode_key("HAgk14JpMQLgt6rVgv7cBQFJWFto5Dqxi472uT3DKpqk").unwrap();
-    let text = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/transactions.json")).unwrap();
+    let text =
+        std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/transactions.json"))
+            .unwrap();
     let json: serde_json::Value = serde_json::from_str(&text).unwrap();
-    let real: Vec<Vec<u8>> = json.as_array().unwrap().iter().map(|f| unhex(f["message"].as_str().unwrap())).collect();
+    let real: Vec<Vec<u8>> =
+        json.as_array().unwrap().iter().map(|f| unhex(f["message"].as_str().unwrap())).collect();
     let mut rng = Rng(0x5eed501);
     let (mut read, mut reviewed) = (0, 0);
     for round in 0..40_000 {

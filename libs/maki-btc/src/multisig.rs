@@ -26,14 +26,16 @@ use alloc::format;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 
-use maki_hd::{Keys, HARDENED};
+use maki_hd::{HARDENED, Keys};
 
-use crate::address::{address, describe, Network};
-use crate::bip32::{multisig_version, Xpub};
+use crate::address::{Network, address, describe};
+use crate::bip32::{Xpub, multisig_version};
 use crate::hash::sha256;
-use crate::psbt::{self, parse_derivation, Psbt};
+use crate::psbt::{self, Psbt, parse_derivation};
 use crate::tx::TxOut;
-use crate::wallet::{der, descriptor_checksum, previous_output, segwit_sighash, total, witness_utxo, Error, Output, Review};
+use crate::wallet::{
+    Error, Output, Review, der, descriptor_checksum, previous_output, segwit_sighash, total, witness_utxo,
+};
 
 /// BIP48's script type for native SegWit multisig: P2WSH.
 pub const P2WSH: u32 = 2;
@@ -67,7 +69,9 @@ fn bad(why: &'static str) -> Error { Error::Multisig(why) }
 
 /// A path as a descriptor writes it, after the fingerprint: `/48h/0h/0h/2h`.
 fn path_text(path: &[u32]) -> String {
-    path.iter().map(|&n| if n >= HARDENED { format!("/{}h", n - HARDENED) } else { format!("/{}", n) }).collect()
+    path.iter()
+        .map(|&n| if n >= HARDENED { format!("/{}h", n - HARDENED) } else { format!("/{}", n) })
+        .collect()
 }
 
 /// `48'/0'/0'/2'`, `m/48h/…`, or `/48h/…`: a path's steps.
@@ -127,7 +131,10 @@ impl Multisig {
         if body.starts_with("sh(") {
             return Err(bad("maki takes native SegWit multisig (wsh), not wrapped in P2SH"));
         }
-        let inner = body.strip_prefix("wsh(").and_then(|b| b.strip_suffix(')')).ok_or(bad("not a wsh() descriptor"))?;
+        let inner = body
+            .strip_prefix("wsh(")
+            .and_then(|b| b.strip_suffix(')'))
+            .ok_or(bad("not a wsh() descriptor"))?;
         let (sorted, args) = if let Some(a) = inner.strip_prefix("sortedmulti(") {
             (true, a)
         } else if let Some(a) = inner.strip_prefix("multi(") {
@@ -168,17 +175,23 @@ impl Multisig {
             if line.is_empty() || line.starts_with('#') {
                 continue;
             }
-            let (field, value) = line.split_once(':').ok_or(bad("not a multisig file: a line isn't `field: value`"))?;
+            let (field, value) =
+                line.split_once(':').ok_or(bad("not a multisig file: a line isn't `field: value`"))?;
             let (field, value) = (field.trim(), value.trim());
             match field.to_ascii_lowercase().as_str() {
                 "name" => named = Some(value.to_string()),
                 "policy" => {
-                    let (k, n) = value.split_once(" of ").or_else(|| value.split_once('/')).ok_or(bad("the policy isn't `k of n`"))?;
+                    let (k, n) = value
+                        .split_once(" of ")
+                        .or_else(|| value.split_once('/'))
+                        .ok_or(bad("the policy isn't `k of n`"))?;
                     let k: usize = k.trim().parse().map_err(|_| bad("the policy isn't `k of n`"))?;
                     let n: usize = n.trim().parse().map_err(|_| bad("the policy isn't `k of n`"))?;
                     policy = Some((k, n));
                 }
-                "derivation" => derivation = Some(parse_steps(value).ok_or(bad("the derivation isn't a path"))?),
+                "derivation" => {
+                    derivation = Some(parse_steps(value).ok_or(bad("the derivation isn't a path"))?)
+                }
                 "format" => format = Some(value.to_ascii_uppercase()),
                 other => {
                     let fingerprint = hex4(other).ok_or(bad("not a multisig file: a line isn't a key's"))?;
@@ -196,7 +209,13 @@ impl Multisig {
             return Err(bad("the policy's count of keys isn't the file's"));
         }
         let network = keys.first().map(|k| k.xpub.network).ok_or(bad("no keys"))?;
-        Ok(Multisig { name: named.unwrap_or_else(|| name.to_string()), network, threshold, keys, sorted: true })
+        Ok(Multisig {
+            name: named.unwrap_or_else(|| name.to_string()),
+            network,
+            threshold,
+            keys,
+            sorted: true,
+        })
     }
 
     /// What every wallet must be: k of n, each key an account at BIP48's P2WSH path on the
@@ -211,7 +230,12 @@ impl Multisig {
             if k.xpub.network != self.network {
                 return Err(bad("its keys are for different networks"));
             }
-            if k.path.len() != 4 || k.path[0] != 48 | HARDENED || k.path[1] != coin || k.path[2] < HARDENED || k.path[3] != P2WSH | HARDENED {
+            if k.path.len() != 4
+                || k.path[0] != 48 | HARDENED
+                || k.path[1] != coin
+                || k.path[2] < HARDENED
+                || k.path[3] != P2WSH | HARDENED
+            {
                 return Err(bad("each key must be an account at m/48'/coin'/account'/2' (BIP48, P2WSH)"));
             }
             if k.xpub.depth as usize != k.path.len() || k.xpub.child_number != k.path[3] {
@@ -221,7 +245,8 @@ impl Multisig {
                 return Err(bad("a key is in it twice"));
             }
         }
-        let name: String = self.name.trim().chars().filter(|c| c.is_ascii_graphic() || *c == ' ').take(MAX_NAME).collect();
+        let name: String =
+            self.name.trim().chars().filter(|c| c.is_ascii_graphic() || *c == ' ').take(MAX_NAME).collect();
         self.name = if name.is_empty() { format!("{} of {} multisig", self.threshold, n) } else { name };
         Ok(self)
     }
@@ -232,9 +257,21 @@ impl Multisig {
         let keys: Vec<String> = self
             .keys
             .iter()
-            .map(|k| format!("[{}{}]{}/<0;1>/*", hex(&k.fingerprint), path_text(&k.path), k.xpub.encode(self.network.xpub_version())))
+            .map(|k| {
+                format!(
+                    "[{}{}]{}/<0;1>/*",
+                    hex(&k.fingerprint),
+                    path_text(&k.path),
+                    k.xpub.encode(self.network.xpub_version())
+                )
+            })
             .collect();
-        let body = format!("wsh({}({},{}))", if self.sorted { "sortedmulti" } else { "multi" }, self.threshold, keys.join(","));
+        let body = format!(
+            "wsh({}({},{}))",
+            if self.sorted { "sortedmulti" } else { "multi" },
+            self.threshold,
+            keys.join(",")
+        );
         format!("{}#{}", body, descriptor_checksum(&body))
     }
 
@@ -282,7 +319,8 @@ impl Multisig {
         if index >= HARDENED {
             return Err(Error::Key);
         }
-        address(&Multisig::script_pubkey(&self.script(chains, change, index)?), self.network).ok_or(Error::Key)
+        address(&Multisig::script_pubkey(&self.script(chains, change, index)?), self.network)
+            .ok_or(Error::Key)
     }
 }
 
@@ -378,7 +416,8 @@ impl<'k> Signer<'k> {
         for (i, input) in psbt.tx.inputs.iter().enumerate() {
             // the whole previous transaction: amounts are never taken on the PSBT's word
             let bytes = psbt.input(i, psbt::IN_NON_WITNESS_UTXO).ok_or(Error::NoPreviousTx(i))?;
-            let spent = previous_output(bytes, &input.prev_txid, input.prev_vout).ok_or(Error::PreviousTxMismatch(i))?;
+            let spent = previous_output(bytes, &input.prev_txid, input.prev_vout)
+                .ok_or(Error::PreviousTxMismatch(i))?;
             if let Some(claimed) = psbt.input(i, psbt::IN_WITNESS_UTXO) {
                 if witness_utxo(claimed).as_ref() != Some(&spent) {
                     return Err(Error::PreviousTxMismatch(i));
@@ -415,7 +454,10 @@ impl<'k> Signer<'k> {
             p.key.first() == Some(&psbt::OUT_BIP32_DERIVATION)
                 && p.key.len() == 34
                 && self.ours(&p.value, &p.key[1..]).is_some_and(|(change, index, _, _)| {
-                    change && self.script(true, index).is_ok_and(|s| Multisig::script_pubkey(&s) == script_pubkey)
+                    change
+                        && self
+                            .script(true, index)
+                            .is_ok_and(|s| Multisig::script_pubkey(&s) == script_pubkey)
                 })
         })
     }
@@ -445,8 +487,14 @@ impl<'k> Signer<'k> {
         let witnesses: u64 = spends.iter().map(|s| 1 + 1 + k * (1 + 72) + 3 + s.script.len() as u64).sum();
         let weight = psbt.tx.serialize().len() as u64 * 4 + 2 + witnesses;
         let name = format!("{} ({} of {})", self.wallet.name, self.wallet.threshold, self.wallet.keys.len());
-        let review =
-            Review { network: self.wallet.network, wallet: Some(name), outputs, fee, vbytes: weight.div_ceil(4), inputs: spends.len() };
+        let review = Review {
+            network: self.wallet.network,
+            wallet: Some(name),
+            outputs,
+            fee,
+            vbytes: weight.div_ceil(4),
+            inputs: spends.len(),
+        };
         Ok((review, spends))
     }
 
@@ -478,7 +526,8 @@ pub fn is_multisig(psbt: &Psbt) -> bool {
         psbt.input(i, psbt::IN_WITNESS_SCRIPT).is_some()
             || psbt.inputs[i].iter().any(|p| {
                 p.key.first() == Some(&psbt::IN_BIP32_DERIVATION)
-                    && parse_derivation(&p.value).is_some_and(|(_, path)| path.first() == Some(&(48 | HARDENED)))
+                    && parse_derivation(&p.value)
+                        .is_some_and(|(_, path)| path.first() == Some(&(48 | HARDENED)))
             })
     })
 }

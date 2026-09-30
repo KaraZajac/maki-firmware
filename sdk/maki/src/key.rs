@@ -31,7 +31,8 @@ pub fn load(flag: Option<&str>) -> Result<DeveloperKey, String> {
     }
     let mut seed = [0u8; 32];
     for (i, b) in seed.iter_mut().enumerate() {
-        *b = u8::from_str_radix(&hex[i * 2..i * 2 + 2], 16).map_err(|_| format!("{}: not a developer key", path.display()))?;
+        *b = u8::from_str_radix(&hex[i * 2..i * 2 + 2], 16)
+            .map_err(|_| format!("{}: not a developer key", path.display()))?;
     }
     Ok(DeveloperKey::from_bytes(&seed))
 }
@@ -64,4 +65,6 @@ pub fn write_private(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()
 }
 
 #[cfg(not(unix))]
-pub fn write_private(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> { std::fs::write(path, bytes) }
+pub fn write_private(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
+    std::fs::write(path, bytes)
+}

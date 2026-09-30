@@ -45,7 +45,11 @@ impl Row {
 /// One thing an ask offers: the centre does it.
 enum Stop {
     /// a screen of what's being decided; the centre moves on
-    Page { heading: String, value: String, rows: Vec<Row> },
+    Page {
+        heading: String,
+        value: String,
+        rows: Vec<Row>,
+    },
     Choice(usize),
     Yes,
     No,
@@ -59,7 +63,11 @@ const PROSE_WIDTH: isize = W - 8;
 /// between words (a word too long for a line breaks where it has to).
 fn prose_lines(text: &str) -> Vec<String> {
     let width = |s: &str| -> isize {
-        let w: isize = s.chars().filter_map(|c| blitstr2::small_glyph(c).ok()).map(|g| g.wide as isize + g.kern as isize).sum();
+        let w: isize = s
+            .chars()
+            .filter_map(|c| blitstr2::small_glyph(c).ok())
+            .map(|g| g.wide as isize + g.kern as isize)
+            .sum();
         (w - 1).max(0)
     };
     let mut out = Vec::new();
@@ -119,7 +127,11 @@ impl Stop {
                     rows.push(Row::Gap);
                 }
                 // an empty line between paragraphs is a gap, not a whole line
-                rows.extend(prose_lines(&page.prose).into_iter().map(|l| if l.is_empty() { Row::Gap } else { Row::Small(l) }));
+                rows.extend(
+                    prose_lines(&page.prose)
+                        .into_iter()
+                        .map(|l| if l.is_empty() { Row::Gap } else { Row::Small(l) }),
+                );
             }
             // as many rows as fit a screen, the value taking room on the first; what doesn't
             // fit goes on screens of its own, under the same heading
@@ -128,7 +140,8 @@ impl Stop {
             let mut n = 1;
             for row in rows {
                 if row.height() > room && !screen_rows.is_empty() {
-                    let heading = if n == 1 { page.heading.clone() } else { format!("{} ({})", page.heading, n) };
+                    let heading =
+                        if n == 1 { page.heading.clone() } else { format!("{} ({})", page.heading, n) };
                     let value = if n == 1 { page.value.clone() } else { String::new() };
                     stops.push(Stop::Page { heading, value, rows: std::mem::take(&mut screen_rows) });
                     n += 1;
@@ -171,7 +184,9 @@ pub(crate) struct Prompt {
 }
 
 impl Prompt {
-    fn remaining_s(&self, now_ms: u64) -> u32 { self.deadline_ms.saturating_sub(now_ms).div_ceil(1000) as u32 }
+    fn remaining_s(&self, now_ms: u64) -> u32 {
+        self.deadline_ms.saturating_sub(now_ms).div_ceil(1000) as u32
+    }
 
     fn label<'a>(&'a self, custom: &'a str, default: &'a str) -> &'a str {
         if custom.is_empty() { default } else { custom }
@@ -182,7 +197,8 @@ impl Prompt {
         // the clock, as everywhere, until the last seconds, which the bar counts down; the
         // rule under the bar shows the time left all along
         let left_s = self.remaining_s(now_ms);
-        let countdown = if left_s <= LAST_SECONDS { format!("{left_s}s") } else { screen.clock.borrow().clone() };
+        let countdown =
+            if left_s <= LAST_SECONDS { format!("{left_s}s") } else { screen.clock.borrow().clone() };
         let left_ms = self.deadline_ms.saturating_sub(now_ms);
         let total_ms = self.req.timeout_s.max(1) as u64 * 1000;
         let mut y = screen.bar + 4;

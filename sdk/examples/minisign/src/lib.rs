@@ -9,11 +9,11 @@
 //!
 //! The link's messages, a byte saying what first:
 //! - `P`: the public key: `0`, its 32 bytes, and its 8-byte ID.
-//! - `S`: a file to sign: its BLAKE2b-512 hash (64 bytes), its size (u64, little-endian), its
-//!   name (a byte's length, then UTF-8), and a trusted comment of the signer's (a u16's length,
-//!   little-endian, then UTF-8; empty for maki's own). Answered `0`, the key ID, the signature
-//!   (64), the trusted comment (a u16's length, then it) and the global signature (64); or `1`
-//!   the owner said no, `2` no answer, `3` maki is locked, `4` not a request it takes.
+//! - `S`: a file to sign: its BLAKE2b-512 hash (64 bytes), its size (u64, little-endian), its name (a byte's
+//!   length, then UTF-8), and a trusted comment of the signer's (a u16's length, little-endian, then UTF-8;
+//!   empty for maki's own). Answered `0`, the key ID, the signature (64), the trusted comment (a u16's
+//!   length, then it) and the global signature (64); or `1` the owner said no, `2` no answer, `3` maki is
+//!   locked, `4` not a request it takes.
 
 #![no_std]
 
@@ -42,7 +42,11 @@ fn base64<const N: usize>(out: &mut Buf<N>, data: &[u8]) {
         let b = [chunk[0], chunk.get(1).copied().unwrap_or(0), chunk.get(2).copied().unwrap_or(0)];
         let n = (b[0] as u32) << 16 | (b[1] as u32) << 8 | b[2] as u32;
         for i in 0..4 {
-            let _ = out.write_char(if i <= chunk.len() { B64[(n >> (18 - 6 * i) & 63) as usize] as char } else { '=' });
+            let _ = out.write_char(if i <= chunk.len() {
+                B64[(n >> (18 - 6 * i) & 63) as usize] as char
+            } else {
+                '='
+            });
         }
     }
 }
@@ -81,7 +85,8 @@ fn size<const N: usize>(out: &mut Buf<N>, bytes: u64) {
 
 /// A day and time from seconds since 1970, in UTC (the civil calendar from days since then).
 fn date<const N: usize>(out: &mut Buf<N>, secs: u64) {
-    const MONTHS: [&str; 12] = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+    const MONTHS: [&str; 12] =
+        ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
     let days = (secs / 86_400) as i64;
     let z = days + 719_468;
     let era = z.div_euclid(146_097);
@@ -92,7 +97,13 @@ fn date<const N: usize>(out: &mut Buf<N>, secs: u64) {
     let day = doy - (153 * mp + 2) / 5 + 1;
     let month = if mp < 10 { mp + 3 } else { mp - 9 };
     let year = yoe + era * 400 + if month <= 2 { 1 } else { 0 };
-    let _ = write!(out, "{day} {} {year} {:02}:{:02}", MONTHS[month as usize - 1], secs % 86_400 / 3600, secs % 3600 / 60);
+    let _ = write!(
+        out,
+        "{day} {} {year} {:02}:{:02}",
+        MONTHS[month as usize - 1],
+        secs % 86_400 / 3600,
+        secs % 3600 / 60
+    );
 }
 
 /// Bytes, without an allocator: what fits.
@@ -183,7 +194,14 @@ impl App {
         };
         // one line each, as minisign writes them, and a name with no path in it
         let one_line = |s: &str| !s.chars().any(|c| c.is_control() && c != '\t');
-        if !r.0.is_empty() || name.is_empty() || name.len() > MOST_NAME || name.contains('/') || !one_line(name) || theirs.len() > MOST_COMMENT || !one_line(theirs) {
+        if !r.0.is_empty()
+            || name.is_empty()
+            || name.len() > MOST_NAME
+            || name.contains('/')
+            || !one_line(name)
+            || theirs.len() > MOST_COMMENT
+            || !one_line(theirs)
+        {
             answer.push(BAD);
             return;
         }

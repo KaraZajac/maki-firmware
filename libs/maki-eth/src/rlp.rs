@@ -46,7 +46,8 @@ fn item(b: &[u8], depth: u32) -> Result<(Item<'_>, usize), Error> {
             (1 + n, long_length(b.get(1..1 + n).ok_or(Error("ends early"))?)?, true)
         }
     };
-    let payload = b.get(header..header.checked_add(len).ok_or(Error("too long"))?).ok_or(Error("ends early"))?;
+    let payload =
+        b.get(header..header.checked_add(len).ok_or(Error("too long"))?).ok_or(Error("ends early"))?;
     if !list {
         if len == 1 && payload[0] < 0x80 {
             return Err(Error("single byte not encoded as itself"));

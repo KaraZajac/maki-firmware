@@ -83,7 +83,9 @@ fn set(px: &mut [u8; PIXELS], x: i32, y: i32) {
 
 /// A wall there, or off the screen.
 fn wall(px: &[u8; PIXELS], x: i32, y: i32) -> bool {
-    !(0..WIDTH).contains(&x) || !(0..HEIGHT).contains(&y) || px[y as usize * ROW_BYTES + x as usize / 8] & (0x80 >> (x % 8)) != 0
+    !(0..WIDTH).contains(&x)
+        || !(0..HEIGHT).contains(&y)
+        || px[y as usize * ROW_BYTES + x as usize / 8] & (0x80 >> (x % 8)) != 0
 }
 
 /// The maze's walls as pixels: each cell's north and west, where they're closed, and the far
@@ -110,7 +112,9 @@ fn draw_walls(open: &[u8; CELLS], px: &mut [u8; PIXELS]) {
 }
 
 /// Where a cell's middle is, in pixels.
-fn middle(c: usize) -> (i32, i32) { (LEFT + (c % COLS) as i32 * CELL + CELL / 2, TOP + (c / COLS) as i32 * CELL + CELL / 2) }
+fn middle(c: usize) -> (i32, i32) {
+    (LEFT + (c % COLS) as i32 * CELL + CELL / 2, TOP + (c / COLS) as i32 * CELL + CELL / 2)
+}
 
 fn pixel(v: i32) -> i32 { (v + ONE / 2).div_euclid(ONE) }
 
@@ -199,7 +203,12 @@ fn title(solved: u32, fastest: u32, level: bool) {
     screen::line(64, 46, 64, 56, Color::Light);
     disc(54, 49, R, Color::Light);
     let mut line = Buf::<24>::new();
-    screen::text_centred(62, if level { "tilt maki to roll it" } else { "no accelerometer here" }, Style::Small, Color::Light);
+    screen::text_centred(
+        62,
+        if level { "tilt maki to roll it" } else { "no accelerometer here" },
+        Style::Small,
+        Color::Light,
+    );
     screen::text_centred(75, "centre: play", Style::Small, Color::Light);
     if solved > 0 {
         let _ = write!(line, "{solved} solved, best ");

@@ -169,7 +169,16 @@ impl Message {
         if r.at != bytes.len() {
             return Err(Error::Length);
         }
-        let m = Message { version, signers, readonly_signers, readonly_others, keys, blockhash, instructions, lookups };
+        let m = Message {
+            version,
+            signers,
+            readonly_signers,
+            readonly_others,
+            keys,
+            blockhash,
+            instructions,
+            lookups,
+        };
         m.sanitize()?;
         Ok(m)
     }
@@ -179,7 +188,8 @@ impl Message {
     fn sanitize(&self) -> Result<(), Error> {
         let n = self.keys.len();
         // a signer that writes, to pay the fee; and the signers and read-only others don't overlap
-        if self.readonly_signers >= self.signers || self.signers as usize + self.readonly_others as usize > n {
+        if self.readonly_signers >= self.signers || self.signers as usize + self.readonly_others as usize > n
+        {
             return Err(Error::Header);
         }
         let mut loaded = 0;
@@ -210,7 +220,11 @@ impl Message {
         for (i, l) in self.lookups.iter().enumerate() {
             let entries = || l.writable.iter().chain(l.readonly.iter());
             for (j, e) in entries().enumerate() {
-                if entries().take(j).any(|x| x == e) || self.lookups[..i].iter().any(|o| o.table == l.table && (o.writable.contains(e) || o.readonly.contains(e))) {
+                if entries().take(j).any(|x| x == e)
+                    || self.lookups[..i]
+                        .iter()
+                        .any(|o| o.table == l.table && (o.writable.contains(e) || o.readonly.contains(e)))
+                {
                     return Err(Error::Duplicate);
                 }
             }
@@ -220,7 +234,9 @@ impl Message {
 
     /// Every account the message names: its keys, then the lookup tables' entries, the writable
     /// ones first (table by table), then the read-only ones.
-    pub fn accounts(&self) -> usize { self.keys.len() + self.lookups.iter().map(|l| l.writable.len() + l.readonly.len()).sum::<usize>() }
+    pub fn accounts(&self) -> usize {
+        self.keys.len() + self.lookups.iter().map(|l| l.writable.len() + l.readonly.len()).sum::<usize>()
+    }
 
     /// The account at `index`.
     pub fn account(&self, index: u8) -> Option<Account<'_>> {

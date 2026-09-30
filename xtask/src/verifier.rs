@@ -41,7 +41,9 @@ pub fn check_project_consistency() -> Result<(), DynError> {
 /// point comparing it with what crates.io has.
 fn patched_locally(name: &str) -> bool {
     let section = format!("[patch.crates-io.{}]", name);
-    fs::read_to_string("Cargo.toml").map(|toml| toml.lines().any(|line| line.trim() == section)).unwrap_or(false)
+    fs::read_to_string("Cargo.toml")
+        .map(|toml| toml.lines().any(|line| line.trim() == section))
+        .unwrap_or(false)
 }
 
 pub fn verify(spec: CrateSpec, hard_failure: bool) -> Result<(), DynError> {

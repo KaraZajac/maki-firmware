@@ -536,27 +536,40 @@ fn main() -> ! {
                 vault_ui.refresh_draw_list();
                 vault_ui.redraw();
             }
-            Some(op @ (VaultOp::FocusChange | VaultOp::FocusPasswords)) => xous::msg_scalar_unpack!(msg, focus, _, _, _, {
-                let foreground = focus == maki_launcher::Focus::Foreground.to_usize().unwrap();
-                vault_ui.set_focus(foreground);
-                pace.focused.store(foreground, Ordering::SeqCst);
-                if foreground {
-                    let wanted =
-                        if matches!(op, VaultOp::FocusPasswords) { VaultMode::Password } else { VaultMode::Totp };
-                    let current = *mode.lock().unwrap();
-                    if menu_active {
-                        menu_mgr.redraw();
-                    } else if current != wanted {
-                        switch_mode(wanted, &mode, actions_conn, pump_conn, &pace, &allow_totp_rendering, &mut vault_ui);
-                    } else {
-                        vault_ui.refresh_draw_list();
-                        vault_ui.redraw();
+            Some(op @ (VaultOp::FocusChange | VaultOp::FocusPasswords)) => {
+                xous::msg_scalar_unpack!(msg, focus, _, _, _, {
+                    let foreground = focus == maki_launcher::Focus::Foreground.to_usize().unwrap();
+                    vault_ui.set_focus(foreground);
+                    pace.focused.store(foreground, Ordering::SeqCst);
+                    if foreground {
+                        let wanted = if matches!(op, VaultOp::FocusPasswords) {
+                            VaultMode::Password
+                        } else {
+                            VaultMode::Totp
+                        };
+                        let current = *mode.lock().unwrap();
+                        if menu_active {
+                            menu_mgr.redraw();
+                        } else if current != wanted {
+                            switch_mode(
+                                wanted,
+                                &mode,
+                                actions_conn,
+                                pump_conn,
+                                &pace,
+                                &allow_totp_rendering,
+                                &mut vault_ui,
+                            );
+                        } else {
+                            vault_ui.refresh_draw_list();
+                            vault_ui.redraw();
+                        }
+                        if *mode.lock().unwrap() == VaultMode::Totp {
+                            pace.start(pump_conn);
+                        }
                     }
-                    if *mode.lock().unwrap() == VaultMode::Totp {
-                        pace.start(pump_conn);
-                    }
-                }
-            }),
+                })
+            }
             Some(VaultOp::MenuHome) => {
                 // stop drawing first: the menu's MenuDone, which follows this, triggers a redraw
                 vault_ui.set_focus(false);
@@ -604,9 +617,13 @@ fn main() -> ! {
                     (VaultMode::Password, false) => &["Type username", "Delete this login"],
                 };
                 match maki_launcher::MenuMessage::of(&msg) {
-                    Some(maki_launcher::MenuMessage::Fill) => maki_launcher::MenuMessage::fill(&mut msg, items),
+                    Some(maki_launcher::MenuMessage::Fill) => {
+                        maki_launcher::MenuMessage::fill(&mut msg, items)
+                    }
                     Some(maki_launcher::MenuMessage::Picked(i)) => match items.get(i) {
-                        Some(&"Add from QR code") => scan_qr(actions_conn, &allow_totp_rendering, &tt, &mut vault_ui),
+                        Some(&"Add from QR code") => {
+                            scan_qr(actions_conn, &allow_totp_rendering, &tt, &mut vault_ui)
+                        }
                         Some(&"Type username") => vault_ui.type_username(),
                         Some(&"Delete this code") | Some(&"Delete this login") => {
                             allow_totp_rendering.store(false, Ordering::SeqCst);

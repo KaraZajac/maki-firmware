@@ -37,7 +37,12 @@ fn draw(tilt: Option<(i16, i16, i16)>, scanned: &str) {
             screen::text(80, 30, "no level", Style::Small, Color::Light);
         }
     }
-    screen::text_centred(80, if scanned.is_empty() { "centre: scan a QR code" } else { scanned }, Style::Small, Color::Light);
+    screen::text_centred(
+        80,
+        if scanned.is_empty() { "centre: scan a QR code" } else { scanned },
+        Style::Small,
+        Color::Light,
+    );
     screen::present();
 }
 

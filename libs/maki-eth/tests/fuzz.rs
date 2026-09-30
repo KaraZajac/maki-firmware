@@ -1,9 +1,9 @@
 //! Ethereum transactions, messages and typed data from sites are parsed on maki: anything,
 //! however broken, must get an error, never a panic. Random bytes, and mutations of real ones.
 
-use std::panic::{catch_unwind, AssertUnwindSafe};
+use std::panic::{AssertUnwindSafe, catch_unwind};
 
-use maki_eth::{display, json, rlp, Account, Tx, TypedData};
+use maki_eth::{Account, Tx, TypedData, display, json, rlp};
 use maki_hd::seed::{OneKey, SeedKeys};
 
 /// maki's keys for a seed, for as long as the tests run.
@@ -20,6 +20,7 @@ impl Rng {
         self.0 ^= self.0 << 17;
         self.0
     }
+
     fn below(&mut self, n: usize) -> usize { (self.next() % n.max(1) as u64) as usize }
 }
 
@@ -73,7 +74,9 @@ fn nothing_a_site_sends_panics_the_account() {
         calls.push(tx);
     }
     let words: Vec<&str> =
-        "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about".split(' ').collect();
+        "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about"
+            .split(' ')
+            .collect();
     let account = Account::new(keys(&maki_seed::seed(&words, "")), 0).unwrap();
     let mut rng = Rng(0x2545_f491_4f6c_dd1d);
     let (mut parsed, mut reviewed) = (0, 0);
@@ -124,7 +127,24 @@ const TYPED: [&str; 3] = [
 
 /// Mutations that keep to JSON's alphabet, so more of them get far into the parser.
 fn mutate_json(rng: &mut Rng, base: &str) -> String {
-    const PIECES: [&str; 16] = ["{", "}", "[", "]", ",", ":", "\"", "\\u", "-", "0x", "1", "99999999999999999999999999999999999999999999999999999999999999999999999999999", "null", "[]", "\"uint256\"", "\"Item[]\""];
+    const PIECES: [&str; 16] = [
+        "{",
+        "}",
+        "[",
+        "]",
+        ",",
+        ":",
+        "\"",
+        "\\u",
+        "-",
+        "0x",
+        "1",
+        "99999999999999999999999999999999999999999999999999999999999999999999999999999",
+        "null",
+        "[]",
+        "\"uint256\"",
+        "\"Item[]\"",
+    ];
     let mut b = base.as_bytes().to_vec();
     // mostly one change: more of them still parse, and reach the checks on types and values
     for _ in 0..if rng.below(4) == 0 { 2 + rng.below(2) } else { 1 } {
@@ -154,7 +174,8 @@ fn no_typed_data_a_site_sends_panics_the_account() {
     let (mut parsed, mut reviewed) = (0, 0);
     for i in 0..30_000 {
         let input = match i % 4 {
-            0 => String::from_utf8_lossy(&(0..rng.below(120)).map(|_| rng.next() as u8).collect::<Vec<u8>>()).into_owned(),
+            0 => String::from_utf8_lossy(&(0..rng.below(120)).map(|_| rng.next() as u8).collect::<Vec<u8>>())
+                .into_owned(),
             n => mutate_json(&mut rng, TYPED[n - 1]),
         };
         let outcome = catch_unwind(AssertUnwindSafe(|| {

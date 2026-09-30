@@ -69,13 +69,21 @@ impl<'a> Reader<'a> {
 
     pub fn u8(&mut self) -> Result<u8, Truncated> { Ok(self.take(1)?[0]) }
 
-    pub fn u16(&mut self) -> Result<u16, Truncated> { Ok(u16::from_le_bytes(self.take(2)?.try_into().unwrap())) }
+    pub fn u16(&mut self) -> Result<u16, Truncated> {
+        Ok(u16::from_le_bytes(self.take(2)?.try_into().unwrap()))
+    }
 
-    pub fn u32(&mut self) -> Result<u32, Truncated> { Ok(u32::from_le_bytes(self.take(4)?.try_into().unwrap())) }
+    pub fn u32(&mut self) -> Result<u32, Truncated> {
+        Ok(u32::from_le_bytes(self.take(4)?.try_into().unwrap()))
+    }
 
-    pub fn i32(&mut self) -> Result<i32, Truncated> { Ok(i32::from_le_bytes(self.take(4)?.try_into().unwrap())) }
+    pub fn i32(&mut self) -> Result<i32, Truncated> {
+        Ok(i32::from_le_bytes(self.take(4)?.try_into().unwrap()))
+    }
 
-    pub fn u64(&mut self) -> Result<u64, Truncated> { Ok(u64::from_le_bytes(self.take(8)?.try_into().unwrap())) }
+    pub fn u64(&mut self) -> Result<u64, Truncated> {
+        Ok(u64::from_le_bytes(self.take(8)?.try_into().unwrap()))
+    }
 
     pub fn str8(&mut self) -> Result<&'a str, Truncated> {
         let n = self.u8()? as usize;
@@ -88,5 +96,7 @@ impl<'a> Reader<'a> {
     }
 
     /// Everything must have been consumed: trailing bytes mean a malformed message.
-    pub fn end(&self) -> Result<(), Truncated> { if self.pos == self.data.len() { Ok(()) } else { Err(Truncated) } }
+    pub fn end(&self) -> Result<(), Truncated> {
+        if self.pos == self.data.len() { Ok(()) } else { Err(Truncated) }
+    }
 }

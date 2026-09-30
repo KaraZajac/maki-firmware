@@ -2,8 +2,8 @@
 //! mint's address, and amounts in the decimals the transfer says (which Solana checks against the
 //! mint's). Names come from this list alone, never from what a token says of itself.
 
-use crate::base58::key;
 use crate::Key;
+use crate::base58::key;
 
 pub struct Token {
     pub mint: Key,

@@ -16,7 +16,7 @@ use maki_app_host_api::*;
 use maki_launcher::{Answer, Focus, MenuMessage, Page};
 use maki_ui::Key;
 use num_traits::{FromPrimitive, ToPrimitive};
-use runner::{tell, Shared, Slot, ToRunner, ASK_TIMEOUT_S};
+use runner::{ASK_TIMEOUT_S, Shared, Slot, ToRunner, tell};
 use store::{Record, Store};
 use xous_ipc::Buffer;
 
@@ -46,9 +46,14 @@ fn time_ms(time_conn: xous::CID, op: bao1x_hal_service::api::TimeOp) -> Option<u
     if !set {
         return None;
     }
-    match xous::send_message(time_conn, xous::Message::new_blocking_scalar(op.to_usize().unwrap(), 0, 0, 0, 0)) {
+    match xous::send_message(
+        time_conn,
+        xous::Message::new_blocking_scalar(op.to_usize().unwrap(), 0, 0, 0, 0),
+    ) {
         // the time server answers UTC low word first, and local time high word first
-        Ok(xous::Result::Scalar2(a, b)) if matches!(op, TimeOp::GetLocalTimeMs) => Some(((a as u64) << 32) | b as u64),
+        Ok(xous::Result::Scalar2(a, b)) if matches!(op, TimeOp::GetLocalTimeMs) => {
+            Some(((a as u64) << 32) | b as u64)
+        }
         Ok(xous::Result::Scalar2(lo, hi)) => Some(((hi as u64) << 32) | lo as u64),
         _ => None,
     }
@@ -81,7 +86,12 @@ pub(crate) fn clock_text(_: xous::CID, _: bool) -> String { String::from("--:--"
 fn key_op(slot: usize) -> u32 { (APP_OPS + slot * 4) as u32 }
 
 /// Takes an app off the home screen and out of storage.
-pub(crate) fn remove_app(store: &Store, launcher: &maki_launcher::Launcher, shared: &Mutex<Shared>, id: &str) {
+pub(crate) fn remove_app(
+    store: &Store,
+    launcher: &maki_launcher::Launcher,
+    shared: &Mutex<Shared>,
+    id: &str,
+) {
     store.remove(id);
     let slot = {
         let mut sh = shared.lock().unwrap();
@@ -145,7 +155,9 @@ fn sync_home(store: &Store, launcher: &maki_launcher::Launcher, shared: &Mutex<S
 /// Ends the app with this ID if it's running, and waits for it (not long: an app that ignores
 /// Exit is stopped at its next wait, and one that never waits runs out of fuel).
 fn stop_if_running(shared: &Mutex<Shared>, to_runner: &Sender<ToRunner>, id: &str) {
-    let running = |sh: &Shared| sh.running.and_then(|r| sh.slots.get(r).cloned().flatten()).map(|s| s.id == id).unwrap_or(false);
+    let running = |sh: &Shared| {
+        sh.running.and_then(|r| sh.slots.get(r).cloned().flatten()).map(|s| s.id == id).unwrap_or(false)
+    };
     if !running(&shared.lock().unwrap()) {
         return;
     }
@@ -179,7 +191,8 @@ enum Work {
 /// Checks a bundle that's all arrived, asks the owner, and installs it: the result, and why if
 /// maki refused it.
 fn install(w: &Worker, bytes: Vec<u8>) -> (u32, String) {
-    let (keys, launcher, store, shared, to_runner) = (&w.keys, &w.launcher, &w.store, &*w.shared, &w.to_runner);
+    let (keys, launcher, store, shared, to_runner) =
+        (&w.keys, &w.launcher, &w.store, &*w.shared, &w.to_runner);
     if keys.status().0 != maki_keys::State::Unlocked {
         return (RESULT_LOCKED, String::new());
     }
@@ -233,11 +246,19 @@ fn install(w: &Worker, bytes: Vec<u8>) -> (u32, String) {
         None => {}
     }
     // the room it takes, less what the version it replaces took
-    let taken: u32 = store.records().iter().filter(|(id, _)| *id != m.id).map(|(_, r)| r.bundle + r.storage).sum();
+    let taken: u32 =
+        store.records().iter().filter(|(id, _)| *id != m.id).map(|(_, r)| r.bundle + r.storage).sum();
     let free = APP_SPACE.saturating_sub(taken);
     let needs = bytes.len() as u32 + m.storage_kib * 1024;
     if needs > free {
-        return (RESULT_REFUSED, format!("maki hasn't the room: it needs {} KiB, and {} KiB is free", needs.div_ceil(1024), free / 1024));
+        return (
+            RESULT_REFUSED,
+            format!(
+                "maki hasn't the room: it needs {} KiB, and {} KiB is free",
+                needs.div_ceil(1024),
+                free / 1024
+            ),
+        );
     }
 
     // the owner decides, having seen everything
@@ -291,17 +312,27 @@ fn install(w: &Worker, bytes: Vec<u8>) -> (u32, String) {
         if !reason.is_empty() {
             prose.push_str(&format!("\n\nThe developer says: \"{reason}\""));
         }
-        pages.push(Page { heading: "It asks to".into(), value: p.title().into(), mono: String::new(), prose });
+        pages.push(Page {
+            heading: "It asks to".into(),
+            value: p.title().into(),
+            mono: String::new(),
+            prose,
+        });
         // the accounts the wallet permission's warning names next: the coins from the paths
         // themselves, never the app's say-so. One coin fits the bold line; more are named in
         // full below the paths, where the words wrap.
         if let (maki_bundle::Permission::Wallet, Some(w)) = (p, &m.wallet) {
             let coins = w.coins();
             let (value, prose) = match coins.as_slice() {
-                [one] => (one.clone(), "From your recovery phrase, where other wallets find them too.".to_string()),
+                [one] => {
+                    (one.clone(), "From your recovery phrase, where other wallets find them too.".to_string())
+                }
                 [first @ .., last] => (
                     String::new(),
-                    format!("For {} and {last}, from your recovery phrase, where other wallets find them too.", first.join(", ")),
+                    format!(
+                        "For {} and {last}, from your recovery phrase, where other wallets find them too.",
+                        first.join(", ")
+                    ),
                 ),
                 [] => (String::new(), String::new()),
             };
@@ -316,10 +347,16 @@ fn install(w: &Worker, bytes: Vec<u8>) -> (u32, String) {
     pages.push(Page {
         heading: "It needs".into(),
         value: String::new(),
-        mono: format!("{} KiB storage\n{} KiB memory\nbackup: {}", m.storage_kib, m.memory_kib, if m.backup { "yes" } else { "no" }),
+        mono: format!(
+            "{} KiB storage\n{} KiB memory\nbackup: {}",
+            m.storage_kib,
+            m.memory_kib,
+            if m.backup { "yes" } else { "no" }
+        ),
         prose: String::new(),
     });
-    let (question, yes) = if installed.is_some() { ("Update app?", "update") } else { ("Install app?", "install") };
+    let (question, yes) =
+        if installed.is_some() { ("Update app?", "update") } else { ("Install app?", "install") };
     log::info!("asking the owner to install {}", m.id);
     match launcher.review(&m.name, question, &version, pages, yes, "cancel", ASK_TIMEOUT_S) {
         Ok(Answer::Allowed(_)) => {}
@@ -378,11 +415,16 @@ fn take_store_record(store: &Store, bytes: &[u8], now: Option<u64>) -> Result<()
         log::info!("maki store root {} taken", root.root.version);
         return Ok(());
     }
-    let list = maki_store::SignedRevocations::decode(bytes).map_err(|e| format!("not a store record: {e}"))?;
+    let list =
+        maki_store::SignedRevocations::decode(bytes).map_err(|e| format!("not a store record: {e}"))?;
     list.replaces(&store.store_root(), now, store.signed_revocations().as_ref())
         .map_err(|e| format!("the revocation list: {e}"))?;
     store.put_revocations(bytes).map_err(|e| format!("couldn't keep the revocation list: {e:?}"))?;
-    log::info!("maki store revocation list {} taken ({} entries)", list.list.version, list.list.entries.len());
+    log::info!(
+        "maki store revocation list {} taken ({} entries)",
+        list.list.version,
+        list.list.entries.len()
+    );
     Ok(())
 }
 
@@ -397,7 +439,8 @@ fn verified_now(shared: &Mutex<Shared>) -> Option<u64> {
 
 /// Asks the owner, then removes the app and its data.
 fn remove(w: &Worker, id: &str) -> u32 {
-    let (keys, launcher, store, shared, to_runner) = (&w.keys, &w.launcher, &w.store, &*w.shared, &w.to_runner);
+    let (keys, launcher, store, shared, to_runner) =
+        (&w.keys, &w.launcher, &w.store, &*w.shared, &w.to_runner);
     if keys.status().0 != maki_keys::State::Unlocked {
         return RESULT_LOCKED;
     }
@@ -489,10 +532,14 @@ fn main() -> ! {
     const HEAP: usize = 3 * 1024 * 1024;
     let heap = xous::Limits::HeapMaximum as usize;
     match xous::rsyscall(xous::SysCall::AdjustProcessLimit(heap, 0, HEAP)) {
-        Ok(xous::Result::Scalar2(1, now)) => match xous::rsyscall(xous::SysCall::AdjustProcessLimit(heap, now, HEAP)) {
-            Ok(xous::Result::Scalar2(1, set)) => log::info!("heap up to {} KiB (from {})", set / 1024, now / 1024),
-            other => log::warn!("the heap stays as it was: {other:?}"),
-        },
+        Ok(xous::Result::Scalar2(1, now)) => {
+            match xous::rsyscall(xous::SysCall::AdjustProcessLimit(heap, now, HEAP)) {
+                Ok(xous::Result::Scalar2(1, set)) => {
+                    log::info!("heap up to {} KiB (from {})", set / 1024, now / 1024)
+                }
+                other => log::warn!("the heap stays as it was: {other:?}"),
+            }
+        }
         other => log::warn!("the heap stays as it was: {other:?}"),
     }
 

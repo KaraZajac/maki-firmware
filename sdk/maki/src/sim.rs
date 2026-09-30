@@ -108,16 +108,20 @@ pub fn parse_presses(s: &str) -> Result<Vec<Press>, String> {
             "yes" => Press::Answer(Answer::Yes),
             "no" => Press::Answer(Answer::No),
             m if m.starts_with("msg:") => Press::Message(m.as_bytes()[4..].to_vec()),
-            h if h.starts_with("hex:") => Press::Message(from_hex(&h[4..]).ok_or_else(|| format!("hex:BYTES in hex, not {h}"))?),
+            h if h.starts_with("hex:") => {
+                Press::Message(from_hex(&h[4..]).ok_or_else(|| format!("hex:BYTES in hex, not {h}"))?)
+            }
             q if q.starts_with("qr:") => Press::Qr(q[3..].to_string()),
-            t if t.starts_with("tilt:") => Press::Tilt(parse_xyz(&t[5..]).ok_or_else(|| format!("tilt:X;Y;Z in milli-g, not {t}"))?),
+            t if t.starts_with("tilt:") => {
+                Press::Tilt(parse_xyz(&t[5..]).ok_or_else(|| format!("tilt:X;Y;Z in milli-g, not {t}"))?)
+            }
             m if m.starts_with("menu:") => {
                 Press::Menu(m[5..].parse().map_err(|_| format!("bad menu item in {part}"))?)
             }
             other => {
                 return Err(format!(
                     "no press \"{other}\": left, right, centre, timeout, menu:N, exit, yes or no for an ask, msg:TEXT or hex:BYTES for a message, qr:TEXT for a scan, tilt:X;Y;Z"
-                ))
+                ));
             }
         };
         out.extend(std::iter::repeat_n(press, times));
@@ -157,7 +161,8 @@ pub struct Options {
 
 /// The BIP39 test phrase, whose seed the simulator derives apps' keys from. Never for anything
 /// real: everyone knows it.
-const TEST_PHRASE: &str = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
+const TEST_PHRASE: &str =
+    "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
 
 struct Shared {
     manifest: Manifest,
@@ -188,7 +193,11 @@ struct Shared {
 pub struct Sim(Rc<RefCell<Shared>>);
 
 fn load_storage(path: &std::path::Path) -> BTreeMap<String, Vec<u8>> {
-    let unhex = |h: &str| (0..h.len() / 2).filter_map(|i| u8::from_str_radix(&h[i * 2..i * 2 + 2], 16).ok()).collect::<Vec<u8>>();
+    let unhex = |h: &str| {
+        (0..h.len() / 2)
+            .filter_map(|i| u8::from_str_radix(&h[i * 2..i * 2 + 2], 16).ok())
+            .collect::<Vec<u8>>()
+    };
     std::fs::read_to_string(path)
         .unwrap_or_default()
         .lines()
@@ -204,7 +213,9 @@ fn save_storage(path: &std::path::Path, storage: &BTreeMap<String, Vec<u8>>) {
 }
 
 impl Shared {
-    fn screen(&self) -> Screen { compose(&bar(&self.manifest.name, self.options.sideloaded, &clock(self.unix())), &self.last) }
+    fn screen(&self) -> Screen {
+        compose(&bar(&self.manifest.name, self.options.sideloaded, &clock(self.unix())), &self.last)
+    }
 
     /// How long it has run: on the wall clock in the terminal, the script's own time otherwise.
     fn elapsed(&self) -> Duration { if self.interactive { self.started.elapsed() } else { self.slept } }
@@ -299,7 +310,7 @@ impl Sim {
     }
 
     fn interactive_wait(s: &mut Shared, timeout: Option<Duration>) -> Event {
-        use crossterm::event::{poll, read, Event as Term, KeyCode, KeyEventKind};
+        use crossterm::event::{Event as Term, KeyCode, KeyEventKind, poll, read};
         s.draw_terminal(HELP);
         let deadline = timeout.map(|t| Instant::now() + t);
         loop {
@@ -333,7 +344,7 @@ impl Sim {
 
     /// An ask in the terminal: y or n, or Esc (or the time running out) for no answer.
     fn interactive_ask(s: &mut Shared, ask: &Ask) -> Answer {
-        use crossterm::event::{poll, read, Event as Term, KeyCode, KeyEventKind};
+        use crossterm::event::{Event as Term, KeyCode, KeyEventKind, poll, read};
         let label = |l: &str, default: &str| if l.is_empty() { default.to_string() } else { l.to_string() };
         let prompt = format!(
             "ask: {} {} · y {} · n {} · {} s",
@@ -367,7 +378,7 @@ impl Sim {
     }
 
     fn interactive_review(s: &mut Shared, review: &Review) -> Answer {
-        use crossterm::event::{poll, read, Event as Term, KeyCode, KeyEventKind};
+        use crossterm::event::{Event as Term, KeyCode, KeyEventKind, poll, read};
         let deadline = Instant::now() + Duration::from_secs(review.timeout_s as u64);
         let mut page = 0usize;
         loop {
@@ -415,7 +426,7 @@ impl Sim {
 
     /// A scan in the terminal: type what the QR code says, then enter; Esc cancels.
     fn interactive_scan(s: &mut Shared) -> Option<String> {
-        use crossterm::event::{read, Event as Term, KeyCode, KeyEventKind};
+        use crossterm::event::{Event as Term, KeyCode, KeyEventKind, read};
         let mut text = String::new();
         loop {
             s.draw_terminal(&format!("scan: type the QR code's text, enter when done, esc cancels: {text}"));
@@ -436,14 +447,17 @@ impl Sim {
     }
 
     fn interactive_menu(s: &mut Shared) -> u32 {
-        use crossterm::event::{read, Event as Term, KeyCode, KeyEventKind};
+        use crossterm::event::{Event as Term, KeyCode, KeyEventKind, read};
         let mut items = s.menu.clone();
         items.push("App info".into());
         items.push("Exit".into());
         let mut at = 0usize;
         loop {
-            let line: Vec<String> =
-                items.iter().enumerate().map(|(i, it)| if i == at { format!("[{it}]") } else { it.clone() }).collect();
+            let line: Vec<String> = items
+                .iter()
+                .enumerate()
+                .map(|(i, it)| if i == at { format!("[{it}]") } else { it.clone() })
+                .collect();
             s.draw_terminal(&format!("menu: {}", line.join("  ")));
             let Ok(Term::Key(k)) = read() else { continue };
             if k.kind != KeyEventKind::Press {
@@ -451,7 +465,9 @@ impl Sim {
             }
             match k.code {
                 KeyCode::Left | KeyCode::Char('a') | KeyCode::Char('h') => at = at.saturating_sub(1),
-                KeyCode::Right | KeyCode::Char('d') | KeyCode::Char('l') => at = (at + 1).min(items.len() - 1),
+                KeyCode::Right | KeyCode::Char('d') | KeyCode::Char('l') => {
+                    at = (at + 1).min(items.len() - 1)
+                }
                 KeyCode::Enter | KeyCode::Char(' ') | KeyCode::Down => return at as u32,
                 KeyCode::Char('q') | KeyCode::Esc => return (items.len() - 1) as u32,
                 _ => {}
@@ -614,10 +630,12 @@ impl Platform for Sim {
     fn show_backup(&mut self, path: &[u32]) -> Result<Answer, i32> {
         let seed = self.test_seed();
         let keys = maki_hd::seed::SeedKeys::from_seed(&seed).map_err(|_| maki_wasm::FAILED)?;
-        let words = maki_hd::seed::answer(&keys, maki_hd::op::MONERO_WORDS, path, &[], &[0; 32]).map_err(|e| match e {
-            maki_hd::Error::Path => maki_wasm::NOT_FOUND,
-            _ => maki_wasm::FAILED,
-        })?;
+        let words = maki_hd::seed::answer(&keys, maki_hd::op::MONERO_WORDS, path, &[], &[0; 32]).map_err(
+            |e| match e {
+                maki_hd::Error::Path => maki_wasm::NOT_FOUND,
+                _ => maki_wasm::FAILED,
+            },
+        )?;
         let words = String::from_utf8(words).map_err(|_| maki_wasm::FAILED)?;
         let ask = Review {
             question: "Show backup words?".into(),
@@ -635,7 +653,11 @@ impl Platform for Sim {
         let pages = words
             .split(' ')
             .enumerate()
-            .map(|(i, w)| maki_wasm::Page { heading: format!("Word {} of {n}", i + 1), value: w.into(), ..Default::default() })
+            .map(|(i, w)| maki_wasm::Page {
+                heading: format!("Word {} of {n}", i + 1),
+                value: w.into(),
+                ..Default::default()
+            })
             .collect();
         let shown = Review {
             question: "Wrote them down?".into(),
@@ -663,7 +685,13 @@ impl Platform for Sim {
             Self::interactive_review(&mut s, review)
         } else {
             for p in &review.pages {
-                eprintln!("  [{}] {} {} {}", p.heading, p.value, p.mono.replace('\n', " "), p.prose.replace('\n', " "));
+                eprintln!(
+                    "  [{}] {} {} {}",
+                    p.heading,
+                    p.value,
+                    p.mono.replace('\n', " "),
+                    p.prose.replace('\n', " ")
+                );
             }
             match s.script.front() {
                 Some(Press::Answer(a)) => {
@@ -674,7 +702,12 @@ impl Platform for Sim {
                 _ => Answer::NoAnswer,
             }
         };
-        let line = format!("review \"{}\" ({}), {} pages: {answer:?}", review.question, review.detail, review.pages.len());
+        let line = format!(
+            "review \"{}\" ({}), {} pages: {answer:?}",
+            review.question,
+            review.detail,
+            review.pages.len()
+        );
         if !s.interactive {
             eprintln!("{line}");
         }

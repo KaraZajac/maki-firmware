@@ -15,15 +15,15 @@
 //! its fields (a reason as a u16 length and the text). `site` is the site asking, as a length byte
 //! and the name:
 //!
-//! - `A` index (u32, little-endian), site: the account's key (32 bytes), once the owner lets the
-//!   site connect;
-//! - `T` index, site, then a transaction's message: its signature (64 bytes), once the owner has
-//!   gone through it;
+//! - `A` index (u32, little-endian), site: the account's key (32 bytes), once the owner lets the site
+//!   connect;
+//! - `T` index, site, then a transaction's message: its signature (64 bytes), once the owner has gone through
+//!   it;
 //! - `M` index, site, then a message: its signature, once the owner has read it.
 
 use maki_app::wallet::{self, Page, Review};
 use maki_app::*;
-use maki_sol::{address, display, Key, Message};
+use maki_sol::{Key, Message, address, display};
 
 const ACCOUNT: u8 = b'A';
 const TRANSACTION: u8 = b'T';
@@ -45,11 +45,13 @@ struct Answer(Vec<u8>);
 
 impl Answer {
     fn new(status: u8) -> Answer { Answer(vec![status]) }
+
     fn text(mut self, s: &str) -> Answer {
         self.0.extend_from_slice(&(s.len() as u16).to_le_bytes());
         self.0.extend_from_slice(s.as_bytes());
         self
     }
+
     fn bytes(mut self, b: &[u8]) -> Answer {
         self.0.extend_from_slice(b);
         self
@@ -58,7 +60,9 @@ impl Answer {
 
 fn refused(why: &str) -> Answer { Answer::new(REFUSED).text(why) }
 
-fn u32_at(b: &[u8], at: usize) -> Option<u32> { b.get(at..at + 4).map(|x| u32::from_le_bytes(x.try_into().unwrap())) }
+fn u32_at(b: &[u8], at: usize) -> Option<u32> {
+    b.get(at..at + 4).map(|x| u32::from_le_bytes(x.try_into().unwrap()))
+}
 
 /// The site at `at` (a length byte, then the name), and where what follows starts.
 fn site_at(b: &[u8], at: usize) -> Option<(&str, usize)> {
@@ -86,7 +90,9 @@ fn page(p: display::Page) -> Page { Page::new(&p.heading).value(&p.value).mono(&
 /// Account `index`'s path: `m/44'/501'/index'/0'`, as Phantom and Solflare have it.
 fn path(index: u32) -> [u32; 4] { [44 | H, 501 | H, index | H, H] }
 
-fn which(index: u32) -> String { if index == 0 { "solana account".into() } else { format!("account #{index}") } }
+fn which(index: u32) -> String {
+    if index == 0 { "solana account".into() } else { format!("account #{index}") }
+}
 
 /// Account `index`'s key, from maki; an answer to send back if maki can't give it.
 fn key(index: u32) -> Result<Key, Answer> {
@@ -132,7 +138,12 @@ fn answer(m: &[u8]) -> Answer {
 fn connect(m: &[u8]) -> Result<Answer, Answer> {
     let (Some(index), Some((site, _))) = (u32_at(m, 1), site_at(m, 5)) else { return Err(Answer::new(BAD)) };
     let key = key(index)?;
-    let asked = Review::new("Connect wallet?").detail(&which(index)).answers("connect", "don't").page(site_page(site)).signatures(0).timeout(60);
+    let asked = Review::new("Connect wallet?")
+        .detail(&which(index))
+        .answers("connect", "don't")
+        .page(site_page(site))
+        .signatures(0)
+        .timeout(60);
     said_yes(asked.show())?;
     Ok(Answer::new(OK).bytes(&key))
 }
@@ -160,7 +171,8 @@ fn message(m: &[u8]) -> Result<Answer, Answer> {
     let bytes = &m[at..];
     let key = key(index)?;
     let pages = display::message_pages(site, &key, bytes).map_err(|e| refused(&e.to_string()))?;
-    let mut asked = Review::new("Sign message?").detail("not a transaction").page(site_page(site)).timeout(120);
+    let mut asked =
+        Review::new("Sign message?").detail("not a transaction").page(site_page(site)).timeout(120);
     for p in pages {
         asked = asked.page(page(p));
     }
@@ -180,7 +192,12 @@ fn draw(index: u32, as_text: bool) {
     if as_text {
         screen::text_centred(2, &which(index), Style::Small, Color::Light);
         for (i, start) in (0..address.len()).step_by(14).enumerate() {
-            screen::text_centred(20 + i as i32 * 15, &address[start..(start + 14).min(address.len())], Style::Mono, Color::Light);
+            screen::text_centred(
+                20 + i as i32 * 15,
+                &address[start..(start + 14).min(address.len())],
+                Style::Mono,
+                Color::Light,
+            );
         }
     } else {
         let side = screen::qr(0, 0, address.as_bytes(), 94).unwrap_or(0);

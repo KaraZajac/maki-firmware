@@ -4,13 +4,12 @@
 //! A bundle is `MAKI`, the format version (1), then sections, each a tag byte, a little-endian
 //! u32 length and that many bytes, in this order and no other:
 //!
-//! - **manifest** (1): fields, each a tag byte, a little-endian u16 length and the value, in
-//!   increasing tag order, each once except permissions, which come in increasing order;
+//! - **manifest** (1): fields, each a tag byte, a little-endian u16 length and the value, in increasing tag
+//!   order, each once except permissions, which come in increasing order;
 //! - **code** (2): a WebAssembly module, or a Xous ELF for a native app;
 //! - **icon** (3), optional: 64x64 pixels in `maki_icons` form, 128 little-endian words;
-//! - **signature** (255), last: the developer's Ed25519 public key (32 bytes) and their
-//!   signature (64 bytes) over `maki bundle v1\0` and the SHA-256 of everything before this
-//!   section.
+//! - **signature** (255), last: the developer's Ed25519 public key (32 bytes) and their signature (64 bytes)
+//!   over `maki bundle v1\0` and the SHA-256 of everything before this section.
 //!
 //! Nothing may follow the signature. Bundles come from anywhere, so `read` checks everything
 //! and turns away what it doesn't understand, including fields a newer maki might add.
@@ -24,10 +23,9 @@ use alloc::string::String;
 use alloc::vec::Vec;
 use core::fmt;
 
+pub use ed25519_dalek::SigningKey as DeveloperKey;
 use ed25519_dalek::{Signature, Signer, SigningKey, VerifyingKey};
 use sha2::{Digest, Sha256};
-
-pub use ed25519_dalek::SigningKey as DeveloperKey;
 
 pub const MAGIC: &[u8; 4] = b"MAKI";
 pub const FORMAT: u8 = 1;
@@ -126,7 +124,9 @@ impl Permission {
         }
     }
 
-    pub fn from_name(name: &str) -> Option<Permission> { Permission::ALL.iter().copied().find(|p| p.name() == name) }
+    pub fn from_name(name: &str) -> Option<Permission> {
+        Permission::ALL.iter().copied().find(|p| p.name() == name)
+    }
 
     /// A few words, as the install screen heads the permission's page.
     pub fn title(self) -> &'static str {
@@ -151,7 +151,9 @@ impl Permission {
             Permission::Keys => {
                 "It gets secrets made from your recovery phrase, for this app only: never your wallets' or passkeys'."
             }
-            Permission::Keyboard => "It can type anything into your computer while it's open, commands included.",
+            Permission::Keyboard => {
+                "It can type anything into your computer while it's open, commands included."
+            }
             Permission::Camera => "It can see what the camera sees while it's open.",
             Permission::Motion => "It can read the accelerometer, which can pick up typing nearby.",
             Permission::Wallet => {
@@ -341,7 +343,8 @@ fn read_checked(bytes: &[u8], verify: bool) -> Result<Bundle<'_>, Error> {
     let signed_len = r.at;
     let sig = read_section(&mut r, SECTION_SIGNATURE)?;
     let developer_signed = r.at;
-    let stamp = if r.b.get(r.at) == Some(&SECTION_STAMP) { Some(read_section(&mut r, SECTION_STAMP)?) } else { None };
+    let stamp =
+        if r.b.get(r.at) == Some(&SECTION_STAMP) { Some(read_section(&mut r, SECTION_STAMP)?) } else { None };
     if sig.len() != SIGNATURE_LEN || !r.done() {
         return Err(Error::Sections);
     }
@@ -358,7 +361,14 @@ fn read_checked(bytes: &[u8], verify: bool) -> Result<Bundle<'_>, Error> {
     if code.is_empty() {
         return Err(Error::Sections);
     }
-    Ok(Bundle { manifest, code, icon, developer, hash: Sha256::digest(&bytes[..developer_signed]).into(), stamp })
+    Ok(Bundle {
+        manifest,
+        code,
+        icon,
+        developer,
+        hash: Sha256::digest(&bytes[..developer_signed]).into(),
+        stamp,
+    })
 }
 
 fn read_section<'a>(r: &mut Reader<'a>, tag: u8) -> Result<&'a [u8], Error> {
@@ -407,7 +417,8 @@ fn manifest(b: &[u8]) -> Result<Manifest, Error> {
     let mut last = 0u8;
     let (mut id, mut name, mut version, mut kind, mut storage, mut memory, mut backup) =
         (None, None, None, None, None, None, None);
-    let (mut label, mut api, mut firmware, mut description) = (String::new(), 0u16, String::new(), String::new());
+    let (mut label, mut api, mut firmware, mut description) =
+        (String::new(), 0u16, String::new(), String::new());
     let mut wallet: Option<Wallet> = None;
     let mut permissions: Vec<(Permission, String)> = Vec::new();
     while !r.done() {
@@ -462,7 +473,8 @@ fn manifest(b: &[u8]) -> Result<Manifest, Error> {
             }
             FIELD_PERMISSION => {
                 let (&which, reason) = v.split_first().ok_or(Error::Manifest("permission"))?;
-                let p = Permission::from_u8(which).ok_or(Error::Manifest("a permission this maki doesn't know"))?;
+                let p = Permission::from_u8(which)
+                    .ok_or(Error::Manifest("a permission this maki doesn't know"))?;
                 if permissions.last().is_some_and(|(q, _)| *q >= p) {
                     return Err(Error::Manifest("permissions out of order or repeated"));
                 }
@@ -618,7 +630,12 @@ pub fn with_stamp(bundle: &[u8], stamp: &[u8]) -> Result<Vec<u8>, Error> {
 }
 
 /// Packs and signs a bundle, then reads it back, so what it returns is what maki accepts.
-pub fn write(m: &Manifest, code: &[u8], icon: Option<&[u32; ICON_WORDS]>, key: &SigningKey) -> Result<Vec<u8>, Error> {
+pub fn write(
+    m: &Manifest,
+    code: &[u8],
+    icon: Option<&[u32; ICON_WORDS]>,
+    key: &SigningKey,
+) -> Result<Vec<u8>, Error> {
     let mut out = Vec::new();
     out.extend_from_slice(MAGIC);
     out.push(FORMAT);

@@ -284,7 +284,10 @@ impl Keys {
     /// Take the screen's role (the launcher, at boot). See `KeysOp::Claim`.
     pub fn claim(&self) -> bool {
         matches!(
-            xous::send_message(self.conn, xous::Message::new_blocking_scalar(KeysOp::Claim.to_usize().unwrap(), 0, 0, 0, 0)),
+            xous::send_message(
+                self.conn,
+                xous::Message::new_blocking_scalar(KeysOp::Claim.to_usize().unwrap(), 0, 0, 0, 0)
+            ),
             Ok(xous::Result::Scalar1(1))
         )
     }
@@ -342,7 +345,10 @@ impl Keys {
     /// Take the FIDO authenticator's role (the vault, at boot). See `KeysOp::ClaimFido`.
     pub fn claim_fido(&self) -> bool {
         matches!(
-            xous::send_message(self.conn, xous::Message::new_blocking_scalar(KeysOp::ClaimFido.to_usize().unwrap(), 0, 0, 0, 0)),
+            xous::send_message(
+                self.conn,
+                xous::Message::new_blocking_scalar(KeysOp::ClaimFido.to_usize().unwrap(), 0, 0, 0, 0)
+            ),
             Ok(xous::Result::Scalar1(1))
         )
     }
@@ -350,7 +356,10 @@ impl Keys {
     /// Take the app host's role (at boot). See `KeysOp::ClaimApps`.
     pub fn claim_apps(&self) -> bool {
         matches!(
-            xous::send_message(self.conn, xous::Message::new_blocking_scalar(KeysOp::ClaimApps.to_usize().unwrap(), 0, 0, 0, 0)),
+            xous::send_message(
+                self.conn,
+                xous::Message::new_blocking_scalar(KeysOp::ClaimApps.to_usize().unwrap(), 0, 0, 0, 0)
+            ),
             Ok(xous::Result::Scalar1(1))
         )
     }
@@ -359,8 +368,13 @@ impl Keys {
     /// label. The error is a `RESULT_` code: `RESULT_NOT_NOW` if maki is locked or this isn't the
     /// app host, `RESULT_NO_PHRASE` before there's a phrase. Overwrite it when done with it.
     pub fn app_secret(&self, id: &str, developer: &[u8; 32], label: &str) -> Result<[u8; 32], u32> {
-        let request =
-            AppSecretRequest { id: id.into(), developer: developer.to_vec(), label: label.into(), secret: Vec::new(), result: RESULT_FAILED };
+        let request = AppSecretRequest {
+            id: id.into(),
+            developer: developer.to_vec(),
+            label: label.into(),
+            secret: Vec::new(),
+            result: RESULT_FAILED,
+        };
         let mut buf = Buffer::into_buf(request).map_err(|_| RESULT_FAILED)?;
         buf.lend_mut(self.conn, KeysOp::AppSecret.to_u32().unwrap()).map_err(|_| RESULT_FAILED)?;
         let answer = buf.to_original::<AppSecretRequest, _>().map_err(|_| RESULT_FAILED)?;
@@ -374,7 +388,9 @@ impl Keys {
     /// CredRandom (32 + 32 + 64 bytes). None unless this is the FIDO process and maki is unlocked
     /// with a phrase. Overwrite them when done with them.
     pub fn fido_keys(&self) -> Option<Vec<u8>> {
-        let Ok(mut buf) = Buffer::into_buf(FidoSecret { result: RESULT_FAILED, keys: Vec::new() }) else { return None };
+        let Ok(mut buf) = Buffer::into_buf(FidoSecret { result: RESULT_FAILED, keys: Vec::new() }) else {
+            return None;
+        };
         buf.lend_mut(self.conn, KeysOp::FidoKeys.to_u32().unwrap()).ok()?;
         let answer = buf.to_original::<FidoSecret, _>().ok()?;
         (answer.result == RESULT_OK && answer.keys.len() == 128).then_some(answer.keys)
@@ -383,7 +399,13 @@ impl Keys {
     /// A wallet app's key at `path`, or a signature over `digest` with it (`WALLET_*`), for the
     /// app host: the answer's bytes, or a `RESULT_*` code.
     pub fn wallet(&self, op: u8, path: &[u32], digest: &[u8]) -> Result<Vec<u8>, u32> {
-        let request = WalletRequest { op, path: path.to_vec(), digest: digest.to_vec(), result: RESULT_FAILED, answer: Vec::new() };
+        let request = WalletRequest {
+            op,
+            path: path.to_vec(),
+            digest: digest.to_vec(),
+            result: RESULT_FAILED,
+            answer: Vec::new(),
+        };
         // a page holds a key or a signature; a Monero transaction to sign, and the signed one
         // coming back (maki-keys sends the request back empty), take more
         let mut buf = if digest.len() > 1024 {
@@ -421,7 +443,13 @@ impl Keys {
     pub fn wait_change(&self, seen: State) -> State {
         match xous::send_message(
             self.conn,
-            xous::Message::new_blocking_scalar(KeysOp::WaitChange.to_usize().unwrap(), seen as usize, 0, 0, 0),
+            xous::Message::new_blocking_scalar(
+                KeysOp::WaitChange.to_usize().unwrap(),
+                seen as usize,
+                0,
+                0,
+                0,
+            ),
         ) {
             Ok(xous::Result::Scalar1(s)) => num_traits::FromPrimitive::from_usize(s).unwrap_or(State::Locked),
             _ => self.status().0,
@@ -433,7 +461,13 @@ impl Keys {
     fn wait(&self, phrase: bool) {
         xous::send_message(
             self.conn,
-            xous::Message::new_blocking_scalar(KeysOp::WaitUnlocked.to_usize().unwrap(), phrase as usize, 0, 0, 0),
+            xous::Message::new_blocking_scalar(
+                KeysOp::WaitUnlocked.to_usize().unwrap(),
+                phrase as usize,
+                0,
+                0,
+                0,
+            ),
         )
         .ok();
     }
@@ -441,7 +475,8 @@ impl Keys {
     fn call(&self, op: KeysOp, pin: &str) -> PinResult { self.call_with(op, pin, "") }
 
     fn call_with(&self, op: KeysOp, pin: &str, new_pin: &str) -> PinResult {
-        let request = PinRequest { pin: pin.into(), new_pin: new_pin.into(), result: RESULT_FAILED, tries_left: 0 };
+        let request =
+            PinRequest { pin: pin.into(), new_pin: new_pin.into(), result: RESULT_FAILED, tries_left: 0 };
         let Ok(mut buf) = Buffer::into_buf(request) else { return PinResult::Failed };
         if buf.lend_mut(self.conn, op.to_u32().unwrap()).is_err() {
             return PinResult::Failed;
@@ -465,12 +500,17 @@ impl Keys {
 
     /// Change the PIN: the current one, checked like an unlock (a wrong one counts toward the
     /// wipe), then the new one. Twice as slow as an unlock.
-    pub fn change_pin(&self, current: &str, new: &str) -> PinResult { self.call_with(KeysOp::ChangePin, current, new) }
+    pub fn change_pin(&self, current: &str, new: &str) -> PinResult {
+        self.call_with(KeysOp::ChangePin, current, new)
+    }
 
     /// Close the secrets until the PIN is entered again. Returns whether they were open.
     pub fn lock(&self) -> bool {
         matches!(
-            xous::send_message(self.conn, xous::Message::new_blocking_scalar(KeysOp::Lock.to_usize().unwrap(), 0, 0, 0, 0)),
+            xous::send_message(
+                self.conn,
+                xous::Message::new_blocking_scalar(KeysOp::Lock.to_usize().unwrap(), 0, 0, 0, 0)
+            ),
             Ok(xous::Result::Scalar1(1))
         )
     }

@@ -4,14 +4,14 @@ use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
 
-use maki_hd::{Keys, Public, Tweak, HARDENED};
+use maki_hd::{HARDENED, Keys, Public, Tweak};
 
-use crate::address::{address, describe, p2tr_script, p2wpkh_script, Network};
+use crate::address::{Network, address, describe, p2tr_script, p2wpkh_script};
 use crate::bip32::xpub;
 use crate::hash::{hash160, sha256, sha256d, tagged};
-use crate::psbt::{self, parse_derivation, parse_tap_derivation, Psbt};
+use crate::psbt::{self, Psbt, parse_derivation, parse_tap_derivation};
 use crate::taproot;
-use crate::tx::{write_varint, Cursor, Tx, TxOut};
+use crate::tx::{Cursor, Tx, TxOut, write_varint};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Error {
@@ -55,9 +55,13 @@ impl core::fmt::Display for Error {
                 "input {} doesn't come with what it spends (the PSBT needs non_witness_utxo, or for taproot witness_utxo)",
                 i
             ),
-            Error::PreviousTxMismatch(i) => write!(f, "input {}'s previous transaction isn't the one it spends", i),
+            Error::PreviousTxMismatch(i) => {
+                write!(f, "input {}'s previous transaction isn't the one it spends", i)
+            }
             Error::Sighash(i) => write!(f, "input {} asks for a signature other than SIGHASH_ALL", i),
-            Error::ScriptPath(i) => write!(f, "input {} spends a taproot script, and maki signs with its key alone", i),
+            Error::ScriptPath(i) => {
+                write!(f, "input {} spends a taproot script, and maki signs with its key alone", i)
+            }
             Error::NegativeFee => write!(f, "the outputs pay more than the inputs hold"),
             Error::Amount => write!(f, "an amount is beyond 21 million bitcoin"),
             Error::Multisig(why) => write!(f, "{}", why),
@@ -69,7 +73,9 @@ impl core::fmt::Display for Error {
 pub const MAX_MONEY: u64 = 21_000_000 * 100_000_000;
 
 pub(crate) fn total(mut amounts: impl Iterator<Item = u64>) -> Result<u64, Error> {
-    amounts.try_fold(0u64, |sum, a| sum.checked_add(a).filter(|&s| a <= MAX_MONEY && s <= MAX_MONEY)).ok_or(Error::Amount)
+    amounts
+        .try_fold(0u64, |sum, a| sum.checked_add(a).filter(|&s| a <= MAX_MONEY && s <= MAX_MONEY))
+        .ok_or(Error::Amount)
 }
 
 /// Which of maki's accounts: native SegWit (BIP84, P2WPKH), or taproot (BIP86, P2TR, spent with
@@ -111,7 +117,9 @@ pub struct Account<'k> {
 
 impl<'k> Account<'k> {
     /// The native SegWit account (BIP84).
-    pub fn segwit(keys: &'k dyn Keys, network: Network) -> Result<Account<'k>, Error> { Account::new(keys, network, Kind::Segwit) }
+    pub fn segwit(keys: &'k dyn Keys, network: Network) -> Result<Account<'k>, Error> {
+        Account::new(keys, network, Kind::Segwit)
+    }
 
     pub fn new(keys: &'k dyn Keys, network: Network, kind: Kind) -> Result<Account<'k>, Error> {
         let path = [kind.purpose() | HARDENED, network.coin_type() | HARDENED, HARDENED];
@@ -120,7 +128,9 @@ impl<'k> Account<'k> {
         Ok(Account { network, kind, master_fingerprint, keys, public })
     }
 
-    fn path(&self) -> [u32; 3] { [self.kind.purpose() | HARDENED, self.network.coin_type() | HARDENED, HARDENED] }
+    fn path(&self) -> [u32; 3] {
+        [self.kind.purpose() | HARDENED, self.network.coin_type() | HARDENED, HARDENED]
+    }
 
     fn key_at(&self, change: bool, index: u32) -> Result<Key, Error> {
         if index >= HARDENED {
@@ -268,7 +278,14 @@ fn is_taproot(pairs: &[psbt::Pair]) -> bool {
     pairs.iter().any(|p| {
         matches!(
             p.key.first(),
-            Some(&IN_TAP_KEY_SIG | &IN_TAP_SCRIPT_SIG | &IN_TAP_LEAF_SCRIPT | &IN_TAP_BIP32_DERIVATION | &IN_TAP_INTERNAL_KEY | &IN_TAP_MERKLE_ROOT)
+            Some(
+                &IN_TAP_KEY_SIG
+                    | &IN_TAP_SCRIPT_SIG
+                    | &IN_TAP_LEAF_SCRIPT
+                    | &IN_TAP_BIP32_DERIVATION
+                    | &IN_TAP_INTERNAL_KEY
+                    | &IN_TAP_MERKLE_ROOT
+            )
         )
     })
 }
@@ -280,9 +297,10 @@ fn spends(psbt: &Psbt, accounts: &[Account]) -> Result<Vec<Spend>, Error> {
         let pairs = &psbt.inputs[i];
         let prev = psbt.input(i, psbt::IN_NON_WITNESS_UTXO);
         let from_prev = match prev {
-            Some(bytes) => {
-                Some(previous_output(bytes, &input.prev_txid, input.prev_vout).ok_or(Error::PreviousTxMismatch(i))?)
-            }
+            Some(bytes) => Some(
+                previous_output(bytes, &input.prev_txid, input.prev_vout)
+                    .ok_or(Error::PreviousTxMismatch(i))?,
+            ),
             None => None,
         };
         let claimed = match psbt.input(i, psbt::IN_WITNESS_UTXO) {
@@ -298,7 +316,10 @@ fn spends(psbt: &Psbt, accounts: &[Account]) -> Result<Vec<Spend>, Error> {
         let spend = if is_taproot(pairs) {
             // the key alone: no scripts to sign for
             if pairs.iter().any(|p| {
-                matches!(p.key.first(), Some(&psbt::IN_TAP_SCRIPT_SIG | &psbt::IN_TAP_LEAF_SCRIPT | &psbt::IN_TAP_MERKLE_ROOT))
+                matches!(
+                    p.key.first(),
+                    Some(&psbt::IN_TAP_SCRIPT_SIG | &psbt::IN_TAP_LEAF_SCRIPT | &psbt::IN_TAP_MERKLE_ROOT)
+                )
             }) {
                 return Err(Error::ScriptPath(i));
             }
@@ -313,7 +334,12 @@ fn spends(psbt: &Psbt, accounts: &[Account]) -> Result<Vec<Spend>, Error> {
             let (account, key) = pairs
                 .iter()
                 .filter(|p| p.key.first() == Some(&psbt::IN_TAP_BIP32_DERIVATION) && p.key.len() == 33)
-                .find_map(|p| accounts.iter().enumerate().find_map(|(n, a)| a.ours_tap(&p.value, &p.key[1..]).map(|(k, _)| (n, k))))
+                .find_map(|p| {
+                    accounts
+                        .iter()
+                        .enumerate()
+                        .find_map(|(n, a)| a.ours_tap(&p.value, &p.key[1..]).map(|(k, _)| (n, k)))
+                })
                 .ok_or(Error::NotOurs(i))?;
             if let Some(internal) = psbt.input(i, psbt::IN_TAP_INTERNAL_KEY) {
                 if internal != taproot::x_only(&key.public) {
@@ -333,7 +359,12 @@ fn spends(psbt: &Psbt, accounts: &[Account]) -> Result<Vec<Spend>, Error> {
             let (account, key) = pairs
                 .iter()
                 .filter(|p| p.key.first() == Some(&psbt::IN_BIP32_DERIVATION) && p.key.len() == 34)
-                .find_map(|p| accounts.iter().enumerate().find_map(|(n, a)| a.ours(&p.value, &p.key[1..]).map(|k| (n, k))))
+                .find_map(|p| {
+                    accounts
+                        .iter()
+                        .enumerate()
+                        .find_map(|(n, a)| a.ours(&p.value, &p.key[1..]).map(|k| (n, k)))
+                })
                 .ok_or(Error::NotOurs(i))?;
             if p2wpkh_script(&key.public) != spent.script_pubkey {
                 return Err(Error::NotOurs(i));
@@ -356,7 +387,8 @@ fn is_change(pairs: &[psbt::Pair], script: &[u8], accounts: &[Account]) -> bool 
                 })
         }
         Some(&psbt::OUT_TAP_BIP32_DERIVATION) if p.key.len() == 33 => accounts.iter().any(|a| {
-            a.ours_tap(&p.value, &p.key[1..]).is_some_and(|(k, chain)| chain == 1 && a.script_of(&k).is_ok_and(|s| s == script))
+            a.ours_tap(&p.value, &p.key[1..])
+                .is_some_and(|(k, chain)| chain == 1 && a.script_of(&k).is_ok_and(|s| s == script))
         }),
         _ => false,
     })
@@ -365,7 +397,9 @@ fn is_change(pairs: &[psbt::Pair], script: &[u8], accounts: &[Account]) -> bool 
 /// What the transaction does, checked: every input this wallet's (of any of `accounts`, which
 /// share a network), amounts from the transactions they spend, change only where it derives from
 /// one of this wallet's change chains.
-pub fn review(psbt: &Psbt, accounts: &[Account]) -> Result<Review, Error> { check(psbt, accounts).map(|(review, _)| review) }
+pub fn review(psbt: &Psbt, accounts: &[Account]) -> Result<Review, Error> {
+    check(psbt, accounts).map(|(review, _)| review)
+}
 
 fn check(psbt: &Psbt, accounts: &[Account]) -> Result<(Review, Vec<Spend>), Error> {
     if psbt.tx.inputs.is_empty() || psbt.tx.outputs.is_empty() {
@@ -397,7 +431,8 @@ fn check(psbt: &Psbt, accounts: &[Account]) -> Result<(Review, Vec<Spend>), Erro
         })
         .sum();
     let weight = psbt.tx.serialize().len() as u64 * 4 + 2 + witnesses;
-    let review = Review { network, wallet: None, outputs, fee, vbytes: weight.div_ceil(4), inputs: spends.len() };
+    let review =
+        Review { network, wallet: None, outputs, fee, vbytes: weight.div_ceil(4), inputs: spends.len() };
     Ok((review, spends))
 }
 
@@ -503,7 +538,9 @@ pub(crate) fn der(sig: &[u8; 64]) -> Vec<u8> {
 
 /// How many signatures `sign` will make: one per input, which the owner is told before saying
 /// yes (maki lets a wallet app make only as many as it said).
-pub fn signatures(psbt: &Psbt, accounts: &[Account]) -> Result<usize, Error> { check(psbt, accounts).map(|(_, s)| s.len()) }
+pub fn signatures(psbt: &Psbt, accounts: &[Account]) -> Result<usize, Error> {
+    check(psbt, accounts).map(|(_, s)| s.len())
+}
 
 /// Sign every input (all are this wallet's; `review` has checked), and return how many it
 /// signed. A native SegWit input gets a partial signature, deterministic (RFC 6979) and low-S; a
@@ -542,7 +579,8 @@ pub fn sign(psbt: &mut Psbt, accounts: &[Account]) -> Result<usize, Error> {
 
 /// BIP380: a descriptor's checksum.
 pub fn descriptor_checksum(desc: &str) -> String {
-    const INPUT: &str = "0123456789()[],'/*abcdefgh@:$%{}IJKLMNOPQRSTUVWXYZ&+-.;<=>?!^_|~ijklmnopqrstuvwxyzABCDEFGH`#\"\\ ";
+    const INPUT: &str =
+        "0123456789()[],'/*abcdefgh@:$%{}IJKLMNOPQRSTUVWXYZ&+-.;<=>?!^_|~ijklmnopqrstuvwxyzABCDEFGH`#\"\\ ";
     const CHECKSUM: &[u8] = b"qpzry9x8gf2tvdw0s3jn54khce6mua7l";
     const GENERATOR: [u64; 5] = [0xf5dee51989, 0xa9fdca3312, 0x1bab10e32d, 0x3706b1677a, 0x644d626ffd];
     fn polymod(chk: u64, value: u64) -> u64 {

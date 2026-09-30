@@ -162,7 +162,9 @@ pub(crate) enum EntryStep {
 const PICK_FROM: usize = 8;
 
 impl WordEntry {
-    pub(crate) fn new(count: usize) -> Self { WordEntry { count, words: Vec::new(), prefix: String::new(), selected: 0 } }
+    pub(crate) fn new(count: usize) -> Self {
+        WordEntry { count, words: Vec::new(), prefix: String::new(), selected: 0 }
+    }
 
     fn options(&self) -> Vec<Opt> {
         let matching: Vec<&'static str> = maki_seed::starting_with(&self.prefix).collect();
@@ -191,7 +193,9 @@ impl WordEntry {
         let (big, action) = match options.get(self.selected) {
             Some(Opt::Letter(c)) => (c.to_string(), "add this letter"),
             Some(Opt::Word(w)) => (w.to_string(), "use this word"),
-            Some(Opt::Back) => (String::from("back"), if self.prefix.is_empty() { "undo last word" } else { "undo letter" }),
+            Some(Opt::Back) => {
+                (String::from("back"), if self.prefix.is_empty() { "undo last word" } else { "undo letter" })
+            }
             None => (String::new(), ""),
         };
         screen.text(top + 40, 24, GlyphStyle::Tall, false, true, &big);

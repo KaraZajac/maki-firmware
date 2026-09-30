@@ -11,10 +11,9 @@
 //!
 //! The link's messages, a byte saying what first:
 //! - `P`: the public key: `0` and its 32 bytes.
-//! - `R`: a command to approve (its layout is `Request`'s). Answered `0` and an Ed25519 signature
-//!   (64 bytes) of `SIGNED` followed by the request (everything after the `R`); or `1` the owner
-//!   said no, `2` no answer, `3` maki is locked, `4` not a request it takes (or too long to show
-//!   whole).
+//! - `R`: a command to approve (its layout is `Request`'s). Answered `0` and an Ed25519 signature (64 bytes)
+//!   of `SIGNED` followed by the request (everything after the `R`); or `1` the owner said no, `2` no answer,
+//!   `3` maki is locked, `4` not a request it takes (or too long to show whole).
 
 #![no_std]
 
@@ -67,8 +66,12 @@ struct Shown {
     place: Buf<1024>,
 }
 
-static SHOWN: Scratch<Shown> =
-    Scratch::new(Shown { command: Buf::new(), called: Buf::new(), environment: Buf::new(), place: Buf::new() });
+static SHOWN: Scratch<Shown> = Scratch::new(Shown {
+    command: Buf::new(),
+    called: Buf::new(),
+    environment: Buf::new(),
+    place: Buf::new(),
+});
 /// The review's text: all of that, and room.
 static REVIEW: Scratch<[u8; 8192]> = Scratch::new([0; 8192]);
 
@@ -171,7 +174,8 @@ impl<'a> Request<'a> {
             env: r.list()?,
         };
         let known = r.0.is_empty() && !request.command.is_empty() && request.argv.count > 0;
-        (known && request.edit_files < request.argv.count && !request.runas_user.is_empty()).then_some(request)
+        (known && request.edit_files < request.argv.count && !request.runas_user.is_empty())
+            .then_some(request)
     }
 
     /// The command's own name: its path's last part.
@@ -383,7 +387,12 @@ impl App {
             review.page(heading, name.as_str(), shown.command.as_str(), shown.called.as_str());
         }
         if !shown.environment.is_empty() {
-            review.page("Given", "", shown.environment.as_str(), "set for it, beyond what every command gets");
+            review.page(
+                "Given",
+                "",
+                shown.environment.as_str(),
+                "set for it, beyond what every command gets",
+            );
         }
         review.page("Asked by", who.as_str(), "", shown.place.as_str());
         match review.timeout(TIMEOUT_S).show() {

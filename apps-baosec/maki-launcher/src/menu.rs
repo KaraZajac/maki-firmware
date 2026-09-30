@@ -17,7 +17,9 @@ pub(crate) struct Menu {
 }
 
 impl Menu {
-    pub(crate) fn new(title: &str, items: Vec<String>) -> Self { Menu { title: title.into(), items, selected: 0 } }
+    pub(crate) fn new(title: &str, items: Vec<String>) -> Self {
+        Menu { title: title.into(), items, selected: 0 }
+    }
 
     pub(crate) fn draw(&self, screen: &Screen, clock: &str, linked: bool) {
         screen.begin();

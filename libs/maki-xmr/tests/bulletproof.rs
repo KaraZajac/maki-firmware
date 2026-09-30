@@ -27,7 +27,10 @@ impl Random {
 }
 
 fn commitments(outputs: &[(u64, Scalar)]) -> Vec<CompressedPoint> {
-    outputs.iter().map(|(amount, mask)| CompressedPoint::from(sign::commit(mask, *amount).compress().to_bytes())).collect()
+    outputs
+        .iter()
+        .map(|(amount, mask)| CompressedPoint::from(sign::commit(mask, *amount).compress().to_bytes()))
+        .collect()
 }
 
 fn verifies(proof: &[u8], outputs: &[(u64, Scalar)]) -> bool {
@@ -55,7 +58,11 @@ fn monero_oxide_verifies_the_range_proofs() {
         let mut nonces = Random(m as u64 + 7);
         let proof = bulletproof::prove(&mut generators, &outputs, &mut || nonces.scalar()).unwrap();
         let bytes = proof.to_bytes();
-        assert_eq!(bytes.len(), 6 * 32 + 2 * (1 + 32 * (6 + m.next_power_of_two().trailing_zeros() as usize)), "{m}");
+        assert_eq!(
+            bytes.len(),
+            6 * 32 + 2 * (1 + 32 * (6 + m.next_power_of_two().trailing_zeros() as usize)),
+            "{m}"
+        );
         assert!(verifies(&bytes, &outputs), "{m} outputs");
 
         // another amount, or a changed proof, doesn't

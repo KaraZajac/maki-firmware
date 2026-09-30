@@ -23,19 +23,17 @@ const MARKS: i32 = R + 5;
 const TURN: i32 = 720;
 /// sin of 0, 0.5, 1, ... 90 degrees, times 4096.
 const SIN: [i32; 181] = [
-    0, 36, 71, 107, 143, 179, 214, 250, 286, 321, 357, 393, 428, 464, 499,
-    535, 570, 605, 641, 676, 711, 746, 782, 817, 852, 887, 921, 956, 991, 1026,
-    1060, 1095, 1129, 1163, 1198, 1232, 1266, 1300, 1334, 1367, 1401, 1434, 1468, 1501, 1534,
-    1567, 1600, 1633, 1666, 1699, 1731, 1763, 1796, 1828, 1860, 1891, 1923, 1954, 1986, 2017,
-    2048, 2079, 2110, 2140, 2171, 2201, 2231, 2261, 2290, 2320, 2349, 2379, 2408, 2436, 2465,
-    2493, 2522, 2550, 2578, 2605, 2633, 2660, 2687, 2714, 2741, 2767, 2793, 2820, 2845, 2871,
-    2896, 2921, 2946, 2971, 2996, 3020, 3044, 3068, 3091, 3115, 3138, 3161, 3183, 3206, 3228,
-    3250, 3271, 3293, 3314, 3335, 3355, 3376, 3396, 3416, 3435, 3455, 3474, 3492, 3511, 3529,
-    3547, 3565, 3582, 3600, 3617, 3633, 3650, 3666, 3681, 3697, 3712, 3727, 3742, 3756, 3770,
-    3784, 3798, 3811, 3824, 3837, 3849, 3861, 3873, 3884, 3896, 3906, 3917, 3927, 3937, 3947,
-    3956, 3966, 3974, 3983, 3991, 3999, 4006, 4014, 4021, 4027, 4034, 4040, 4046, 4051, 4056,
-    4061, 4065, 4070, 4074, 4077, 4080, 4083, 4086, 4088, 4090, 4092, 4094, 4095, 4095, 4096,
-    4096,
+    0, 36, 71, 107, 143, 179, 214, 250, 286, 321, 357, 393, 428, 464, 499, 535, 570, 605, 641, 676, 711, 746,
+    782, 817, 852, 887, 921, 956, 991, 1026, 1060, 1095, 1129, 1163, 1198, 1232, 1266, 1300, 1334, 1367,
+    1401, 1434, 1468, 1501, 1534, 1567, 1600, 1633, 1666, 1699, 1731, 1763, 1796, 1828, 1860, 1891, 1923,
+    1954, 1986, 2017, 2048, 2079, 2110, 2140, 2171, 2201, 2231, 2261, 2290, 2320, 2349, 2379, 2408, 2436,
+    2465, 2493, 2522, 2550, 2578, 2605, 2633, 2660, 2687, 2714, 2741, 2767, 2793, 2820, 2845, 2871, 2896,
+    2921, 2946, 2971, 2996, 3020, 3044, 3068, 3091, 3115, 3138, 3161, 3183, 3206, 3228, 3250, 3271, 3293,
+    3314, 3335, 3355, 3376, 3396, 3416, 3435, 3455, 3474, 3492, 3511, 3529, 3547, 3565, 3582, 3600, 3617,
+    3633, 3650, 3666, 3681, 3697, 3712, 3727, 3742, 3756, 3770, 3784, 3798, 3811, 3824, 3837, 3849, 3861,
+    3873, 3884, 3896, 3906, 3917, 3927, 3937, 3947, 3956, 3966, 3974, 3983, 3991, 3999, 4006, 4014, 4021,
+    4027, 4034, 4040, 4046, 4051, 4056, 4061, 4065, 4070, 4074, 4077, 4080, 4083, 4086, 4088, 4090, 4092,
+    4094, 4095, 4095, 4096, 4096,
 ];
 
 /// A minute, in maki's milliseconds.
@@ -67,10 +65,21 @@ enum State {
     /// Before a focus: the whole circle.
     Ready,
     /// Counting down to `ends` (maki's milliseconds), `total` long.
-    Running { phase: Phase, ends: u64, total: u64 },
-    Paused { phase: Phase, left: u64, total: u64 },
+    Running {
+        phase: Phase,
+        ends: u64,
+        total: u64,
+    },
+    Paused {
+        phase: Phase,
+        left: u64,
+        total: u64,
+    },
     /// Over since `since`: flashing until the centre.
-    Over { phase: Phase, since: u64 },
+    Over {
+        phase: Phase,
+        since: u64,
+    },
 }
 
 struct Timer {
@@ -144,8 +153,7 @@ fn pie(pie: i32, from_top: bool, color: Color) {
         let w = isqrt(R * R + R - dy * dy);
         let mut run: Option<i32> = None;
         for dx in -w..=w + 1 {
-            let inside = dx <= w
-                && if from_top { before(dx, dy, pie) } else { !before(dx, dy, TURN - pie) };
+            let inside = dx <= w && if from_top { before(dx, dy, pie) } else { !before(dx, dy, TURN - pie) };
             match (inside, run) {
                 (true, None) => run = Some(dx),
                 (false, Some(start)) => {
@@ -267,7 +275,9 @@ impl Timer {
     fn centre(&mut self, now: u64) {
         self.state = match self.state {
             State::Ready => return self.start(Phase::Focus, now),
-            State::Running { phase, ends, total } => State::Paused { phase, left: ends.saturating_sub(now), total },
+            State::Running { phase, ends, total } => {
+                State::Paused { phase, left: ends.saturating_sub(now), total }
+            }
             State::Paused { phase, left, total } => State::Running { phase, ends: now + left, total },
             State::Over { phase: Phase::Focus, .. } => return self.start(Phase::Break, now),
             State::Over { phase: Phase::Break, .. } => return self.next_focus(now),
@@ -286,7 +296,8 @@ impl Timer {
         if self.state != State::Ready {
             return;
         }
-        self.focus = if longer { self.focus + FOCUS_STEP } else { self.focus - FOCUS_STEP }.clamp(FOCUS_STEP, FOCUS_MAX);
+        self.focus = if longer { self.focus + FOCUS_STEP } else { self.focus - FOCUS_STEP }
+            .clamp(FOCUS_STEP, FOCUS_MAX);
         let _ = storage::set_u32("focus", self.focus);
     }
 
@@ -299,16 +310,16 @@ impl Timer {
     fn picked(&mut self, item: u32, now: u64) {
         match item {
             // on to what comes next, without counting what was skipped
-            0 => match self.state {
-                State::Ready => {}
-                State::Running { phase: Phase::Focus, .. } | State::Paused { phase: Phase::Focus, .. } => {
-                    self.start(Phase::Break, now)
+            0 => {
+                match self.state {
+                    State::Ready => {}
+                    State::Running { phase: Phase::Focus, .. }
+                    | State::Paused { phase: Phase::Focus, .. } => self.start(Phase::Break, now),
+                    State::Running { phase: Phase::Break, .. }
+                    | State::Paused { phase: Phase::Break, .. } => self.next_focus(now),
+                    State::Over { .. } => self.centre(now),
                 }
-                State::Running { phase: Phase::Break, .. } | State::Paused { phase: Phase::Break, .. } => {
-                    self.next_focus(now)
-                }
-                State::Over { .. } => self.centre(now),
-            },
+            }
             1 => {
                 self.state = State::Ready;
                 self.done = 0;
@@ -363,7 +374,11 @@ impl Timer {
             }
             State::Over { phase, since } => {
                 let t = now - since;
-                let light = if t < FLASHING { (t / FLASH).is_multiple_of(2) } else { (t - FLASHING) % BLINK < BLINK_ON };
+                let light = if t < FLASHING {
+                    (t / FLASH).is_multiple_of(2)
+                } else {
+                    (t - FLASHING) % BLINK < BLINK_ON
+                };
                 Look { pie: if phase == Phase::Focus { 0 } else { TURN }, light, ..plain }
             }
         }

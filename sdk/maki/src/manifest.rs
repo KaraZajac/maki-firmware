@@ -96,8 +96,15 @@ pub fn load(path: &Path) -> Result<Project, String> {
     }
     let wallet = match (t.wallet, permissions.iter().any(|(p, _)| *p == Permission::Wallet)) {
         (None, false) => None,
-        (None, true) => return Err(format!("{}: the wallet permission names its paths: [wallet] paths = [\"m/84'/0'\"]", path.display())),
-        (Some(_), false) => return Err(format!("{}: [wallet] needs the wallet permission too", path.display())),
+        (None, true) => {
+            return Err(format!(
+                "{}: the wallet permission names its paths: [wallet] paths = [\"m/84'/0'\"]",
+                path.display()
+            ));
+        }
+        (Some(_), false) => {
+            return Err(format!("{}: [wallet] needs the wallet permission too", path.display()));
+        }
         (Some(w), true) => Some(wallet(path, w)?),
     };
     let manifest = Manifest {
@@ -108,7 +115,11 @@ pub fn load(path: &Path) -> Result<Project, String> {
         kind,
         api: if kind == Kind::Wasm { t.api.unwrap_or(maki_wasm::API_VERSION) } else { 0 },
         // a native app is built for the firmware whose app service the SDK speaks
-        firmware: if kind == Kind::Native && t.firmware.is_empty() { maki_native::service::FIRMWARE.into() } else { t.firmware },
+        firmware: if kind == Kind::Native && t.firmware.is_empty() {
+            maki_native::service::FIRMWARE.into()
+        } else {
+            t.firmware
+        },
         permissions,
         storage_kib: t.storage,
         memory_kib: t.memory,
@@ -125,14 +136,24 @@ fn wallet(path: &Path, w: WalletToml) -> Result<Wallet, String> {
     let curve = match w.curve.as_str() {
         "secp256k1" => Curve::Secp256k1,
         "ed25519" => Curve::Ed25519,
-        other => return Err(format!("{}: [wallet] curve \"{other}\": maki's wallets are secp256k1 or ed25519", path.display())),
+        other => {
+            return Err(format!(
+                "{}: [wallet] curve \"{other}\": maki's wallets are secp256k1 or ed25519",
+                path.display()
+            ));
+        }
     };
     if w.paths.is_empty() || w.paths.len() > maki_bundle::MAX_WALLET_PATHS {
-        return Err(format!("{}: [wallet] names 1 to {} paths", path.display(), maki_bundle::MAX_WALLET_PATHS));
+        return Err(format!(
+            "{}: [wallet] names 1 to {} paths",
+            path.display(),
+            maki_bundle::MAX_WALLET_PATHS
+        ));
     }
     let mut paths: Vec<Vec<u32>> = Vec::new();
     for text in &w.paths {
-        let p = maki_hd::parse_path(text).ok_or_else(|| format!("{}: [wallet] \"{text}\" isn't a path (m/84'/0', say)", path.display()))?;
+        let p = maki_hd::parse_path(text)
+            .ok_or_else(|| format!("{}: [wallet] \"{text}\" isn't a path (m/84'/0', say)", path.display()))?;
         if !maki_hd::prefix_ok(&p) {
             return Err(format!(
                 "{}: [wallet] \"{text}\": a wallet's path is a purpose and a coin type at least, both hardened (m/84'/0'), so no app gets every coin's keys",

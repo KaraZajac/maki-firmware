@@ -1284,12 +1284,21 @@ fn confined_process_keeps_only_what_it_has() {
             assert_eq!(xous_kernel::try_connect(kept), Ok(cid));
             assert_eq!(xous_kernel::try_connect(other), Err(Error::AccessDenied));
             assert_eq!(xous_kernel::create_server(), Err(Error::AccessDenied));
-            assert_eq!(xous_kernel::create_server_with_address(b"ticktimer-server"), Err(Error::AccessDenied));
+            assert_eq!(
+                xous_kernel::create_server_with_address(b"ticktimer-server"),
+                Err(Error::AccessDenied)
+            );
             // (Shutdown is refused the same way, but in hosted mode the harness shuts the kernel
             // down on any Shutdown call, whatever the kernel answers)
-            assert_eq!(rsyscall(SysCall::ClaimInterrupt(3, MemoryAddress::new(0x1000).unwrap(), None)), Err(Error::AccessDenied));
+            assert_eq!(
+                rsyscall(SysCall::ClaimInterrupt(3, MemoryAddress::new(0x1000).unwrap(), None)),
+                Err(Error::AccessDenied)
+            );
             assert_eq!(rsyscall(SysCall::FreeInterrupt(3)), Err(Error::AccessDenied));
-            assert_eq!(rsyscall(SysCall::AdjustProcessLimit(1, 512 * 1024, 16 << 20)), Err(Error::AccessDenied));
+            assert_eq!(
+                rsyscall(SysCall::AdjustProcessLimit(1, 512 * 1024, 16 << 20)),
+                Err(Error::AccessDenied)
+            );
             assert_eq!(rsyscall(SysCall::CreateServerId), Err(Error::AccessDenied));
 
             // memory: none of it physical, none of it code, within the budget
@@ -1305,7 +1314,9 @@ fn confined_process_keeps_only_what_it_has() {
             assert_eq!(map(Some(0x4000_0000), 1, rw), Err(Error::AccessDenied));
             assert_eq!(map(None, 1, rw | MemoryFlags::X), Err(Error::AccessDenied));
             assert_eq!(map(None, 1, rw | MemoryFlags::DEV), Err(Error::AccessDenied));
-            let Ok(xous_kernel::Result::MemoryRange(two)) = map(None, 2, rw) else { panic!("two pages should map") };
+            let Ok(xous_kernel::Result::MemoryRange(two)) = map(None, 2, rw) else {
+                panic!("two pages should map")
+            };
             assert_eq!(map(None, 3, rw), Err(Error::OutOfMemory));
             // asking again can't raise the budget
             xous_kernel::confine_self(100).unwrap();
@@ -1337,9 +1348,8 @@ fn a_process_ends_only_what_it_created() {
     let (app_pid_send, app_pid_recv) = unbounded();
     let (tried_send, tried_recv) = unbounded::<()>();
 
-    let loader = xous_kernel::create_process_as_thread(xous_kernel::ProcessArgsAsThread::new(
-        "loader",
-        move || {
+    let loader =
+        xous_kernel::create_process_as_thread(xous_kernel::ProcessArgsAsThread::new("loader", move || {
             // (in hosted mode, a process creating another names the key its child connects with)
             xous_kernel::arch::set_process_key(&[0x5a; 16]);
             let (pid_send, pid_recv) = unbounded();
@@ -1360,28 +1370,28 @@ fn a_process_ends_only_what_it_created() {
             let app = pid_recv.recv().unwrap();
             app_pid_send.send(app).unwrap();
             tried_recv.recv().unwrap();
-            assert_eq!(xous_kernel::terminate_child(xous_kernel::current_pid().unwrap()), Err(Error::ProcessNotChild));
+            assert_eq!(
+                xous_kernel::terminate_child(xous_kernel::current_pid().unwrap()),
+                Err(Error::ProcessNotChild)
+            );
             assert_eq!(xous_kernel::child_running(app), Ok(true));
             assert_eq!(xous_kernel::child_running(xous_kernel::current_pid().unwrap()), Ok(false));
             xous_kernel::terminate_child(app).unwrap();
             // and it's gone
             assert!(xous_kernel::terminate_child(app).is_err());
             assert_eq!(xous_kernel::child_running(app), Ok(false));
-        },
-    ))
-    .unwrap();
+        }))
+        .unwrap();
 
-    let stranger = xous_kernel::create_process_as_thread(xous_kernel::ProcessArgsAsThread::new(
-        "stranger",
-        move || {
+    let stranger =
+        xous_kernel::create_process_as_thread(xous_kernel::ProcessArgsAsThread::new("stranger", move || {
             let app = app_pid_recv.recv().unwrap();
             assert_eq!(xous_kernel::terminate_child(app), Err(Error::ProcessNotChild));
             // running, but not its child
             assert_eq!(xous_kernel::child_running(app), Ok(false));
             tried_send.send(()).unwrap();
-        },
-    ))
-    .unwrap();
+        }))
+        .unwrap();
 
     crate::wait_process_as_thread(stranger).expect("the stranger");
     crate::wait_process_as_thread(loader).expect("the loader");

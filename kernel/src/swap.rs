@@ -424,7 +424,13 @@ impl Swap {
     /// The pages free, and all of them, as `get_free_mem` answers, without printing.
     pub fn get_free_pages_quietly(&self) -> SysCallResult {
         let ram_size = crate::mem::MemoryManager::with(|mm| mm.memory_size());
-        Ok(xous_kernel::Result::Scalar5(ram_size / PAGE_SIZE - self.used_pages, ram_size / PAGE_SIZE, 0, 0, 0))
+        Ok(xous_kernel::Result::Scalar5(
+            ram_size / PAGE_SIZE - self.used_pages,
+            ram_size / PAGE_SIZE,
+            0,
+            0,
+            0,
+        ))
     }
 
     pub fn get_free_mem(&self) -> SysCallResult {

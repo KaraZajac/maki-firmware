@@ -8,19 +8,25 @@ use std::str::FromStr;
 
 use bitcoin::bip32::{DerivationPath, Fingerprint, Xpriv, Xpub as BitcoinXpub};
 use bitcoin::secp256k1::Secp256k1;
-use bitcoin::{absolute, transaction, Amount, NetworkKind, OutPoint, ScriptBuf, Sequence, Transaction, TxIn, TxOut, Witness};
+use bitcoin::{
+    Amount, NetworkKind, OutPoint, ScriptBuf, Sequence, Transaction, TxIn, TxOut, Witness, absolute,
+    transaction,
+};
+use maki_btc::Network;
 use maki_btc::bip32::Xpub;
-use maki_btc::multisig::{cosigner, Multisig, Signer};
+use maki_btc::multisig::{Multisig, Signer, cosigner};
 use maki_btc::psbt::Psbt;
 use maki_btc::wallet::Error;
-use maki_btc::Network;
-use maki_hd::seed::SeedKeys;
 use maki_hd::Keys;
+use maki_hd::seed::SeedKeys;
 use miniscript::psbt::PsbtExt;
 use miniscript::{Descriptor, DescriptorPublicKey};
 
 fn maki() -> SeedKeys {
-    let words: Vec<&str> = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about".split(' ').collect();
+    let words: Vec<&str> =
+        "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about"
+            .split(' ')
+            .collect();
     SeedKeys::from_seed(&maki_seed::seed(&words, "")).unwrap()
 }
 
@@ -77,15 +83,24 @@ fn xpubs_derive_as_bitcoin_does() {
 fn a_wallet_reads_the_same_from_a_descriptor_or_coldcards_file_with_miniscripts_addresses() {
     let (desc, _) = two_of_three();
     let wallet = Multisig::parse(&desc, "Family vault").unwrap();
-    assert_eq!((wallet.threshold, wallet.keys.len(), wallet.sorted, wallet.network), (2, 3, true, Network::Testnet));
+    assert_eq!(
+        (wallet.threshold, wallet.keys.len(), wallet.sorted, wallet.network),
+        (2, 3, true, Network::Testnet)
+    );
     assert_eq!(wallet.name, "Family vault");
     // with its checksum, and as Coldcard's file has it
     let theirs = Descriptor::<DescriptorPublicKey>::from_str(&desc).unwrap();
     assert_eq!(Multisig::parse(&theirs.to_string(), "Family vault").unwrap(), wallet);
     let file = {
-        let mut f = String::from("# Coldcard Multisig setup file (created by Sparrow)\n#\nName: Family vault\nPolicy: 2 of 3\nDerivation: m/48'/1'/0'/2'\nFormat: P2WSH\n\n");
+        let mut f = String::from(
+            "# Coldcard Multisig setup file (created by Sparrow)\n#\nName: Family vault\nPolicy: 2 of 3\nDerivation: m/48'/1'/0'/2'\nFormat: P2WSH\n\n",
+        );
         for k in &wallet.keys {
-            f.push_str(&format!("{}: {}\n", k.fingerprint.iter().map(|b| format!("{b:02X}")).collect::<String>(), k.xpub.encode([0x02, 0x57, 0x54, 0x83])));
+            f.push_str(&format!(
+                "{}: {}\n",
+                k.fingerprint.iter().map(|b| format!("{b:02X}")).collect::<String>(),
+                k.xpub.encode([0x02, 0x57, 0x54, 0x83])
+            ));
         }
         f
     };
@@ -108,11 +123,12 @@ fn a_wallet_reads_the_same_from_a_descriptor_or_coldcards_file_with_miniscripts_
     let unsorted = desc.replace("sortedmulti", "multi");
     let multi = Multisig::parse(&unsorted, "").unwrap();
     assert!(!multi.sorted);
-    let want = Descriptor::<DescriptorPublicKey>::from_str(&unsorted).unwrap().into_single_descriptors().unwrap()[0]
-        .at_derivation_index(3)
-        .unwrap()
-        .address(bitcoin::Network::Testnet)
-        .unwrap();
+    let want =
+        Descriptor::<DescriptorPublicKey>::from_str(&unsorted).unwrap().into_single_descriptors().unwrap()[0]
+            .at_derivation_index(3)
+            .unwrap()
+            .address(bitcoin::Network::Testnet)
+            .unwrap();
     assert_eq!(multi.address(&multi.chains().unwrap(), false, 3).unwrap(), want.to_string());
     assert_eq!(multi.name, "2 of 3 multisig");
 }
@@ -125,7 +141,10 @@ fn a_wallet_maki_wont_take() {
     let (_, e) = other(0x55);
     let not_makis = format!("wsh(sortedmulti(2,{d}/<0;1>/*,{e}/<0;1>/*))");
     // maki's fingerprint, with someone else's key
-    let impostor = format!("wsh(sortedmulti(2,[73c5da0a/48h/1h/0h/2h]{}/<0;1>/*,{e}/<0;1>/*))", d.split_once(']').unwrap().1);
+    let impostor = format!(
+        "wsh(sortedmulti(2,[73c5da0a/48h/1h/0h/2h]{}/<0;1>/*,{e}/<0;1>/*))",
+        d.split_once(']').unwrap().1
+    );
     let wrapped = format!("sh({})", desc);
     let nested_path = desc.replace("48h/1h/0h/2h", "48h/1h/0h/1h");
     let twice = format!("wsh(sortedmulti(2,{m}/<0;1>/*,{m}/<0;1>/*))", m = makis());
@@ -157,23 +176,35 @@ struct Spend {
 }
 
 fn spend(wallet: &Multisig, desc: &str) -> Spend {
-    let theirs = Descriptor::<DescriptorPublicKey>::from_str(desc).unwrap().into_single_descriptors().unwrap();
+    let theirs =
+        Descriptor::<DescriptorPublicKey>::from_str(desc).unwrap().into_single_descriptors().unwrap();
     let at = |change: usize, index: u32| theirs[change].at_derivation_index(index).unwrap();
     let funding = Transaction {
         version: transaction::Version::TWO,
         lock_time: absolute::LockTime::ZERO,
-        input: vec![TxIn { previous_output: OutPoint::null(), script_sig: ScriptBuf::new(), sequence: Sequence::MAX, witness: Witness::new() }],
+        input: vec![TxIn {
+            previous_output: OutPoint::null(),
+            script_sig: ScriptBuf::new(),
+            sequence: Sequence::MAX,
+            witness: Witness::new(),
+        }],
         output: vec![
             TxOut { value: Amount::from_sat(60_000), script_pubkey: at(0, 0).script_pubkey() },
             TxOut { value: Amount::from_sat(40_000), script_pubkey: at(0, 1).script_pubkey() },
         ],
     };
-    let payee = bitcoin::Address::from_str("tb1qw508d6qejxtdg4y5r3zarvary0c5xw7kxpjzsx").unwrap().assume_checked();
+    let payee =
+        bitcoin::Address::from_str("tb1qw508d6qejxtdg4y5r3zarvary0c5xw7kxpjzsx").unwrap().assume_checked();
     let tx = Transaction {
         version: transaction::Version::TWO,
         lock_time: absolute::LockTime::ZERO,
         input: (0..2)
-            .map(|v| TxIn { previous_output: OutPoint::new(funding.compute_txid(), v), script_sig: ScriptBuf::new(), sequence: Sequence::MAX, witness: Witness::new() })
+            .map(|v| TxIn {
+                previous_output: OutPoint::new(funding.compute_txid(), v),
+                script_sig: ScriptBuf::new(),
+                sequence: Sequence::MAX,
+                witness: Witness::new(),
+            })
             .collect(),
         output: vec![
             TxOut { value: Amount::from_sat(70_000), script_pubkey: payee.script_pubkey() },
@@ -188,7 +219,10 @@ fn spend(wallet: &Multisig, desc: &str) -> Spend {
             .map(|k| {
                 let public = k.xpub.child(change).unwrap().child(index).unwrap();
                 let path = DerivationPath::from_str(&format!("m/48'/1'/0'/2'/{change}/{index}")).unwrap();
-                (bitcoin::secp256k1::PublicKey::from_slice(&public.key).unwrap(), (Fingerprint::from(k.fingerprint), path))
+                (
+                    bitcoin::secp256k1::PublicKey::from_slice(&public.key).unwrap(),
+                    (Fingerprint::from(k.fingerprint), path),
+                )
             })
             .collect()
     };
@@ -212,16 +246,25 @@ fn maki_signs_what_spends_from_the_wallet_and_with_another_key_it_spends() {
     let wallet = Multisig::parse(&desc, "Family vault").unwrap();
     let keys = maki();
     let signer = Signer::new(wallet.clone(), &keys).unwrap();
-    assert_eq!(signer.ours, wallet.keys.iter().position(|k| k.fingerprint == keys.fingerprint().unwrap()).unwrap());
+    assert_eq!(
+        signer.ours,
+        wallet.keys.iter().position(|k| k.fingerprint == keys.fingerprint().unwrap()).unwrap()
+    );
     let Spend { psbt, funding, payee } = spend(&wallet, &desc);
     let mut mine = ours(&psbt);
     let review = signer.review(&mine).unwrap();
     assert_eq!(review.wallet.as_deref(), Some("Family vault (2 of 3)"));
     assert_eq!((review.fee, review.inputs), (1_000, 2));
-    assert_eq!((review.outputs[0].address.as_str(), review.outputs[0].amount, review.outputs[0].change), (payee.to_string().as_str(), 70_000, false));
+    assert_eq!(
+        (review.outputs[0].address.as_str(), review.outputs[0].amount, review.outputs[0].change),
+        (payee.to_string().as_str(), 70_000, false)
+    );
     assert!(review.outputs[1].change);
     let pages = review.pages();
-    assert_eq!((pages[1].heading.as_str(), pages[1].prose.as_str()), ("Change", "back to Family vault (2 of 3)"));
+    assert_eq!(
+        (pages[1].heading.as_str(), pages[1].prose.as_str()),
+        ("Change", "back to Family vault (2 of 3)")
+    );
     // two inputs of 2-of-3 P2WSH, a P2WPKH payment and P2WSH change: about 290 vbytes signed
     assert!((280..300).contains(&review.vbytes), "{}", review.vbytes);
     assert_eq!(signer.sign(&mut mine).unwrap(), 2);
@@ -234,7 +277,8 @@ fn maki_signs_what_spends_from_the_wallet_and_with_another_key_it_spends() {
     signed.sign(&second, &secp).unwrap();
     signed.finalize_mut(&secp).unwrap();
     let tx = signed.extract_tx().unwrap();
-    tx.verify(|op| (op.txid == funding.compute_txid()).then(|| funding.output[op.vout as usize].clone())).unwrap();
+    tx.verify(|op| (op.txid == funding.compute_txid()).then(|| funding.output[op.vout as usize].clone()))
+        .unwrap();
 }
 
 #[test]
@@ -256,7 +300,9 @@ fn maki_signs_nothing_a_computer_passes_off_as_the_wallets() {
     let theirs_too = format!("wsh(sortedmulti(2,{}/<0;1>/*,{d}/<0;1>/*,{e}/<0;1>/*))", makis());
     let other_wallet = Multisig::parse(&theirs_too, "").unwrap();
     let Spend { mut psbt, .. } = spend(&wallet, &desc);
-    let stranger = Descriptor::<DescriptorPublicKey>::from_str(&theirs_too).unwrap().into_single_descriptors().unwrap()[1]
+    let stranger =
+        Descriptor::<DescriptorPublicKey>::from_str(&theirs_too).unwrap().into_single_descriptors().unwrap()
+            [1]
         .at_derivation_index(0)
         .unwrap();
     psbt.unsigned_tx.output[1].script_pubkey = stranger.script_pubkey();
@@ -266,7 +312,10 @@ fn maki_signs_nothing_a_computer_passes_off_as_the_wallets() {
         .iter()
         .map(|k| {
             let public = k.xpub.child(1).unwrap().child(0).unwrap();
-            (bitcoin::secp256k1::PublicKey::from_slice(&public.key).unwrap(), (Fingerprint::from(k.fingerprint), DerivationPath::from_str("m/48'/1'/0'/2'/1/0").unwrap()))
+            (
+                bitcoin::secp256k1::PublicKey::from_slice(&public.key).unwrap(),
+                (Fingerprint::from(k.fingerprint), DerivationPath::from_str("m/48'/1'/0'/2'/1/0").unwrap()),
+            )
         })
         .collect();
     let review = signer.review(&ours(&psbt)).unwrap();
@@ -290,8 +339,15 @@ fn maki_signs_nothing_a_computer_passes_off_as_the_wallets() {
     assert_eq!(signer.review(&ours(&swapped)).unwrap_err(), Error::NotOurs(0));
     // maki's key named at a place in the wallet the input isn't
     let mut elsewhere = psbt.clone();
-    let (k, (fp, _)) = elsewhere.inputs[0].bip32_derivation.iter().find(|(_, (fp, _))| fp.to_bytes() == keys.fingerprint().unwrap()).map(|(k, v)| (*k, v.clone())).unwrap();
-    elsewhere.inputs[0].bip32_derivation.insert(k, (fp, DerivationPath::from_str("m/48'/1'/0'/2'/0/5").unwrap()));
+    let (k, (fp, _)) = elsewhere.inputs[0]
+        .bip32_derivation
+        .iter()
+        .find(|(_, (fp, _))| fp.to_bytes() == keys.fingerprint().unwrap())
+        .map(|(k, v)| (*k, v.clone()))
+        .unwrap();
+    elsewhere.inputs[0]
+        .bip32_derivation
+        .insert(k, (fp, DerivationPath::from_str("m/48'/1'/0'/2'/0/5").unwrap()));
     assert_eq!(signer.review(&ours(&elsewhere)).unwrap_err(), Error::NotOurs(0));
 }
 
@@ -304,9 +360,15 @@ const FIXTURES: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures");
 fn fixtures() -> [(String, Vec<u8>); 4] {
     let (desc, _) = two_of_three();
     let wallet = Multisig::parse(&desc, "Family vault").unwrap();
-    let mut file = String::from("# Coldcard Multisig setup file (created by Sparrow)\n#\nName: Family vault\nPolicy: 2 of 3\nDerivation: m/48'/1'/0'/2'\nFormat: P2WSH\n\n");
+    let mut file = String::from(
+        "# Coldcard Multisig setup file (created by Sparrow)\n#\nName: Family vault\nPolicy: 2 of 3\nDerivation: m/48'/1'/0'/2'\nFormat: P2WSH\n\n",
+    );
     for k in &wallet.keys {
-        file.push_str(&format!("{}: {}\n", k.fingerprint.iter().map(|b| format!("{b:02X}")).collect::<String>(), k.xpub.encode([0x02, 0x57, 0x54, 0x83])));
+        file.push_str(&format!(
+            "{}: {}\n",
+            k.fingerprint.iter().map(|b| format!("{b:02X}")).collect::<String>(),
+            k.xpub.encode([0x02, 0x57, 0x54, 0x83])
+        ));
     }
     let unsigned = spend(&wallet, &desc).psbt.serialize();
     let keys = maki();

@@ -1,5 +1,5 @@
-// Parts ported from monero-oxide (monero-bulletproofs, monero-bulletproofs-generators), under the MIT License:
-//   Copyright (c) 2022-2025 Luke Parker
+// Parts ported from monero-oxide (monero-bulletproofs, monero-bulletproofs-generators), under the MIT
+// License:   Copyright (c) 2022-2025 Luke Parker
 //   Copyright (c) 2025-2026 monero-oxide Developers
 // The license's text is LICENSE-monero-oxide, beside this crate's Cargo.toml.
 
@@ -18,7 +18,7 @@ use curve25519_dalek::traits::VartimeMultiscalarMul;
 use zeroize::Zeroize;
 
 use crate::keccak;
-use crate::sign::{commit, hash_to_point, hash_to_scalar, point, varint, G, H};
+use crate::sign::{G, H, commit, hash_to_point, hash_to_scalar, point, varint};
 use crate::tx::RangeProof;
 
 /// The most outputs one proof covers (and so a transaction has).
@@ -61,7 +61,9 @@ fn amount_generator() -> EdwardsPoint { point(&H).expect("H is a point") }
 
 /// What the transcript starts with: Monero's hash onto the curve of Keccak-256 of
 /// "bulletproof_plus_transcript".
-fn transcript_start() -> [u8; 32] { hash_to_point(&keccak(b"bulletproof_plus_transcript")).compress().to_bytes() }
+fn transcript_start() -> [u8; 32] {
+    hash_to_point(&keccak(b"bulletproof_plus_transcript")).compress().to_bytes()
+}
 
 fn transcript(parts: &[&[u8; 32]]) -> Scalar {
     let mut data = Vec::with_capacity(32 * parts.len());
@@ -97,7 +99,11 @@ fn msm(scalars: Vec<Scalar>, points: &[EdwardsPoint]) -> EdwardsPoint {
 /// A proof that each of `outputs`' amounts, committed to with its mask (amount·H + mask·G), is
 /// less than 2^64. `nonce` gives uniform scalars, secret ones; `generators` are kept for the next.
 /// None for no outputs or more than MAX_OUTPUTS.
-pub fn prove(generators: &mut Generators, outputs: &[(u64, Scalar)], nonce: &mut dyn FnMut() -> Scalar) -> Option<RangeProof> {
+pub fn prove(
+    generators: &mut Generators,
+    outputs: &[(u64, Scalar)],
+    nonce: &mut dyn FnMut() -> Scalar,
+) -> Option<RangeProof> {
     let m = outputs.len();
     if m == 0 || m > MAX_OUTPUTS {
         return None;
@@ -168,9 +174,19 @@ pub fn prove(generators: &mut Generators, outputs: &[(u64, Scalar)], nonce: &mut
         alpha += z_pow[j] * mask * y_mn_plus_one;
     }
 
-    let wip = weighted_inner_product_proof(g_bold, h_bold, g, h, y_pow, transcript_now, a_l, a_r, alpha, nonce);
+    let wip =
+        weighted_inner_product_proof(g_bold, h_bold, g, h, y_pow, transcript_now, a_l, a_r, alpha, nonce);
     alpha.zeroize();
-    Some(RangeProof { A, A1: wip.0, B: wip.1, r1: wip.2.to_bytes(), s1: wip.3.to_bytes(), d1: wip.4.to_bytes(), L: wip.5, R: wip.6 })
+    Some(RangeProof {
+        A,
+        A1: wip.0,
+        B: wip.1,
+        r1: wip.2.to_bytes(),
+        s1: wip.3.to_bytes(),
+        d1: wip.4.to_bytes(),
+        L: wip.5,
+        R: wip.6,
+    })
 }
 
 type Wip = ([u8; 32], [u8; 32], Scalar, Scalar, Scalar, Vec<[u8; 32]>, Vec<[u8; 32]>);
@@ -237,10 +253,16 @@ fn weighted_inner_product_proof(
 
         // the next round's generators (public: variable time is fine)
         let e_y_inv = e * y_inv_n_hat;
-        let new_g: Vec<EdwardsPoint> =
-            g1.iter().zip(g2).map(|(p1, p2)| EdwardsPoint::vartime_multiscalar_mul([inv_e, e_y_inv], [p1, p2])).collect();
-        let new_h: Vec<EdwardsPoint> =
-            h1.iter().zip(h2).map(|(p1, p2)| EdwardsPoint::vartime_multiscalar_mul([e, inv_e], [p1, p2])).collect();
+        let new_g: Vec<EdwardsPoint> = g1
+            .iter()
+            .zip(g2)
+            .map(|(p1, p2)| EdwardsPoint::vartime_multiscalar_mul([inv_e, e_y_inv], [p1, p2]))
+            .collect();
+        let new_h: Vec<EdwardsPoint> = h1
+            .iter()
+            .zip(h2)
+            .map(|(p1, p2)| EdwardsPoint::vartime_multiscalar_mul([e, inv_e], [p1, p2]))
+            .collect();
 
         let y_n_hat_inv_e = y_n_hat * inv_e;
         let new_a: Vec<Scalar> = a1.iter().zip(a2).map(|(x1, x2)| x1 * e + x2 * y_n_hat_inv_e).collect();

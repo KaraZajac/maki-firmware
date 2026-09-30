@@ -3,11 +3,11 @@
 //! Random bytes and mutations of real PSBTs (flipped bits, cut short, bytes inserted and
 //! dropped), deterministically.
 
-use std::panic::{catch_unwind, AssertUnwindSafe};
+use std::panic::{AssertUnwindSafe, catch_unwind};
 
 use maki_btc::psbt::Psbt;
 use maki_btc::tx::Tx;
-use maki_btc::{wallet, Account, Network};
+use maki_btc::{Account, Network, wallet};
 use maki_hd::seed::SeedKeys;
 
 struct Rng(u64);
@@ -18,6 +18,7 @@ impl Rng {
         self.0 ^= self.0 << 17;
         self.0
     }
+
     fn below(&mut self, n: usize) -> usize { (self.next() % n.max(1) as u64) as usize }
 }
 
@@ -57,7 +58,9 @@ const FIXTURES: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures");
 #[test]
 fn nothing_the_computer_sends_panics_the_wallet() {
     let words: Vec<&str> =
-        "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about".split(' ').collect();
+        "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about"
+            .split(' ')
+            .collect();
     let account = Account::segwit(keys(&maki_seed::seed(&words, "")), Network::Bitcoin).unwrap();
     let unsigned = std::fs::read(format!("{FIXTURES}/abandon-unsigned.psbt")).unwrap();
     let signed = std::fs::read(format!("{FIXTURES}/abandon-signed.psbt")).unwrap();

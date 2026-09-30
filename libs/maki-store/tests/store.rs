@@ -30,7 +30,11 @@ fn a_root_needs_its_threshold_of_its_own_keys() {
     assert_eq!(SignedRoot::sign(root(1), &[&key(1), &key(1)]).trust_first(), Err(Error::Signature));
     assert_eq!(SignedRoot::sign(root(1), &[&key(1), &key(9)]).trust_first(), Err(Error::Signature));
     // a threshold nobody can meet, or none at all, or a key listed twice
-    for bad in [Root { threshold: 4, ..root(1) }, Root { threshold: 0, ..root(1) }, Root { keys: vec![public(&key(1)); 3], ..root(1) }] {
+    for bad in [
+        Root { threshold: 4, ..root(1) },
+        Root { threshold: 0, ..root(1) },
+        Root { keys: vec![public(&key(1)); 3], ..root(1) },
+    ] {
         assert_eq!(SignedRoot::sign(bad, &[&key(1), &key(2), &key(3)]).trust_first(), Err(Error::Malformed));
     }
     // through bytes and back
@@ -41,7 +45,12 @@ fn a_root_needs_its_threshold_of_its_own_keys() {
 fn a_new_root_needs_the_old_keys_and_its_own() {
     let current = root(1);
     // new root keys 4, 5 and 6, and a new catalogue key
-    let next = Root { version: 2, keys: vec![public(&key(4)), public(&key(5)), public(&key(6))], catalogue: public(&key(11)), ..root(2) };
+    let next = Root {
+        version: 2,
+        keys: vec![public(&key(4)), public(&key(5)), public(&key(6))],
+        catalogue: public(&key(11)),
+        ..root(2)
+    };
     let both = SignedRoot::sign(next.clone(), &[&key(1), &key(2), &key(4), &key(5)]);
     assert_eq!(both.replaces(&current).unwrap(), &next);
     // only the new keys: anyone could make a root of their own
@@ -118,7 +127,13 @@ fn a_stamp_makes_exactly_its_bundle_a_store_app() {
     m.description = "changed".into();
     let changed = maki_bundle::write(&m, b"\0asm\x01\0\0\0", None, &key(20)).unwrap();
     assert_eq!(other(changed), Err(Error::Mismatch("contents")));
-    let by_another = maki_bundle::write(&manifest(3, vec![(Permission::Keys, "a key".into())]), b"\0asm\x01\0\0\0", None, &key(21)).unwrap();
+    let by_another = maki_bundle::write(
+        &manifest(3, vec![(Permission::Keys, "a key".into())]),
+        b"\0asm\x01\0\0\0",
+        None,
+        &key(21),
+    )
+    .unwrap();
     assert_eq!(other(by_another), Err(Error::Mismatch("developer")));
 
     // restamping replaces the stamp, it doesn't pile them up
@@ -145,7 +160,10 @@ fn revocations_are_signed_newer_and_say_why() {
     assert_eq!(signed.replaces(&r, Some(NOW), Some(&seven)), Err(Error::Rollback));
     let six = SignedRevocations::sign(Revocations { version: 6, ..list.clone() }, &key(10));
     assert_eq!(signed.replaces(&r, Some(NOW), Some(&six)).unwrap(), &list);
-    assert_eq!(SignedRevocations::sign(list.clone(), &key(11)).replaces(&r, Some(NOW), None), Err(Error::Signature));
+    assert_eq!(
+        SignedRevocations::sign(list.clone(), &key(11)).replaces(&r, Some(NOW), None),
+        Err(Error::Signature)
+    );
     // the catalogue key signs nothing new without verified time, nor once it's expired
     assert_eq!(signed.replaces(&r, None, None), Err(Error::TimeUnverified));
     assert_eq!(signed.replaces(&r, Some(r.catalogue_expires), None), Err(Error::Expired));

@@ -11,7 +11,7 @@ use alloc::vec::Vec;
 
 use crate::message::{Account, Instruction, Message};
 use crate::program::{self, *};
-use crate::{address, tokens, Key};
+use crate::{Key, address, tokens};
 
 /// A page of a review, as maki's review screen lays it out (`maki_app::wallet::Page`).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -67,7 +67,8 @@ pub fn decimals(n: u128, places: u8) -> String {
     if places == 0 {
         return digits;
     }
-    let padded = if digits.len() <= places { "0".repeat(places + 1 - digits.len()) + &digits } else { digits };
+    let padded =
+        if digits.len() <= places { "0".repeat(places + 1 - digits.len()) + &digits } else { digits };
     let (whole, frac) = padded.split_at(padded.len() - places);
     match frac.trim_end_matches('0') {
         "" => whole.into(),
@@ -85,7 +86,9 @@ fn key_at(d: &[u8], at: usize) -> Key { d[at..at + 32].try_into().unwrap() }
 fn hex(bytes: &[u8]) -> String { bytes.iter().map(|b| format!("{b:02x}")).collect() }
 
 /// Text a page can show as it is: UTF-8, without control characters but newlines.
-fn text(bytes: &[u8]) -> Option<&str> { core::str::from_utf8(bytes).ok().filter(|t| !t.chars().any(|c| c.is_control() && c != '\n')) }
+fn text(bytes: &[u8]) -> Option<&str> {
+    core::str::from_utf8(bytes).ok().filter(|t| !t.chars().any(|c| c.is_control() && c != '\n'))
+}
 
 /// The fee: how many signatures (the transaction's and those programs check for it), and the
 /// compute units and their price.
@@ -97,6 +100,7 @@ struct Fee {
 
 impl Fee {
     fn base(&self) -> u128 { self.signatures as u128 * LAMPORTS_PER_SIGNATURE as u128 }
+
     /// The priority fee: the units' price, rounded up to a lamport, as Solana charges it.
     fn priority(&self) -> u128 { (self.units as u128 * self.micro_lamports as u128).div_ceil(1_000_000) }
 }
@@ -126,11 +130,16 @@ struct Reading<'a> {
 }
 
 fn account_index(ix: &Instruction, i: usize) -> Result<u8, Error> {
-    ix.accounts.get(i).copied().ok_or(Error::Invalid("an instruction without the accounts it needs: Solana would refuse it"))
+    ix.accounts
+        .get(i)
+        .copied()
+        .ok_or(Error::Invalid("an instruction without the accounts it needs: Solana would refuse it"))
 }
 
 impl Reading<'_> {
-    fn is_me(&self, index: u8) -> bool { matches!(self.m.account(index), Some(Account::Key(k)) if k == self.me) }
+    fn is_me(&self, index: u8) -> bool {
+        matches!(self.m.account(index), Some(Account::Key(k)) if k == self.me)
+    }
 
     /// The account's key, if the message has it (not a lookup table's entry).
     fn key(&self, index: u8) -> Option<Key> { self.m.key(index).copied() }
@@ -181,7 +190,9 @@ impl Reading<'_> {
                 _ => return Err(Error::Invalid("a compute budget instruction Solana would refuse")),
             };
             if slot.replace(value).is_some() {
-                return Err(Error::Invalid("a compute budget instruction given twice: Solana would refuse it"));
+                return Err(Error::Invalid(
+                    "a compute budget instruction given twice: Solana would refuse it",
+                ));
             }
         }
         let units = units.unwrap_or(DEFAULT_COMPUTE_UNITS * others).min(MAX_COMPUTE_UNITS);
@@ -192,13 +203,20 @@ impl Reading<'_> {
     /// by its address; one that isn't the owner's, Solana would refuse.
     fn prove(&mut self) -> Result<(), Error> {
         for ix in &self.m.instructions {
-            if self.m.keys[ix.program as usize] != ASSOCIATED_TOKEN || !matches!(ix.data.as_slice(), [] | [0] | [1]) {
+            if self.m.keys[ix.program as usize] != ASSOCIATED_TOKEN
+                || !matches!(ix.data.as_slice(), [] | [0] | [1])
+            {
                 continue;
             }
-            let [account, owner, mint, token_program] = [1, 2, 3, 5].map(|i| account_index(ix, i).map(|a| self.key(a)));
-            if let (Some(account), Some(owner), Some(mint), Some(token_program)) = (account?, owner?, mint?, token_program?) {
+            let [account, owner, mint, token_program] =
+                [1, 2, 3, 5].map(|i| account_index(ix, i).map(|a| self.key(a)));
+            if let (Some(account), Some(owner), Some(mint), Some(token_program)) =
+                (account?, owner?, mint?, token_program?)
+            {
                 if program::associated_token_account(&owner, &token_program, &mint) != Some(account) {
-                    return Err(Error::Invalid("a token account that isn't its owner's: Solana would refuse it"));
+                    return Err(Error::Invalid(
+                        "a token account that isn't its owner's: Solana would refuse it",
+                    ));
                 }
                 self.proven.push(Proven { account, owner, mint });
             }
@@ -273,7 +291,12 @@ impl Reading<'_> {
                 let owner = self.named(&key_at(d, 4));
                 if self.is_me(account) {
                     self.warnings.push("hands this account over");
-                    self.pages.push(page("Hands over!", "this account", owner, "That program would own this account, and everything in it."));
+                    self.pages.push(page(
+                        "Hands over!",
+                        "this account",
+                        owner,
+                        "That program would own this account, and everything in it.",
+                    ));
                 } else {
                     let account = self.who(account);
                     self.pages.push(page("Assign", "an account", format!("{account}\nto {owner}"), ""));
@@ -357,7 +380,8 @@ impl Reading<'_> {
             // Approve / ApproveChecked: a delegate may spend up to an amount
             (Some(4), 9) | (Some(13), 10) => {
                 let checked = d[0] == 13;
-                let (source, delegate, owner) = if checked { (a(0)?, a(2)?, a(3)?) } else { (a(0)?, a(1)?, a(2)?) };
+                let (source, delegate, owner) =
+                    if checked { (a(0)?, a(2)?, a(3)?) } else { (a(0)?, a(1)?, a(2)?) };
                 let mint = if checked { self.key(a(1)?) } else { self.proven(source).map(|p| p.mint) };
                 if mint.is_none_or(|m| tokens::known(&m).is_none()) && !checked {
                     self.unreadable = true;
@@ -365,11 +389,22 @@ impl Reading<'_> {
                 let amount = self.tokens(u64_at(d, 1), mint.as_ref(), checked.then(|| d[9]))?;
                 let delegate = self.who(delegate);
                 let source = self.who(source);
-                let whose = if self.is_me(owner) { String::new() } else { format!(" Its owner: {}.", self.who(owner)) };
+                let whose = if self.is_me(owner) {
+                    String::new()
+                } else {
+                    format!(" Its owner: {}.", self.who(owner))
+                };
                 if self.is_me(owner) {
                     self.warnings.push("lets another spend tokens");
                 }
-                self.pages.push(page("Approve!", format!("up to {amount}"), delegate, format!("That address may spend them from token account {source}, without asking.{whose}")));
+                self.pages.push(page(
+                    "Approve!",
+                    format!("up to {amount}"),
+                    delegate,
+                    format!(
+                        "That address may spend them from token account {source}, without asking.{whose}"
+                    ),
+                ));
                 if let (Some(m), None) = (mint, mint.and_then(|m| tokens::known(&m))) {
                     self.pages.push(page("Token", "one maki doesn't know", address(&m), ""));
                 }
@@ -378,7 +413,12 @@ impl Reading<'_> {
             (Some(5), 1) => {
                 let source = a(0)?;
                 let source = self.who(source);
-                self.pages.push(page("Revoke", "no more spending", source, "Whoever was approved to spend from this token account can't."));
+                self.pages.push(page(
+                    "Revoke",
+                    "no more spending",
+                    source,
+                    "Whoever was approved to spend from this token account can't.",
+                ));
             }
             // SetAuthority: a kind of authority, and who has it now (or no one)
             (Some(6), 3) | (Some(6), 35) => {
@@ -399,7 +439,12 @@ impl Reading<'_> {
                     self.warnings.push("hands control over");
                 }
                 let target = self.who(target);
-                self.pages.push(page("Hands over!", what, format!("of {target}\nto {to}"), "Whoever it goes to decides, from then on."));
+                self.pages.push(page(
+                    "Hands over!",
+                    what,
+                    format!("of {target}\nto {to}"),
+                    "Whoever it goes to decides, from then on.",
+                ));
             }
             // Burn / BurnChecked: tokens destroyed
             (Some(8), 9) | (Some(15), 10) => {
@@ -413,7 +458,12 @@ impl Reading<'_> {
                     self.burnt.push(amount.clone());
                 }
                 let account = self.who(account);
-                self.pages.push(page("Burn", amount, account, "Destroyed, from this token account: no one gets them."));
+                self.pages.push(page(
+                    "Burn",
+                    amount,
+                    account,
+                    "Destroyed, from this token account: no one gets them.",
+                ));
             }
             // CloseAccount: its SOL goes to an address: its rent, or all of it if it's wrapped SOL
             (Some(9), 1) => {
@@ -423,7 +473,8 @@ impl Reading<'_> {
                 }
                 let dest = self.who(dest);
                 let account = self.who(account);
-                let prose = format!("The SOL it holds goes to {dest}: its rent, or all of it if it's wrapped SOL.");
+                let prose =
+                    format!("The SOL it holds goes to {dest}: its rent, or all of it if it's wrapped SOL.");
                 self.pages.push(page("Close", "a token account", account, prose));
             }
             // SyncNative: wrapped SOL counted again
@@ -435,7 +486,8 @@ impl Reading<'_> {
             // InitializeAccount3: an owner
             (Some(18), 33) => {
                 let (account, mint) = (a(0)?, a(1)?);
-                let token = self.key(mint).and_then(|m| tokens::known(&m)).map(|t| t.symbol).unwrap_or("a token");
+                let token =
+                    self.key(mint).and_then(|m| tokens::known(&m)).map(|t| t.symbol).unwrap_or("a token");
                 let owner = self.named(&key_at(d, 1));
                 let account = self.who(account);
                 self.pages.push(page("New token account", token, format!("{account}\nowned by {owner}"), ""));
@@ -445,7 +497,14 @@ impl Reading<'_> {
         Ok(())
     }
 
-    fn send_tokens(&mut self, authority: u8, amount: String, to: String, mut prose: String, mint: Option<&Key>) {
+    fn send_tokens(
+        &mut self,
+        authority: u8,
+        amount: String,
+        to: String,
+        mut prose: String,
+        mint: Option<&Key>,
+    ) {
         if self.is_me(authority) {
             self.sent.push(amount.clone());
         } else {
@@ -472,12 +531,21 @@ impl Reading<'_> {
         let (owner, mint) = (p.owner, p.mint);
         let token = tokens::known(&mint).map(|t| t.symbol);
         let whose = if owner == *self.me { String::from("this account") } else { address(&owner) };
-        let rent = if self.is_me(funder) { " If it's new, this account pays its rent: about 0.002 SOL, back when it's closed." } else { "" };
+        let rent = if self.is_me(funder) {
+            " If it's new, this account pays its rent: about 0.002 SOL, back when it's closed."
+        } else {
+            ""
+        };
         let mono = match token {
             Some(_) => whose,
             None => format!("{whose}\ntoken {}", address(&mint)),
         };
-        self.pages.push(page("New token account", token.unwrap_or("a token maki doesn't know"), mono, format!("For its owner's tokens.{rent}")));
+        self.pages.push(page(
+            "New token account",
+            token.unwrap_or("a token maki doesn't know"),
+            mono,
+            format!("For its owner's tokens.{rent}"),
+        ));
         Ok(())
     }
 
@@ -491,7 +559,11 @@ impl Reading<'_> {
         };
         let name = program::name(program).map(String::from).unwrap_or_else(|| address(program));
         let (n, len) = (ix.accounts.len(), ix.data.len());
-        let mono = format!("{name}\n{n} account{}, {len} byte{}", if n == 1 { "" } else { "s" }, if len == 1 { "" } else { "s" });
+        let mono = format!(
+            "{name}\n{n} account{}, {len} byte{}",
+            if n == 1 { "" } else { "s" },
+            if len == 1 { "" } else { "s" }
+        );
         self.pages.push(page("Program", "maki can't read it", mono, prose));
     }
 }
@@ -523,15 +595,31 @@ pub fn review(m: &Message, me: &Key) -> Result<Review, Error> {
     let others: Vec<String> = m.signer_keys().iter().filter(|k| *k != me).map(address).collect();
     if !others.is_empty() {
         let n = others.len();
-        r.pages.push(page("Signed by others", format!("{n} more"), others.join("\n"), "It needs their signatures as well as this account's."));
+        r.pages.push(page(
+            "Signed by others",
+            format!("{n} more"),
+            others.join("\n"),
+            "It needs their signatures as well as this account's.",
+        ));
     }
     let max = fee.base() + fee.priority();
     let payer = m.keys[0];
-    let how = format!("{} for {} signature{}, up to {} for priority.", sol(fee.base()), fee.signatures, if fee.signatures == 1 { "" } else { "s" }, sol(fee.priority()));
+    let how = format!(
+        "{} for {} signature{}, up to {} for priority.",
+        sol(fee.base()),
+        fee.signatures,
+        if fee.signatures == 1 { "" } else { "s" },
+        sol(fee.priority())
+    );
     if payer == *me {
         r.pages.push(page("Max fee", sol(max), "", how));
     } else {
-        r.pages.push(page("Fee paid by", "someone else", address(&payer), format!("Up to {}, not this account's. {how}", sol(max))));
+        r.pages.push(page(
+            "Fee paid by",
+            "someone else",
+            address(&payer),
+            format!("Up to {}, not this account's. {how}", sol(max)),
+        ));
     }
     let what = if !r.warnings.is_empty() {
         let mut w: Vec<&str> = Vec::new();
@@ -548,17 +636,19 @@ pub fn review(m: &Message, me: &Key) -> Result<Review, Error> {
         match r.sent.len() {
             0 => {}
             1 => said.push(format!("sends {}", r.sent[0])),
-            n if r.sent.iter().all(|s| s.ends_with(" SOL")) => said.push(format!("sends {} in {n} payments", sol(r.lamports))),
+            n if r.sent.iter().all(|s| s.ends_with(" SOL")) => {
+                said.push(format!("sends {} in {n} payments", sol(r.lamports)))
+            }
             n => said.push(format!("{n} payments")),
         }
         said.extend(r.burnt.iter().map(|b| format!("burns {b}")));
-        if said.is_empty() {
-            String::from("sends nothing")
-        } else {
-            said.join(", ")
-        }
+        if said.is_empty() { String::from("sends nothing") } else { said.join(", ") }
     };
-    let mut summary = if payer == *me { format!("{what}; fee up to {}", sol(max)) } else { format!("{what}; another pays the fee") };
+    let mut summary = if payer == *me {
+        format!("{what}; fee up to {}", sol(max))
+    } else {
+        format!("{what}; another pays the fee")
+    };
     // the line under the question is short (the pages say it all): cut, if it must be, at a character
     if summary.len() > MAX_SUMMARY {
         let mut end = MAX_SUMMARY - '…'.len_utf8();
@@ -596,7 +686,12 @@ pub fn message_pages(site: &str, me: &Key, message: &[u8]) -> Result<Vec<Page>, 
     }
     let mut pages = Vec::new();
     if let Some(other) = sign_in_site(message).filter(|s| s != site) {
-        pages.push(page("Wrong site!", "a sign-in for", other, "Not the site asking: it may be copying that site's sign-in."));
+        pages.push(page(
+            "Wrong site!",
+            "a sign-in for",
+            other,
+            "Not the site asking: it may be copying that site's sign-in.",
+        ));
     }
     if sign_in_site(message).is_some() {
         let named = core::str::from_utf8(message).ok().and_then(|t| t.lines().nth(1)).unwrap_or("");

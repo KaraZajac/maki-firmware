@@ -6,13 +6,12 @@
 //! alone). Transactions come in as PSBTs (BIP174, and BIP371 for taproot). The rules that keep a
 //! lying computer from getting a signature the owner didn't mean to give:
 //!
-//! - every input must be this wallet's, proven by deriving its key; a native SegWit one must
-//!   come with the whole transaction it spends, which must hash to the outpoint: an amount the
-//!   computer claims is never trusted (the 2020 SegWit fee attack). A taproot signature covers
-//!   every input's amount and script, so for taproot the amount claimed is enough: a false one
-//!   makes a signature that fails;
-//! - an output is called change only if it derives from this wallet's change chain; anything
-//!   else is shown as a payment, with its full address;
+//! - every input must be this wallet's, proven by deriving its key; a native SegWit one must come with the
+//!   whole transaction it spends, which must hash to the outpoint: an amount the computer claims is never
+//!   trusted (the 2020 SegWit fee attack). A taproot signature covers every input's amount and script, so for
+//!   taproot the amount claimed is enough: a false one makes a signature that fails;
+//! - an output is called change only if it derives from this wallet's change chain; anything else is shown as
+//!   a payment, with its full address;
 //! - the fee is what the inputs hold minus what the outputs pay, and must not be negative;
 //! - only SIGHASH_ALL is signed.
 //!

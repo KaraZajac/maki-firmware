@@ -1,6 +1,6 @@
 //! Real exchanges with three public servers, captured 2026-09-26 with a draft-19 request.
 
-use roughtime::{Error, Verified, REQUEST_LEN, request, verify};
+use roughtime::{Error, REQUEST_LEN, Verified, request, verify};
 
 const SERVERS: [&str; 3] = ["time_txryan_com", "roughtime_se", "roughtime_int08h_com"];
 

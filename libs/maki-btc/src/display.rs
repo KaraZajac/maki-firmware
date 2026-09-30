@@ -48,7 +48,9 @@ pub fn amount(sats: u64, network: Network) -> String {
 
 impl Review {
     /// What leaves the wallet: every payment, and the fee.
-    pub fn spent(&self) -> u64 { self.outputs.iter().filter(|o| !o.change).map(|o| o.amount).sum::<u64>() + self.fee }
+    pub fn spent(&self) -> u64 {
+        self.outputs.iter().filter(|o| !o.change).map(|o| o.amount).sum::<u64>() + self.fee
+    }
 
     /// A fee over a tenth of what's sent (or, sending nothing but change, of what moves) is
     /// called out: it's how a mistyped fee rate looks.
@@ -64,8 +66,17 @@ impl Review {
         let payments: Vec<_> = self.outputs.iter().filter(|o| !o.change).collect();
         let mut pages = Vec::new();
         for (i, o) in payments.iter().enumerate() {
-            let heading = if payments.len() > 1 { format!("Send {}/{}", i + 1, payments.len()) } else { String::from("Send") };
-            pages.push(Page { heading, value: amount(o.amount, self.network), mono: o.address.clone(), prose: String::new() });
+            let heading = if payments.len() > 1 {
+                format!("Send {}/{}", i + 1, payments.len())
+            } else {
+                String::from("Send")
+            };
+            pages.push(Page {
+                heading,
+                value: amount(o.amount, self.network),
+                mono: o.address.clone(),
+                prose: String::new(),
+            });
         }
         for o in self.outputs.iter().filter(|o| o.change) {
             // a multisig wallet's name is words, which the fixed-width type would break mid-word
@@ -73,7 +84,12 @@ impl Review {
                 Some(wallet) => (String::new(), format!("back to {wallet}")),
                 None => (String::from("back to you"), String::new()),
             };
-            pages.push(Page { heading: String::from("Change"), value: amount(o.amount, self.network), mono, prose });
+            pages.push(Page {
+                heading: String::from("Change"),
+                value: amount(o.amount, self.network),
+                mono,
+                prose,
+            });
         }
         pages.push(Page {
             heading: String::from(if self.fee_is_high() { "High fee!" } else { "Fee" }),

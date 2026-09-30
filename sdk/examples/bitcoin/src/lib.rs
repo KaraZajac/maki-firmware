@@ -29,20 +29,20 @@
 //! with what it is; each answer with a status, then its fields (strings as a u16 length and the
 //! bytes, numbers little-endian):
 //!
-//! - `A` network, kind: the account's key (zpub, or xpub for taproot) and its output descriptor,
-//!   once the owner agrees to share it;
-//! - `D` network, kind, change, index (u32): an address, once the owner has compared it on maki's
-//!   screen with the computer's;
-//! - `P` network, total (u32), offset (u32), then a piece of a PSBT: the last piece is checked,
-//!   shown and signed, and answered with the signed PSBT's size (or why not);
+//! - `A` network, kind: the account's key (zpub, or xpub for taproot) and its output descriptor, once the
+//!   owner agrees to share it;
+//! - `D` network, kind, change, index (u32): an address, once the owner has compared it on maki's screen with
+//!   the computer's;
+//! - `P` network, total (u32), offset (u32), then a piece of a PSBT: the last piece is checked, shown and
+//!   signed, and answered with the signed PSBT's size (or why not);
 //! - `G` offset (u32): a piece of the PSBT last signed: total, offset, the bytes.
 //! - `K` network: maki's key for multisig wallets, with its origin, once the owner agrees to share it;
-//! - `M` network, name, text: a multisig wallet to add (a descriptor or Coldcard's file; the name
-//!   if the text has none), once the owner has gone through it: its ID (4 bytes) and name;
-//! - `W`: the multisig wallets added: how many (a byte), then each one's ID, network, threshold
-//!   and number of keys (a byte each) and name;
-//! - `E` ID (4 bytes), change, index (u32): a multisig wallet's address, once the owner has
-//!   compared it on maki's screen with the computer's.
+//! - `M` network, name, text: a multisig wallet to add (a descriptor or Coldcard's file; the name if the text
+//!   has none), once the owner has gone through it: its ID (4 bytes) and name;
+//! - `W`: the multisig wallets added: how many (a byte), then each one's ID, network, threshold and number of
+//!   keys (a byte each) and name;
+//! - `E` ID (4 bytes), change, index (u32): a multisig wallet's address, once the owner has compared it on
+//!   maki's screen with the computer's.
 //!
 //! Network is 0 (bitcoin) or 1 (the test networks); kind 0 (native SegWit) or 1 (taproot).
 
@@ -50,7 +50,7 @@ use maki_app::wallet::{HostKeys, Page, Review};
 use maki_app::*;
 use maki_btc::multisig::{self, Multisig, Signer};
 use maki_btc::psbt::Psbt;
-use maki_btc::{display, wallet as btc, Account, Kind, Network};
+use maki_btc::{Account, Kind, Network, display, wallet as btc};
 
 const ACCOUNT: u8 = b'A';
 const ADDRESS: u8 = b'D';
@@ -106,22 +106,27 @@ struct Answer(Vec<u8>);
 
 impl Answer {
     fn new(status: u8) -> Answer { Answer(vec![status]) }
+
     fn text(mut self, s: &str) -> Answer {
         self.0.extend_from_slice(&(s.len() as u16).to_le_bytes());
         self.0.extend_from_slice(s.as_bytes());
         self
     }
+
     fn u32(mut self, n: u32) -> Answer {
         self.0.extend_from_slice(&n.to_le_bytes());
         self
     }
+
     fn bytes(mut self, b: &[u8]) -> Answer {
         self.0.extend_from_slice(b);
         self
     }
 }
 
-fn u32_at(b: &[u8], at: usize) -> Option<u32> { b.get(at..at + 4).map(|x| u32::from_le_bytes(x.try_into().unwrap())) }
+fn u32_at(b: &[u8], at: usize) -> Option<u32> {
+    b.get(at..at + 4).map(|x| u32::from_le_bytes(x.try_into().unwrap()))
+}
 
 /// What maki's keys said, as an answer.
 fn keys_status(e: maki_hd::Error) -> u8 {
@@ -163,7 +168,9 @@ impl Wallet {
     }
 
     fn sign_piece(&mut self, m: &[u8]) -> Answer {
-        let (Some(net), Some(total), Some(offset)) = (m.get(1).and_then(|n| network(*n)), u32_at(m, 2), u32_at(m, 6)) else {
+        let (Some(net), Some(total), Some(offset)) =
+            (m.get(1).and_then(|n| network(*n)), u32_at(m, 2), u32_at(m, 6))
+        else {
             return Answer::new(BAD);
         };
         let (total, offset, piece) = (total as usize, offset as usize, &m[10..]);
@@ -218,7 +225,12 @@ fn share(m: &[u8]) -> Answer {
         Kind::Segwit => display::network_name(net).to_string(),
         Kind::Taproot => format!("{} taproot", display::network_name(net)),
     };
-    let asked = Review::new("Share account?").detail(&format!("{which}, view only")).answers("share", "don't").signatures(0).timeout(60).show();
+    let asked = Review::new("Share account?")
+        .detail(&format!("{which}, view only"))
+        .answers("share", "don't")
+        .signatures(0)
+        .timeout(60)
+        .show();
     match asked.map(owner) {
         Ok(OK) => Answer::new(OK).text(&account.zpub()).text(&account.descriptor()),
         Ok(s) => Answer::new(s),
@@ -268,7 +280,8 @@ fn stored() -> Vec<(String, Multisig)> {
         let mut buf = vec![0u8; 16 * 1024];
         let Some(n) = storage::get(&key, &mut buf) else { continue };
         let text = String::from_utf8_lossy(&buf[..n.min(buf.len())]).into_owned();
-        if let Some(wallet) = text.split_once('\n').and_then(|(name, desc)| Multisig::parse(desc, name).ok()) {
+        if let Some(wallet) = text.split_once('\n').and_then(|(name, desc)| Multisig::parse(desc, name).ok())
+        {
             out.push((key, wallet));
         }
     }
@@ -295,7 +308,12 @@ fn register(net: Network, name: &str, text: &str) -> Result<([u8; 4], String), A
         return Ok((id, wallet.name.clone()));
     }
     let n = wallet.keys.len();
-    let what = format!("{} of its {} keys sign; native SegWit (P2WSH), {}", wallet.threshold, n, display::network_name(net));
+    let what = format!(
+        "{} of its {} keys sign; native SegWit (P2WSH), {}",
+        wallet.threshold,
+        n,
+        display::network_name(net)
+    );
     let mut asked = Review::new("Add this multisig?")
         .detail(&format!("{}, {} of {}", wallet.name, wallet.threshold, n))
         .answers("add", "don't")
@@ -305,7 +323,9 @@ fn register(net: Network, name: &str, text: &str) -> Result<([u8; 4], String), A
     for (i, k) in wallet.keys.iter().enumerate() {
         let fp = fingerprint_text(&k.fingerprint);
         let value = if i == signer.ours { format!("{fp} (maki)") } else { fp };
-        asked = asked.page(Page::new(&format!("Key {}/{}", i + 1, n)).value(&value).mono(&k.xpub.encode(net.xpub_version())));
+        asked = asked.page(
+            Page::new(&format!("Key {}/{}", i + 1, n)).value(&value).mono(&k.xpub.encode(net.xpub_version())),
+        );
     }
     match asked.show().map(owner) {
         Ok(OK) => {}
@@ -314,8 +334,9 @@ fn register(net: Network, name: &str, text: &str) -> Result<([u8; 4], String), A
         Err(_) => return Err(Answer::new(NO_ANSWER)),
     }
     let kept = format!("{}\n{}", wallet.name, wallet.descriptor());
-    storage::set(&format!("{PREFIX}{}", hex(&id)), kept.as_bytes())
-        .map_err(|_| Answer::new(REFUSED).text("no room for another multisig wallet: remove one in App info"))?;
+    storage::set(&format!("{PREFIX}{}", hex(&id)), kept.as_bytes()).map_err(|_| {
+        Answer::new(REFUSED).text("no room for another multisig wallet: remove one in App info")
+    })?;
     Ok((id, wallet.name.clone()))
 }
 
@@ -367,14 +388,19 @@ fn list_wallets() -> Answer {
     let wallets = stored();
     let mut a = Answer::new(OK).bytes(&[wallets.len().min(255) as u8]);
     for (_, w) in wallets.iter().take(255) {
-        a = a.bytes(&w.id()).bytes(&[w.network.coin_type() as u8, w.threshold as u8, w.keys.len() as u8]).text(&w.name);
+        a = a
+            .bytes(&w.id())
+            .bytes(&[w.network.coin_type() as u8, w.threshold as u8, w.keys.len() as u8])
+            .text(&w.name);
     }
     a
 }
 
 /// `E`: a multisig wallet's address, put on maki's screen for the owner to compare.
 fn compare_multisig(m: &[u8]) -> Answer {
-    let (Some(id), Some(change), Some(index)) = (m.get(1..5), m.get(5), u32_at(m, 6)) else { return Answer::new(BAD) };
+    let (Some(id), Some(change), Some(index)) = (m.get(1..5), m.get(5), u32_at(m, 6)) else {
+        return Answer::new(BAD);
+    };
     let Some((_, wallet)) = stored().into_iter().find(|(_, w)| w.id()[..] == *id) else {
         return Answer::new(REFUSED).text("maki hasn't that multisig wallet");
     };
@@ -421,11 +447,16 @@ fn multisig_review(net: Network, psbt: &Psbt) -> Result<(Signer<'static>, btc::R
 /// A whole PSBT: checked (every input this wallet's, amounts from what they spend, change only
 /// where it's ours), shown, and signed on a yes. The signed PSBT, or the answer saying why not.
 fn sign(net: Network, bytes: &[u8]) -> Result<Vec<u8>, Answer> {
-    let mut psbt = Psbt::parse(bytes).map_err(|e| Answer::new(REFUSED).text(&format!("not a PSBT maki can read: {e}")))?;
+    let mut psbt = Psbt::parse(bytes)
+        .map_err(|e| Answer::new(REFUSED).text(&format!("not a PSBT maki can read: {e}")))?;
     if multisig::is_multisig(&psbt) {
         let (signer, review) = multisig_review(net, &psbt)?;
         let w = &signer.wallet;
-        let from = Page::new("From").value(&w.name).prose(&format!("a {} of {} multisig wallet; maki signs as one of its keys", w.threshold, w.keys.len()));
+        let from = Page::new("From").value(&w.name).prose(&format!(
+            "a {} of {} multisig wallet; maki signs as one of its keys",
+            w.threshold,
+            w.keys.len()
+        ));
         ask_to_sign(&review, Some(from))?;
         signer.sign(&mut psbt).map_err(|e| Answer::new(REFUSED).text(&e.to_string()))?;
         return Ok(psbt.serialize());
@@ -452,9 +483,13 @@ fn sign(net: Network, bytes: &[u8]) -> Result<Vec<u8>, Answer> {
 /// (after where it's from, for a multisig wallet's), allowing a signature for each input on a yes.
 fn ask_to_sign(review: &btc::Review, from: Option<Page>) -> Result<(), Answer> {
     if review.outputs.len() > MAX_OUTPUTS {
-        return Err(Answer::new(REFUSED).text(&format!("more than {MAX_OUTPUTS} outputs to go through on maki's screen")));
+        return Err(Answer::new(REFUSED)
+            .text(&format!("more than {MAX_OUTPUTS} outputs to go through on maki's screen")));
     }
-    let mut asked = Review::new("Sign and spend").detail(&display::amount(review.spent(), review.network)).answers("sign", "reject").timeout(300);
+    let mut asked = Review::new("Sign and spend")
+        .detail(&display::amount(review.spent(), review.network))
+        .answers("sign", "reject")
+        .timeout(300);
     if let Some(from) = from {
         asked = asked.page(from);
     }
@@ -542,7 +577,9 @@ fn scan_psbt() -> Result<Vec<u8>, String> {
 /// A multisig wallet read off a coordinator's screen: its descriptor or Coldcard's file, as text
 /// or in a UR `bytes` (Sparrow's export).
 fn scan_wallet() -> Result<String, String> {
-    let text = |t: &str| t.starts_with("wsh(") || t.starts_with("sh(") || t.contains("Policy:") || t.contains("Format:");
+    let text = |t: &str| {
+        t.starts_with("wsh(") || t.starts_with("sh(") || t.contains("Policy:") || t.contains("Format:")
+    };
     match scan("wallet", &["bytes"], text)? {
         Read::Ur(bytes) => String::from_utf8(bytes).map_err(|_| "not a wallet inside".into()),
         Read::Text(t) => Ok(t),
@@ -592,7 +629,9 @@ fn scan(what: &str, kinds: &[&str], plain: impl Fn(&str) -> bool) -> Result<Read
             }
             Err(_) => return Err("a code maki can't read".into()),
         };
-        return from_cbor_bytes(&cbor).map(|b| Read::Ur(b.to_vec())).ok_or_else(|| format!("not a {what} inside"));
+        return from_cbor_bytes(&cbor)
+            .map(|b| Read::Ur(b.to_vec()))
+            .ok_or_else(|| format!("not a {what} inside"));
     }
 }
 
@@ -656,7 +695,14 @@ enum Shows {
     Cosigner,
 }
 
-const MENU: [&str; 6] = ["Taproot or SegWit", "Bitcoin or testnet", "Account key", "Sign from a QR code", "Multisig key", "Add a multisig"];
+const MENU: [&str; 6] = [
+    "Taproot or SegWit",
+    "Bitcoin or testnet",
+    "Account key",
+    "Sign from a QR code",
+    "Multisig key",
+    "Add a multisig",
+];
 
 impl View {
     fn draw(&self) {
@@ -685,13 +731,23 @@ impl View {
             (address, format!("receive #{}{tap}{net}", self.index))
         };
         if !self.note.is_empty() {
-            screen::text_centred(30, if self.note_is_good { "Added:" } else { "Not done:" }, Style::Bold, Color::Light);
+            screen::text_centred(
+                30,
+                if self.note_is_good { "Added:" } else { "Not done:" },
+                Style::Bold,
+                Color::Light,
+            );
             screen::text_centred(52, &self.note, Style::Small, Color::Light);
             screen::text_centred(80, "centre: back", Style::Small, Color::Light);
         } else if self.as_text {
             screen::text_centred(2, &caption, Style::Small, Color::Light);
             for (i, start) in (0..text.len()).step_by(14).enumerate().take(6) {
-                screen::text_centred(18 + i as i32 * 15, &text[start..(start + 14).min(text.len())], Style::Mono, Color::Light);
+                screen::text_centred(
+                    18 + i as i32 * 15,
+                    &text[start..(start + 14).min(text.len())],
+                    Style::Mono,
+                    Color::Light,
+                );
             }
         } else {
             let upper = text.to_uppercase();
@@ -708,8 +764,15 @@ impl View {
 
 fn main() {
     let _ = menu(&MENU);
-    let mut view =
-        View { network: Network::Bitcoin, kind: Kind::Segwit, index: 0, as_text: false, shows: Shows::Address, note: String::new(), note_is_good: false };
+    let mut view = View {
+        network: Network::Bitcoin,
+        kind: Kind::Segwit,
+        index: 0,
+        as_text: false,
+        shows: Shows::Address,
+        note: String::new(),
+        note_is_good: false,
+    };
     let mut wallet = Wallet::default();
     let mut shown = true;
     loop {
@@ -725,10 +788,17 @@ fn main() {
             }
             Event::Centre | Event::Left | Event::Right if !view.note.is_empty() => view.note.clear(),
             Event::Left if view.shows == Shows::Address => view.index = view.index.saturating_sub(1),
-            Event::Right if view.shows == Shows::Address => view.index = (view.index + 1).min(maki_btc::bip32::HARDENED - 1),
+            Event::Right if view.shows == Shows::Address => {
+                view.index = (view.index + 1).min(maki_btc::bip32::HARDENED - 1)
+            }
             Event::Centre => view.as_text = !view.as_text,
-            Event::Menu(0) => view.kind = if view.kind == Kind::Segwit { Kind::Taproot } else { Kind::Segwit },
-            Event::Menu(1) => view.network = if view.network == Network::Bitcoin { Network::Testnet } else { Network::Bitcoin },
+            Event::Menu(0) => {
+                view.kind = if view.kind == Kind::Segwit { Kind::Taproot } else { Kind::Segwit }
+            }
+            Event::Menu(1) => {
+                view.network =
+                    if view.network == Network::Bitcoin { Network::Testnet } else { Network::Bitcoin }
+            }
             Event::Menu(2) => {
                 view.shows = match view.shows {
                     Shows::Address => Shows::Key,
@@ -736,7 +806,9 @@ fn main() {
                     Shows::Descriptor | Shows::Cosigner => Shows::Address,
                 }
             }
-            Event::Menu(4) => view.shows = if view.shows == Shows::Cosigner { Shows::Address } else { Shows::Cosigner },
+            Event::Menu(4) => {
+                view.shows = if view.shows == Shows::Cosigner { Shows::Address } else { Shows::Cosigner }
+            }
             // a multisig wallet off the coordinator's screen, gone through, and added
             Event::Menu(5) => match scan_wallet() {
                 Ok(text) => match register(view.network, "", &text) {

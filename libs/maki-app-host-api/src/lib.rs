@@ -162,9 +162,12 @@ impl AppHost {
     /// returns once the owner decides.
     pub fn install(&self, total: u32, offset: u32, data: Vec<u8>) -> Install {
         let failed = Install { result: RESULT_FAILED, done: true, ..Default::default() };
-        let request = Install { total, offset, data, done: false, result: RESULT_FAILED, reason: String::new() };
+        let request =
+            Install { total, offset, data, done: false, result: RESULT_FAILED, reason: String::new() };
         let mut buf = Buffer::new(8192);
-        if buf.replace(request).is_err() || buf.lend_mut(self.conn, HostOp::Install.to_u32().unwrap()).is_err() {
+        if buf.replace(request).is_err()
+            || buf.lend_mut(self.conn, HostOp::Install.to_u32().unwrap()).is_err()
+        {
             return failed;
         }
         buf.to_original::<Install, _>().unwrap_or(failed)
@@ -197,7 +200,9 @@ impl AppHost {
 
     /// Removes an app and its data, once the owner says so on maki.
     pub fn remove(&self, id: &str) -> u32 {
-        let Ok(mut buf) = Buffer::into_buf(Remove { id: id.into(), result: RESULT_FAILED }) else { return RESULT_FAILED };
+        let Ok(mut buf) = Buffer::into_buf(Remove { id: id.into(), result: RESULT_FAILED }) else {
+            return RESULT_FAILED;
+        };
         if buf.lend_mut(self.conn, HostOp::Remove.to_u32().unwrap()).is_err() {
             return RESULT_FAILED;
         }
@@ -211,7 +216,9 @@ impl AppHost {
         let request = AppMessage { id: id.into(), message, answer: Vec::new(), result: RESULT_FAILED };
         // room for the message and the answer
         let mut buf = Buffer::new(3 * 4096);
-        if buf.replace(request).is_err() || buf.lend_mut(self.conn, HostOp::Message.to_u32().unwrap()).is_err() {
+        if buf.replace(request).is_err()
+            || buf.lend_mut(self.conn, HostOp::Message.to_u32().unwrap()).is_err()
+        {
             return failed;
         }
         buf.to_original::<AppMessage, _>().unwrap_or(failed)
@@ -222,7 +229,9 @@ impl AppHost {
         let failed = StoreUpdate { result: RESULT_FAILED, done: true, ..Default::default() };
         let request = StoreUpdate { total, offset, data, result: RESULT_FAILED, ..Default::default() };
         let mut buf = Buffer::new(8192);
-        if buf.replace(request).is_err() || buf.lend_mut(self.conn, HostOp::StoreUpdate.to_u32().unwrap()).is_err() {
+        if buf.replace(request).is_err()
+            || buf.lend_mut(self.conn, HostOp::StoreUpdate.to_u32().unwrap()).is_err()
+        {
             return failed;
         }
         buf.to_original::<StoreUpdate, _>().unwrap_or(failed)
@@ -319,14 +328,15 @@ impl Record {
         };
         let sizes = take(8);
         let (bundle, storage) = match (sizes, b.len() - at) {
-            (Some(s), 0) => (u32::from_le_bytes(s[..4].try_into().ok()?), u32::from_le_bytes(s[4..].try_into().ok()?)),
+            (Some(s), 0) => {
+                (u32::from_le_bytes(s[..4].try_into().ok()?), u32::from_le_bytes(s[4..].try_into().ok()?))
+            }
             (None, 0) => (0, 0),
             _ => return None,
         };
         Some(Record { version, backup, from_store, developer, name, label, icon, bundle, storage })
     }
 }
-
 
 #[cfg(test)]
 mod tests {

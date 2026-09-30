@@ -42,7 +42,10 @@ struct Record {
 
 /// The BIP39 test phrase's seed: wallet apps' keys in these tests.
 fn test_seed() -> [u8; 64] {
-    let words: Vec<&str> = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about".split(' ').collect();
+    let words: Vec<&str> =
+        "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about"
+            .split(' ')
+            .collect();
     maki_seed::seed(&words, "")
 }
 
@@ -68,25 +71,40 @@ impl Platform for Script {
         }
         event
     }
+
     fn present(&mut self, canvas: &Canvas) { self.0.borrow_mut().frames.push(canvas.clone()) }
+
     fn set_menu(&mut self, items: &[String]) { self.0.borrow_mut().menu = items.to_vec() }
+
     fn millis(&self) -> u64 { self.0.borrow().now.max(5_000) }
+
     fn unix_time(&self) -> Option<(u64, bool)> { Some((1_790_000_000, true)) }
+
     fn random(&mut self, buf: &mut [u8]) { buf.iter_mut().for_each(|b| *b = 0x5a) }
+
     fn log(&mut self, line: &str) { self.0.borrow_mut().logs.push(line.into()) }
+
     fn storage_get(&mut self, key: &str) -> Option<Vec<u8>> { self.0.borrow().storage.get(key).cloned() }
+
     fn storage_set(&mut self, key: &str, value: &[u8]) -> Result<(), ()> {
         self.0.borrow_mut().storage.insert(key.into(), value.into());
         Ok(())
     }
+
     fn storage_delete(&mut self, key: &str) -> bool { self.0.borrow_mut().storage.remove(key).is_some() }
+
     fn storage_keys(&mut self) -> Vec<String> { self.0.borrow().storage.keys().cloned().collect() }
+
     fn ask(&mut self, ask: &Ask) -> Answer {
         let mut r = self.0.borrow_mut();
         r.asks.push(ask.clone());
         r.answers.pop_front().unwrap_or(Answer::NoAnswer)
     }
-    fn app_secret(&mut self, label: &str) -> Option<[u8; 32]> { (!self.0.borrow().locked).then(|| secret_for(label)) }
+
+    fn app_secret(&mut self, label: &str) -> Option<[u8; 32]> {
+        (!self.0.borrow().locked).then(|| secret_for(label))
+    }
+
     fn type_text(&mut self, text: &str) -> bool {
         let mut r = self.0.borrow_mut();
         if r.locked {
@@ -95,12 +113,15 @@ impl Platform for Script {
         r.typed.push(text.into());
         true
     }
+
     fn scan_qr(&mut self) -> Option<String> {
         let mut r = self.0.borrow_mut();
         r.scans += 1;
         r.qr.clone()
     }
+
     fn motion(&mut self) -> Option<[i16; 3]> { self.0.borrow().motion }
+
     fn wallet(&mut self, op: u8, path: &[u32], digest: &[u8]) -> Result<Vec<u8>, i32> {
         let mut r = self.0.borrow_mut();
         if r.locked {
@@ -114,11 +135,13 @@ impl Platform for Script {
             _ => FAILED,
         })
     }
+
     fn review(&mut self, review: &Review) -> Answer {
         let mut r = self.0.borrow_mut();
         r.reviews.push(review.clone());
         r.answers.pop_front().unwrap_or(Answer::NoAnswer)
     }
+
     fn show_backup(&mut self, path: &[u32]) -> Result<Answer, i32> {
         let mut r = self.0.borrow_mut();
         if r.locked {
@@ -128,15 +151,18 @@ impl Platform for Script {
         let answer = r.answers.pop_front().unwrap_or(Answer::NoAnswer);
         if answer == Answer::Yes {
             let keys = maki_hd::seed::SeedKeys::from_seed(&test_seed()).unwrap();
-            let words = maki_hd::seed::answer(&keys, maki_hd::op::MONERO_WORDS, path, &[], &[0; 32]).map_err(|e| match e {
-                maki_hd::Error::Path => NOT_FOUND,
-                _ => FAILED,
-            })?;
+            let words = maki_hd::seed::answer(&keys, maki_hd::op::MONERO_WORDS, path, &[], &[0; 32])
+                .map_err(|e| match e {
+                    maki_hd::Error::Path => NOT_FOUND,
+                    _ => FAILED,
+                })?;
             r.backups.push(String::from_utf8(words).unwrap());
         }
         Ok(answer)
     }
+
     fn message(&mut self) -> Option<Vec<u8>> { self.0.borrow().current.clone() }
+
     fn reply(&mut self, reply: &[u8]) -> bool {
         let mut r = self.0.borrow_mut();
         if r.current.take().is_none() {
@@ -149,13 +175,16 @@ impl Platform for Script {
 
 const LIMITS: Limits = Limits { memory: 256 * 1024, storage: 1024, fuel: 1_000_000, granted: Granted::NONE };
 
-fn with(permissions: &[maki_bundle::Permission]) -> Limits { Limits { granted: Granted::of(permissions), ..LIMITS } }
+fn with(permissions: &[maki_bundle::Permission]) -> Limits {
+    Limits { granted: Granted::of(permissions), ..LIMITS }
+}
 
 fn module(body: &str) -> Vec<u8> { wat::parse_str(body).unwrap() }
 
 /// Runs `wat` with `events`, returning why it stopped and what it did.
 fn run_with(wat: &str, events: &[Event], limits: Limits) -> (Stop, Record) {
-    let record = Rc::new(RefCell::new(Record { events: events.iter().copied().collect(), ..Default::default() }));
+    let record =
+        Rc::new(RefCell::new(Record { events: events.iter().copied().collect(), ..Default::default() }));
     let stop = run(&module(wat), Box::new(Script(record.clone())), limits);
     let r = Rc::try_unwrap(record).ok().unwrap().into_inner();
     (stop, r)
@@ -193,7 +222,15 @@ const ECHO: &str = r#"
 
 #[test]
 fn events_reach_the_app_as_codes() {
-    let events = [Event::Left, Event::Right, Event::Centre, Event::Menu(2), Event::Hidden, Event::Shown, Event::Timeout];
+    let events = [
+        Event::Left,
+        Event::Right,
+        Event::Centre,
+        Event::Menu(2),
+        Event::Hidden,
+        Event::Shown,
+        Event::Timeout,
+    ];
     let (stop, r) = run_with(ECHO, &events, LIMITS);
     assert_eq!(stop, Stop::Finished);
     assert_eq!(r.logs, ["1", "2", "3", "258", "5", "4", "0", "6"]);
@@ -222,7 +259,9 @@ fn drawing_reaches_the_screen_when_presented() {
     assert_eq!(stop, Stop::Finished);
     assert_eq!(r.frames.len(), 1);
     let f = &r.frames[0];
-    let lit = |x0, y0, x1, y1| (y0..y1).flat_map(|y| (x0..x1).map(move |x| (x, y))).filter(|&(x, y)| f.get(x, y)).count();
+    let lit = |x0, y0, x1, y1| {
+        (y0..y1).flat_map(|y| (x0..x1).map(move |x| (x, y))).filter(|&(x, y)| f.get(x, y)).count()
+    };
     assert!(lit(0, 0, 20, 15) > 10, "no text:\n{f:?}");
     assert_eq!(lit(100, 90, 128, 110), 28 * 20);
     assert_eq!(lit(30, 30, 90, 80), 0);
@@ -282,13 +321,31 @@ fn abort_says_why() {
 fn traps_and_bad_arguments_stop_the_app_not_maki() {
     let cases = [
         // text from beyond the end of memory
-        (r#"(drop (call $text (i32.const 0) (i32.const 0) (i32.const 65530) (i32.const 10) (i32.const 0) (i32.const 1)))"#, "text: bad pointer"),
+        (
+            r#"(drop (call $text (i32.const 0) (i32.const 0) (i32.const 65530) (i32.const 10) (i32.const 0) (i32.const 1)))"#,
+            "text: bad pointer",
+        ),
         // a length that wraps around
-        (r#"(drop (call $text (i32.const 0) (i32.const 0) (i32.const 16) (i32.const -1) (i32.const 0) (i32.const 1)))"#, "more than"),
-        (r#"(drop (call $text (i32.const 0) (i32.const 0) (i32.const 16) (i32.const 2) (i32.const 9) (i32.const 1)))"#, "no text style 9"),
-        (r#"(drop (call $text (i32.const 0) (i32.const 0) (i32.const 16) (i32.const 2) (i32.const 0) (i32.const 3)))"#, "no color 3"),
-        (r#"(call $blit (i32.const 0) (i32.const 0) (i32.const 1000) (i32.const 1) (i32.const 0) (i32.const 1))"#, "bigger than"),
-        (r#"(call $blit (i32.const 0) (i32.const 0) (i32.const 256) (i32.const 256) (i32.const 60000) (i32.const 1))"#, "blit: bad pointer"),
+        (
+            r#"(drop (call $text (i32.const 0) (i32.const 0) (i32.const 16) (i32.const -1) (i32.const 0) (i32.const 1)))"#,
+            "more than",
+        ),
+        (
+            r#"(drop (call $text (i32.const 0) (i32.const 0) (i32.const 16) (i32.const 2) (i32.const 9) (i32.const 1)))"#,
+            "no text style 9",
+        ),
+        (
+            r#"(drop (call $text (i32.const 0) (i32.const 0) (i32.const 16) (i32.const 2) (i32.const 0) (i32.const 3)))"#,
+            "no color 3",
+        ),
+        (
+            r#"(call $blit (i32.const 0) (i32.const 0) (i32.const 1000) (i32.const 1) (i32.const 0) (i32.const 1))"#,
+            "bigger than",
+        ),
+        (
+            r#"(call $blit (i32.const 0) (i32.const 0) (i32.const 256) (i32.const 256) (i32.const 60000) (i32.const 1))"#,
+            "blit: bad pointer",
+        ),
         (r#"(call $random (i32.const 65535) (i32.const 2))"#, "random: bad pointer"),
         (r#"(drop (i32.load (i32.const 70000)))"#, "out of bounds"),
         (r#"unreachable"#, "unreachable"),
@@ -315,7 +372,10 @@ fn traps_and_bad_arguments_stop_the_app_not_maki() {
 #[test]
 fn only_maki_functions_can_be_imported() {
     let cases = [
-        (r#"(import "wasi_snapshot_preview1" "fd_write" (func (param i32 i32 i32 i32) (result i32)))"#, "wasi_snapshot_preview1.fd_write"),
+        (
+            r#"(import "wasi_snapshot_preview1" "fd_write" (func (param i32 i32 i32 i32) (result i32)))"#,
+            "wasi_snapshot_preview1.fd_write",
+        ),
         (r#"(import "maki" "read_phrase" (func))"#, "read_phrase"),
         (r#"(import "maki" "clear" (func (param i64)))"#, "clear"),
         (r#"(import "maki" "memory" (memory 1))"#, "memory"),
@@ -332,7 +392,10 @@ fn what_check_requires() {
     let ok = r#"(module (memory (export "memory") 1) (func (export "maki_main")))"#;
     check(&module(ok), LIMITS).unwrap();
     let cases = [
-        (r#"(module (memory (export "memory") 1) (func $s) (start $s) (func (export "maki_main")))"#, "start"),
+        (
+            r#"(module (memory (export "memory") 1) (func $s) (start $s) (func (export "maki_main")))"#,
+            "start",
+        ),
         (r#"(module (memory (export "memory") 1) (func (export "main")))"#, "maki_main"),
         (r#"(module (memory (export "memory") 1) (func (export "maki_main") (param i32)))"#, "maki_main"),
         (r#"(module (func (export "maki_main")))"#, "memory"),
@@ -674,18 +737,30 @@ fn an_apps_keys_are_its_secret_and_the_ed25519_key_from_it() {
     // locked: no secret, and the app is told so
     let imports = r#"(import "maki" "key_sign" (func $sign (param i32 i32 i32 i32 i32) (result i32)))"#;
     let call = "(call $sign (i32.const 0) (i32.const 3) (i32.const 0) (i32.const 3) (i32.const 100))";
-    let (stop, r) = call_with(imports, "ssh", call, Record { locked: true, ..Default::default() }, with(&[Permission::Keys]));
+    let (stop, r) = call_with(
+        imports,
+        "ssh",
+        call,
+        Record { locked: true, ..Default::default() },
+        with(&[Permission::Keys]),
+    );
     assert_eq!((stop, result_of(&r)), (Stop::Finished, FAILED));
     // a label with a control character isn't one
     let call = "(call $sign (i32.const 0) (i32.const 4) (i32.const 0) (i32.const 3) (i32.const 100))";
     let (_, r) = call_with(imports, "ss\\0ah", call, Record::default(), with(&[Permission::Keys]));
     assert_eq!(result_of(&r), INVALID);
     // too much to sign
-    let call = format!("(call $sign (i32.const 0) (i32.const 3) (i32.const 0) (i32.const {}) (i32.const 100))", MAX_SIGN + 1);
+    let call = format!(
+        "(call $sign (i32.const 0) (i32.const 3) (i32.const 0) (i32.const {}) (i32.const 100))",
+        MAX_SIGN + 1
+    );
     let (_, r) = call_with(imports, "ssh", &call, Record::default(), with(&[Permission::Keys]));
     assert_eq!(result_of(&r), TOO_BIG);
     // a label longer than there can be stops the app
-    let call = format!("(call $sign (i32.const 0) (i32.const {}) (i32.const 0) (i32.const 3) (i32.const 100))", MAX_LABEL + 1);
+    let call = format!(
+        "(call $sign (i32.const 0) (i32.const {}) (i32.const 0) (i32.const 3) (i32.const 100))",
+        MAX_LABEL + 1
+    );
     let (stop, _) = call_with(imports, "ssh", &call, Record::default(), with(&[Permission::Keys]));
     assert!(matches!(stop, Stop::Crashed(_)), "{stop:?}");
 }
@@ -703,14 +778,29 @@ fn asks_reach_the_owner_and_bring_back_the_answer() {
         assert_eq!((stop, result_of(&r)), (Stop::Finished, code));
         assert_eq!(
             r.asks,
-            [Ask { question: "Sign in?".into(), detail: "as kara@example".into(), yes: "sign".into(), no: "cancel".into(), timeout_s: ASK_TIMEOUT_S }]
+            [Ask {
+                question: "Sign in?".into(),
+                detail: "as kara@example".into(),
+                yes: "sign".into(),
+                no: "cancel".into(),
+                timeout_s: ASK_TIMEOUT_S
+            }]
         );
     }
     // just a question, and how long to wait, within what maki allows
     for (timeout, expect) in [(10, 10), (1, 5), (1000, MAX_ASK_TIMEOUT_S), (-1, ASK_TIMEOUT_S)] {
         let call = format!("(call $ask (i32.const 0) (i32.const 8) (i32.const {timeout}))");
         let (_, r) = call_with(imports, "Proceed?", &call, Record::default(), with(&[Permission::Ask]));
-        assert_eq!(r.asks[0], Ask { question: "Proceed?".into(), detail: "".into(), yes: "".into(), no: "".into(), timeout_s: expect });
+        assert_eq!(
+            r.asks[0],
+            Ask {
+                question: "Proceed?".into(),
+                detail: "".into(),
+                yes: "".into(),
+                no: "".into(),
+                timeout_s: expect
+            }
+        );
     }
     // what isn't an ask never reaches the owner
     let too_long = "q".repeat(MAX_QUESTION + 1);
@@ -728,7 +818,8 @@ fn typing_takes_plain_text_only() {
     use maki_bundle::Permission;
     let imports = r#"(import "maki" "type_text" (func $type (param i32 i32) (result i32)))"#;
     let call = |len: usize| format!("(call $type (i32.const 0) (i32.const {len}))");
-    let (_, r) = call_with(imports, "ls -la\\0a\\09x", &call(9), Record::default(), with(&[Permission::Keyboard]));
+    let (_, r) =
+        call_with(imports, "ls -la\\0a\\09x", &call(9), Record::default(), with(&[Permission::Keyboard]));
     assert_eq!((result_of(&r), r.typed.clone()), (0, vec!["ls -la\n\tx".to_string()]));
     // not ASCII, or a control character: nothing typed
     for bad in ["caf\\c3\\a9", "bell\\07"] {
@@ -738,10 +829,17 @@ fn typing_takes_plain_text_only() {
         assert_eq!(result_of(&r), INVALID, "{bad}");
         assert!(r.typed.is_empty());
     }
-    let (_, r) = call_with(imports, "x", &call(MAX_TYPE + 1), Record::default(), with(&[Permission::Keyboard]));
+    let (_, r) =
+        call_with(imports, "x", &call(MAX_TYPE + 1), Record::default(), with(&[Permission::Keyboard]));
     assert_eq!(result_of(&r), TOO_BIG);
     // maki couldn't type (not plugged in, or not in front)
-    let (_, r) = call_with(imports, "hi", &call(2), Record { locked: true, ..Default::default() }, with(&[Permission::Keyboard]));
+    let (_, r) = call_with(
+        imports,
+        "hi",
+        &call(2),
+        Record { locked: true, ..Default::default() },
+        with(&[Permission::Keyboard]),
+    );
     assert_eq!(result_of(&r), FAILED);
 }
 
@@ -791,12 +889,24 @@ fn messages_come_with_an_event_and_get_one_answer_each() {
 
     // nothing to read before a message comes
     let imports = r#"(import "maki" "link_read" (func $read (param i32 i32) (result i32)))"#;
-    let (_, r) = call_with(imports, "", "(call $read (i32.const 0) (i32.const 64))", Record::default(), with(&[Permission::Link]));
+    let (_, r) = call_with(
+        imports,
+        "",
+        "(call $read (i32.const 0) (i32.const 64))",
+        Record::default(),
+        with(&[Permission::Link]),
+    );
     assert_eq!(result_of(&r), NOT_FOUND);
     // too big an answer
     let imports = r#"(import "maki" "link_reply" (func $reply (param i32 i32) (result i32)))"#;
     let call = format!("(call $reply (i32.const 0) (i32.const {}))", MAX_MESSAGE + 1);
-    let (_, r) = call_with(imports, "", &call, Record { current: Some(vec![1]), ..Default::default() }, with(&[Permission::Link]));
+    let (_, r) = call_with(
+        imports,
+        "",
+        &call,
+        Record { current: Some(vec![1]), ..Default::default() },
+        with(&[Permission::Link]),
+    );
     assert_eq!(result_of(&r), TOO_BIG);
 }
 
@@ -807,16 +917,29 @@ fn the_camera_scans_qr_codes_and_motion_reads_the_accelerometer() {
     let call = "(call $scan (i32.const 0) (i32.const 8))";
     let wat_with = |imports: &str, call: &str| (imports.to_string(), call.to_string());
     let (i, c) = wat_with(imports, call);
-    let (_, r) = call_with(&i, "", &c, Record { qr: Some("otpauth://totp/x".into()), ..Default::default() }, with(&[Permission::Camera]));
+    let (_, r) = call_with(
+        &i,
+        "",
+        &c,
+        Record { qr: Some("otpauth://totp/x".into()), ..Default::default() },
+        with(&[Permission::Camera]),
+    );
     // its whole length, as far as it fits
     assert_eq!((result_of(&r), r.scans), (16, 1));
     let (_, r) = call_with(&i, "", &c, Record::default(), with(&[Permission::Camera]));
     assert_eq!(result_of(&r), NOT_FOUND);
 
     let imports = r#"(import "maki" "motion_read" (func $read (param i32) (result i32)))"#;
-    let (_, r) = call_with(imports, "", "(call $read (i32.const 0))", Record { motion: Some([12, -980, 1000]), ..Default::default() }, with(&[Permission::Motion]));
+    let (_, r) = call_with(
+        imports,
+        "",
+        "(call $read (i32.const 0))",
+        Record { motion: Some([12, -980, 1000]), ..Default::default() },
+        with(&[Permission::Motion]),
+    );
     assert_eq!(result_of(&r), 0);
-    let (_, r) = call_with(imports, "", "(call $read (i32.const 0))", Record::default(), with(&[Permission::Motion]));
+    let (_, r) =
+        call_with(imports, "", "(call $read (i32.const 0))", Record::default(), with(&[Permission::Motion]));
     assert_eq!(result_of(&r), FAILED);
     // what it read, laid out as the SDK reads it
     let wat = r#"(module
@@ -885,7 +1008,11 @@ fn wallet_session(paths: &[&str], permissions: &[maki_bundle::Permission]) -> (S
     wallet_session_on(maki_bundle::Curve::Secp256k1, paths, permissions)
 }
 
-fn wallet_session_on(curve: maki_bundle::Curve, paths: &[&str], permissions: &[maki_bundle::Permission]) -> (Session, Rc<RefCell<Record>>) {
+fn wallet_session_on(
+    curve: maki_bundle::Curve,
+    paths: &[&str],
+    permissions: &[maki_bundle::Permission],
+) -> (Session, Rc<RefCell<Record>>) {
     let record = Rc::new(RefCell::new(Record::default()));
     let mut s = Session::new(Box::new(Script(record.clone())), with(permissions));
     s.wallet = Some(maki_bundle::Wallet { curve, paths: paths.iter().map(|p| path(p)).collect() });
@@ -934,7 +1061,12 @@ fn a_signature_needs_a_yes_to_a_review_on_makis_screen() {
     assert_eq!(review.pages.len(), 2);
     assert_eq!(
         review.pages[0],
-        Page { heading: "Send 1 of 1".into(), value: "0.0007 BTC".into(), mono: "bc1qcr8te4kr609gcawutmrza0j4xv80jy8z306fyu".into(), prose: String::new() }
+        Page {
+            heading: "Send 1 of 1".into(),
+            value: "0.0007 BTC".into(),
+            mono: "bc1qcr8te4kr609gcawutmrza0j4xv80jy8z306fyu".into(),
+            prose: String::new()
+        }
     );
     assert_eq!((review.pages[1].mono.as_str(), review.pages[1].prose.as_str()), ("", "24 sat/vB"));
     assert_eq!(review.timeout_s, REVIEW_TIMEOUT_S);
@@ -988,12 +1120,24 @@ fn any_app_that_may_ask_can_ask_after_pages_but_a_yes_signs_nothing() {
     assert_eq!(s.ask_review(text, 9999), 1);
     assert_eq!(s.ask_review(text, 0), 2);
     let reviews = record.borrow().reviews.clone();
-    assert_eq!((reviews[0].question.as_str(), reviews[0].detail.as_str()), ("Run it as root?", "sudo on laptop"));
+    assert_eq!(
+        (reviews[0].question.as_str(), reviews[0].detail.as_str()),
+        ("Run it as root?", "sudo on laptop")
+    );
     assert_eq!(
         reviews[0].pages,
         [
-            Page { heading: "Command".into(), mono: "/usr/bin/systemctl restart nginx".into(), ..Page::default() },
-            Page { heading: "Asked by".into(), value: "kara".into(), prose: "in /home/kara".into(), ..Page::default() },
+            Page {
+                heading: "Command".into(),
+                mono: "/usr/bin/systemctl restart nginx".into(),
+                ..Page::default()
+            },
+            Page {
+                heading: "Asked by".into(),
+                value: "kara".into(),
+                prose: "in /home/kara".into(),
+                ..Page::default()
+            },
         ]
     );
     // an ask's answers unless the app names its own, and a review's time
@@ -1006,7 +1150,8 @@ fn any_app_that_may_ask_can_ask_after_pages_but_a_yes_signs_nothing() {
     // what doesn't fit a review doesn't fit here either, and needs the permission
     assert_eq!(s.ask_review("Run?\x1e \x1fno heading", 0), INVALID);
     assert_eq!(s.ask_review(&"x".repeat(MAX_REVIEW + 1), 0), TOO_BIG);
-    let mut none = Session::new(Box::new(Script(Rc::new(RefCell::new(Record::default())))), with(&[Permission::Keys]));
+    let mut none =
+        Session::new(Box::new(Script(Rc::new(RefCell::new(Record::default())))), with(&[Permission::Keys]));
     assert_eq!(none.ask_review(text, 0), REFUSED);
     // a wallet app's yes to one allows no signature
     let (mut s, record) = wallet_session(&["m/84'/0'"], &[Permission::Wallet, Permission::Ask]);
@@ -1068,7 +1213,10 @@ fn wallet_functions_came_with_host_api_3() {
         memory_kib: 64,
         backup: true,
         description: String::new(),
-        wallet: Some(maki_bundle::Wallet { curve: maki_bundle::Curve::Secp256k1, paths: vec![path("m/84'/0'")] }),
+        wallet: Some(maki_bundle::Wallet {
+            curve: maki_bundle::Curve::Secp256k1,
+            paths: vec![path("m/84'/0'")],
+        }),
     };
     let err = admit(&manifest(2), &code).unwrap_err();
     assert!(err.contains("wallet_fingerprint, which came with host API 3, and its manifest says 2"), "{err}");
@@ -1079,12 +1227,13 @@ fn wallet_functions_came_with_host_api_3() {
 #[test]
 fn monero_keys_and_backup_come_from_maki_on_its_coin_alone() {
     use maki_bundle::Permission;
-    use maki_xmr::{address, Kind, Network};
+    use maki_xmr::{Kind, Network, address};
     let (mut s, record) = wallet_session(&["m/44'/128'"], &[Permission::Wallet]);
     let p = path("m/44'/128'/0'/0/0");
     // the public spend and view keys: the account's own address
     let keys = s.wallet_public(&p, WALLET_MONERO).unwrap();
-    let (spend, view): ([u8; 32], [u8; 32]) = (keys[..32].try_into().unwrap(), keys[32..].try_into().unwrap());
+    let (spend, view): ([u8; 32], [u8; 32]) =
+        (keys[..32].try_into().unwrap(), keys[32..].try_into().unwrap());
     assert_eq!(
         address(Network::Mainnet, Kind::Standard, &spend, &view),
         "49vDbkSo7eve3J41sBdjvjaBUyz8qHohsQcGtRf63qEUTMBvmA45fpp5pSacMdSg7A3b71RejLzB8EkGbfjp5PELVF2N4Zn"
@@ -1092,7 +1241,12 @@ fn monero_keys_and_backup_come_from_maki_on_its_coin_alone() {
     // subaddresses, the account's own (0, 0) among them
     let sub = s.wallet_subaddress(&p, 0, 1).unwrap();
     assert_eq!(
-        address(Network::Mainnet, Kind::Subaddress, &sub[..32].try_into().unwrap(), &sub[32..].try_into().unwrap()),
+        address(
+            Network::Mainnet,
+            Kind::Subaddress,
+            &sub[..32].try_into().unwrap(),
+            &sub[32..].try_into().unwrap()
+        ),
         "8AB7PQPtducdkghYFN2prK3rZ7zPeL9f2REEdqE4WXYbSZr3797Aqti5xAjRsVy4jTdcwMW11GWejQtqk2kNXxj2QZxJwPZ"
     );
     assert_eq!(s.wallet_subaddress(&p, 0, 0).unwrap()[..], keys[..]);
@@ -1146,7 +1300,10 @@ fn moneros_functions_came_with_host_api_4() {
         memory_kib: 64,
         backup: true,
         description: String::new(),
-        wallet: Some(maki_bundle::Wallet { curve: maki_bundle::Curve::Secp256k1, paths: vec![path("m/44'/128'")] }),
+        wallet: Some(maki_bundle::Wallet {
+            curve: maki_bundle::Curve::Secp256k1,
+            paths: vec![path("m/44'/128'")],
+        }),
     };
     let err = admit(&manifest(3), &code).unwrap_err();
     assert!(err.contains("wallet_subaddress, which came with host API 4, and its manifest says 3"), "{err}");
@@ -1156,10 +1313,20 @@ fn moneros_functions_came_with_host_api_4() {
 /// An output paid to the test phrase's Monero account (its subaddress `minor`), in a ring of 16
 /// made-up members: what maki desktop asks maki to spend.
 fn monero_input(seed: u64, minor: u32, amount: u64) -> maki_xmr::request::Input {
-    use maki_xmr::sign::{self, Scalar, G};
+    use maki_xmr::sign::{self, G, Scalar};
     let keys = maki_hd::seed::SeedKeys::from_seed(&test_seed()).unwrap();
-    let pair = maki_hd::seed::answer(&keys, maki_hd::op::MONERO_SUBADDRESS, &path("m/44'/128'/0'/0/0"), &[0, 0, 0, 0, minor as u8, 0, 0, 0], &[0; 32]).unwrap();
-    let (spend, view) = (sign::point(&pair[..32].try_into().unwrap()).unwrap(), sign::point(&pair[32..].try_into().unwrap()).unwrap());
+    let pair = maki_hd::seed::answer(
+        &keys,
+        maki_hd::op::MONERO_SUBADDRESS,
+        &path("m/44'/128'/0'/0/0"),
+        &[0, 0, 0, 0, minor as u8, 0, 0, 0],
+        &[0; 32],
+    )
+    .unwrap();
+    let (spend, view) = (
+        sign::point(&pair[..32].try_into().unwrap()).unwrap(),
+        sign::point(&pair[32..].try_into().unwrap()).unwrap(),
+    );
     let scalar = |n: u64| Scalar::from_bytes_mod_order(maki_xmr::keccak(&(seed * 1000 + n).to_le_bytes()));
     let r = scalar(0);
     let tx_key = if minor == 0 { G * r } else { spend * r };
@@ -1177,13 +1344,20 @@ fn monero_input(seed: u64, minor: u32, amount: u64) -> maki_xmr::request::Input 
             }
         })
         .collect();
-    maki_xmr::request::Input { amount, tx_key: tx_key.compress().to_bytes(), index: 1, subaddress: minor, real: 5, ring }
+    maki_xmr::request::Input {
+        amount,
+        tx_key: tx_key.compress().to_bytes(),
+        index: 1,
+        subaddress: minor,
+        real: 5,
+        ring,
+    }
 }
 
 #[test]
 fn spending_monero_needs_a_yes_and_maki_makes_the_transaction() {
     use maki_bundle::Permission;
-    use maki_xmr::request::{read_destination, Payment, Request};
+    use maki_xmr::request::{Payment, Request, read_destination};
     let (mut s, record) = wallet_session(&["m/44'/128'"], &[Permission::Wallet]);
     let p = path("m/44'/128'/0'/0/0");
 
@@ -1192,7 +1366,16 @@ fn spending_monero_needs_a_yes_and_maki_makes_the_transaction() {
     record.borrow_mut().answers.push_back(Answer::Yes);
     assert_eq!(s.wallet_review("Watch on computer?\nit can't spend", 1, 0), 0);
     let view = s.wallet_monero_view_key(&p).unwrap();
-    assert_eq!(view.to_vec(), (0..32).map(|i| u8::from_str_radix(&"0f3fe25d0c6d4c94dde0c0bcc214b233e9c72927f813728b0f01f28f9d5e1201"[2 * i..2 * i + 2], 16).unwrap()).collect::<Vec<u8>>());
+    assert_eq!(
+        view.to_vec(),
+        (0..32)
+            .map(|i| u8::from_str_radix(
+                &"0f3fe25d0c6d4c94dde0c0bcc214b233e9c72927f813728b0f01f28f9d5e1201"[2 * i..2 * i + 2],
+                16
+            )
+            .unwrap())
+            .collect::<Vec<u8>>()
+    );
     assert_eq!(s.wallet_monero_view_key(&p), Err(REFUSED), "one yes, one key");
 
     // a key image, for the account's outputs alone, with no yes
@@ -1209,13 +1392,18 @@ fn spending_monero_needs_a_yes_and_maki_makes_the_transaction() {
     assert_eq!(s.wallet_monero_key_image(&p, &output[..79]), Err(INVALID));
 
     // a transaction: a signature for each input, of what the yes allowed
-    let them = "49vDbkSo7eve3J41sBdjvjaBUyz8qHohsQcGtRf63qEUTMBvmA45fpp5pSacMdSg7A3b71RejLzB8EkGbfjp5PELVF2N4Zn";
+    let them =
+        "49vDbkSo7eve3J41sBdjvjaBUyz8qHohsQcGtRf63qEUTMBvmA45fpp5pSacMdSg7A3b71RejLzB8EkGbfjp5PELVF2N4Zn";
     let request = Request {
         network: maki_xmr::Network::Mainnet,
         account: 0,
         fee: 1_000,
         change: 2_000,
-        payments: vec![Payment { address: them.into(), amount: 12_000, destination: read_destination(them).unwrap().1 }],
+        payments: vec![Payment {
+            address: them.into(),
+            amount: 12_000,
+            destination: read_destination(them).unwrap().1,
+        }],
         inputs: vec![monero_input(2, 0, 10_000), monero_input(3, 1, 5_000)],
     };
     let bytes = request.to_bytes();
@@ -1238,7 +1426,10 @@ fn spending_monero_needs_a_yes_and_maki_makes_the_transaction() {
     record.borrow_mut().answers.push_back(Answer::Yes);
     assert_eq!(s.wallet_review("Sign and spend?\nx", 2, 0), 0);
     let answer = s.wallet_monero_sign(&p, &lie.to_bytes()).unwrap();
-    assert_eq!((answer[0], String::from_utf8_lossy(&answer[1..]).into_owned()), (1, "input 1's amount isn't what the chain has".into()));
+    assert_eq!(
+        (answer[0], String::from_utf8_lossy(&answer[1..]).into_owned()),
+        (1, "input 1's amount isn't what the chain has".into())
+    );
     // not a request, or off its paths
     assert_eq!(s.wallet_monero_sign(&p, &bytes[..bytes.len() - 1]), Err(INVALID));
     record.borrow_mut().answers.push_back(Answer::Yes);
@@ -1264,7 +1455,10 @@ fn spending_monero_came_with_host_api_5() {
         memory_kib: 64,
         backup: true,
         description: String::new(),
-        wallet: Some(maki_bundle::Wallet { curve: maki_bundle::Curve::Secp256k1, paths: vec![path("m/44'/128'")] }),
+        wallet: Some(maki_bundle::Wallet {
+            curve: maki_bundle::Curve::Secp256k1,
+            paths: vec![path("m/44'/128'")],
+        }),
     };
     let err = admit(&manifest(4), &code).unwrap_err();
     assert!(err.contains("wallet_monero_sign, which came with host API 5, and its manifest says 4"), "{err}");
@@ -1278,7 +1472,8 @@ fn an_ed25519_wallet_has_ed25519_keys_on_its_paths_alone() {
     let (mut s, record) = wallet_session_on(Curve::Ed25519, &["m/44'/501'"], &[Permission::Wallet]);
     let p = path("m/44'/501'/0'/0'");
     let public: [u8; 32] = s.wallet_public(&p, WALLET_ED25519).unwrap().try_into().unwrap();
-    // the test phrase's first Solana account, as Phantom has it (HAgk14JpMQLgt6rVgv7cBQFJWFto5Dqxi472uT3DKpqk)
+    // the test phrase's first Solana account, as Phantom has it
+    // (HAgk14JpMQLgt6rVgv7cBQFJWFto5Dqxi472uT3DKpqk)
     let hex: String = public.iter().map(|b| format!("{b:02x}")).collect();
     assert_eq!(hex, "f036276246a75b9de3349ed42b15e232f6518fc20f5fcd4f1d64e81f9bd258f7");
     // not secp256k1's keys, or Monero's; not off its paths; and SLIP-10's are hardened
@@ -1326,9 +1521,15 @@ fn ed25519_wallets_came_with_host_api_6() {
         memory_kib: 64,
         backup: true,
         description: String::new(),
-        wallet: Some(maki_bundle::Wallet { curve: maki_bundle::Curve::Ed25519, paths: vec![path("m/44'/501'")] }),
+        wallet: Some(maki_bundle::Wallet {
+            curve: maki_bundle::Curve::Ed25519,
+            paths: vec![path("m/44'/501'")],
+        }),
     };
     let err = admit(&manifest(5), &code).unwrap_err();
-    assert!(err.contains("wallet_sign_ed25519, which came with host API 6, and its manifest says 5"), "{err}");
+    assert!(
+        err.contains("wallet_sign_ed25519, which came with host API 6, and its manifest says 5"),
+        "{err}"
+    );
     admit(&manifest(6), &code).unwrap();
 }

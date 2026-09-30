@@ -66,8 +66,12 @@ impl core::fmt::Display for RequestError {
             RequestError::Address(i) => write!(f, "payment {} isn't to an address of this network", i + 1),
             RequestError::Zero(i) => write!(f, "payment {} pays nothing", i + 1),
             RequestError::PaymentId => write!(f, "a payment ID goes with one address alone"),
-            RequestError::Count => write!(f, "1 to {MAX_INPUTS} inputs, and up to {MAX_OUTPUTS} outputs with the change"),
-            RequestError::Ring(i) => write!(f, "input {}'s ring isn't in the chain's order, or doesn't hold it", i + 1),
+            RequestError::Count => {
+                write!(f, "1 to {MAX_INPUTS} inputs, and up to {MAX_OUTPUTS} outputs with the change")
+            }
+            RequestError::Ring(i) => {
+                write!(f, "input {}'s ring isn't in the chain's order, or doesn't hold it", i + 1)
+            }
             RequestError::Sum => write!(f, "the inputs don't add up to the payments, change and fee"),
         }
     }
@@ -147,9 +151,17 @@ impl<'a> Reader<'a> {
         self.0 = rest;
         Ok(taken)
     }
+
     fn u8(&mut self) -> Result<u8, RequestError> { Ok(self.take(1)?[0]) }
-    fn u32(&mut self) -> Result<u32, RequestError> { Ok(u32::from_le_bytes(self.take(4)?.try_into().unwrap())) }
-    fn u64(&mut self) -> Result<u64, RequestError> { Ok(u64::from_le_bytes(self.take(8)?.try_into().unwrap())) }
+
+    fn u32(&mut self) -> Result<u32, RequestError> {
+        Ok(u32::from_le_bytes(self.take(4)?.try_into().unwrap()))
+    }
+
+    fn u64(&mut self) -> Result<u64, RequestError> {
+        Ok(u64::from_le_bytes(self.take(8)?.try_into().unwrap()))
+    }
+
     fn b32(&mut self) -> Result<[u8; 32], RequestError> { Ok(self.take(32)?.try_into().unwrap()) }
 }
 
@@ -210,7 +222,10 @@ impl Request {
     }
 
     fn check(&self) -> Result<(), RequestError> {
-        if self.payments.is_empty() || self.outputs() > MAX_OUTPUTS || self.inputs.is_empty() || self.inputs.len() > MAX_INPUTS
+        if self.payments.is_empty()
+            || self.outputs() > MAX_OUTPUTS
+            || self.inputs.is_empty()
+            || self.inputs.len() > MAX_INPUTS
         {
             return Err(RequestError::Count);
         }
@@ -221,7 +236,11 @@ impl Request {
             return Err(RequestError::PaymentId);
         }
         let spent = self.inputs.iter().try_fold(0u64, |t, i| t.checked_add(i.amount));
-        let paid = self.payments.iter().try_fold(self.fee, |t, p| t.checked_add(p.amount)).and_then(|t| t.checked_add(self.change));
+        let paid = self
+            .payments
+            .iter()
+            .try_fold(self.fee, |t, p| t.checked_add(p.amount))
+            .and_then(|t| t.checked_add(self.change));
         match (spent, paid) {
             (Some(s), Some(p)) if s == p => Ok(()),
             _ => Err(RequestError::Sum),
@@ -230,12 +249,15 @@ impl Request {
 
     /// The transaction's outputs: the payments, and the change, or (with none, and one payment)
     /// an output of nothing to an address nobody has, as wallet2 adds: every transaction has two.
-    pub fn outputs(&self) -> usize { self.payments.len() + usize::from(self.change > 0 || self.payments.len() == 1) }
+    pub fn outputs(&self) -> usize {
+        self.payments.len() + usize::from(self.change > 0 || self.payments.len() == 1)
+    }
 
     /// Its bytes.
     pub fn to_bytes(&self) -> Vec<u8> {
         let ring_size = self.inputs.first().map_or(0, |i| i.ring.len());
-        let mut out = Vec::with_capacity(32 + self.payments.len() * 120 + self.inputs.len() * (64 + ring_size * 72));
+        let mut out =
+            Vec::with_capacity(32 + self.payments.len() * 120 + self.inputs.len() * (64 + ring_size * 72));
         out.push(VERSION);
         out.push(network_byte(self.network));
         out.extend_from_slice(&self.account.to_le_bytes());
@@ -284,11 +306,25 @@ impl Request {
                 Some(id) => format!("payment ID {}", hex(&id)),
                 None => String::new(),
             };
-            pages.push(Page { heading, value: amount(p.amount, self.network), mono: p.address.clone(), prose });
+            pages.push(Page {
+                heading,
+                value: amount(p.amount, self.network),
+                mono: p.address.clone(),
+                prose,
+            });
         }
         if self.change > 0 {
-            let back = if self.account == 0 { String::from("back to you") } else { format!("back to account {}", self.account) };
-            pages.push(Page { heading: String::from("Change"), value: amount(self.change, self.network), mono: back, prose: String::new() });
+            let back = if self.account == 0 {
+                String::from("back to you")
+            } else {
+                format!("back to account {}", self.account)
+            };
+            pages.push(Page {
+                heading: String::from("Change"),
+                value: amount(self.change, self.network),
+                mono: back,
+                prose: String::new(),
+            });
         }
         pages.push(Page {
             heading: String::from(if self.fee_is_high() { "High fee!" } else { "Fee" }),
@@ -335,7 +371,10 @@ pub fn amount(piconero: u64, network: Network) -> String {
 
 fn hex(bytes: &[u8]) -> String {
     const DIGITS: &[u8; 16] = b"0123456789abcdef";
-    bytes.iter().flat_map(|b| [DIGITS[(b >> 4) as usize] as char, DIGITS[(b & 15) as usize] as char]).collect()
+    bytes
+        .iter()
+        .flat_map(|b| [DIGITS[(b >> 4) as usize] as char, DIGITS[(b & 15) as usize] as char])
+        .collect()
 }
 
 /// A payment's address: a standard one, a subaddress, or an integrated address (a standard one
@@ -348,7 +387,9 @@ pub fn read_destination(text: &str) -> Option<(Network, Destination)> {
     if data.len() != 77 || crate::keccak(&data[..73])[..4] != data[73..] {
         return None;
     }
-    let network = [Network::Mainnet, Network::Testnet, Network::Stagenet].into_iter().find(|n| n.integrated_tag() == data[0])?;
+    let network = [Network::Mainnet, Network::Testnet, Network::Stagenet]
+        .into_iter()
+        .find(|n| n.integrated_tag() == data[0])?;
     Some((
         network,
         Destination {

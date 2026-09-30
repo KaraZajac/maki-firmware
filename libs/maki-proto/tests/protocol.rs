@@ -4,8 +4,8 @@ use std::cell::Cell;
 
 use maki_proto::device::*;
 use maki_proto::frame::{self, Deframer, FrameError, Packet};
-use maki_proto::site;
 use maki_proto::kind;
+use maki_proto::site;
 use maki_proto::wire::{Reader, Writer};
 
 const MIDPOINT_MS: u64 = 1_790_399_658_000; // 2026-09-26 05:14:18 UTC, from all three servers
@@ -163,7 +163,10 @@ fn hello_names_the_firmware() {
     let (k, body) = ask(&mut d, kind::HELLO, vec![]);
     assert_eq!(k, kind::HELLO | kind::REPLY);
     let mut r = Reader::new(&body);
-    assert_eq!((r.u8().unwrap(), r.str8().unwrap(), r.str8().unwrap()), (frame::PROTOCOL_VERSION, "maki", "0.1.0"));
+    assert_eq!(
+        (r.u8().unwrap(), r.str8().unwrap(), r.str8().unwrap()),
+        (frame::PROTOCOL_VERSION, "maki", "0.1.0")
+    );
 }
 
 #[test]
@@ -237,7 +240,9 @@ fn proofs_need_a_live_challenge_and_use_it_up() {
 #[test]
 fn the_hosts_word_is_accepted_but_never_over_a_verified_clock() {
     let mut d = device();
-    let set = |d: &mut Device<Replay>, t: u64| ask(d, kind::TIME_UNVERIFIED, Writer::new().u64(t).i32(-18_000).finish());
+    let set = |d: &mut Device<Replay>, t: u64| {
+        ask(d, kind::TIME_UNVERIFIED, Writer::new().u64(t).i32(-18_000).finish())
+    };
 
     let (k, body) = set(&mut d, MIDPOINT_MS);
     assert_eq!((k, body[0]), (kind::TIME_UNVERIFIED | kind::REPLY, 0));
@@ -267,7 +272,9 @@ fn nonsense_arguments_and_messages_are_refused() {
 
 // ---- asks: requests the owner approves on maki ----
 
-fn handled(d: &mut Device<Replay>, kind: u8, body: Vec<u8>) -> Handled { d.handle(&Packet { kind, id: 9, body }) }
+fn handled(d: &mut Device<Replay>, kind: u8, body: Vec<u8>) -> Handled {
+    d.handle(&Packet { kind, id: 9, body })
+}
 
 /// A device whose clock three pinned servers have verified.
 fn verified_device() -> Device<Replay> {
@@ -291,8 +298,16 @@ fn login_and_totp_requests_become_asks() {
         "punycode is fine: it is shown as punycode"
     );
     assert_eq!(
-        handled(&mut d, kind::SAVE_LOGIN, Writer::new().str8("example.org").str8("kara").str8("hunter2").finish()),
-        Handled::Ask(Ask::SaveLogin { site: "example.org".into(), username: "kara".into(), password: "hunter2".into() })
+        handled(
+            &mut d,
+            kind::SAVE_LOGIN,
+            Writer::new().str8("example.org").str8("kara").str8("hunter2").finish()
+        ),
+        Handled::Ask(Ask::SaveLogin {
+            site: "example.org".into(),
+            username: "kara".into(),
+            password: "hunter2".into()
+        })
     );
 }
 
@@ -303,25 +318,36 @@ fn sites_that_could_mislead_on_screen_are_refused() {
         let reply = ask(&mut d, kind::GET_LOGIN, Writer::new().str8(bad).finish());
         assert_eq!(error_code(&reply), ErrorCode::BadArgument as u8, "{bad:?} was accepted");
     }
-    let no_user = ask(&mut d, kind::SAVE_LOGIN, Writer::new().str8("example.org").str8("").str8("pw").finish());
+    let no_user =
+        ask(&mut d, kind::SAVE_LOGIN, Writer::new().str8("example.org").str8("").str8("pw").finish());
     assert_eq!(error_code(&no_user), ErrorCode::BadArgument as u8);
-    let no_password = ask(&mut d, kind::SAVE_LOGIN, Writer::new().str8("example.org").str8("kara").str8("").finish());
+    let no_password =
+        ask(&mut d, kind::SAVE_LOGIN, Writer::new().str8("example.org").str8("kara").str8("").finish());
     assert_eq!(error_code(&no_password), ErrorCode::BadArgument as u8);
 }
 
 #[test]
 fn a_saved_login_cannot_smuggle_lines_into_the_vault() {
     let mut d = device();
-    for (user, pass) in [("kara\ndescription:bank.com", "pw"), ("kara", "pw\npassword:x"), ("kara\r", "pw"), ("ka\u{1b}[2Jra", "pw")] {
-        let reply = ask(&mut d, kind::SAVE_LOGIN, Writer::new().str8("example.org").str8(user).str8(pass).finish());
+    for (user, pass) in [
+        ("kara\ndescription:bank.com", "pw"),
+        ("kara", "pw\npassword:x"),
+        ("kara\r", "pw"),
+        ("ka\u{1b}[2Jra", "pw"),
+    ] {
+        let reply =
+            ask(&mut d, kind::SAVE_LOGIN, Writer::new().str8("example.org").str8(user).str8(pass).finish());
         assert_eq!(error_code(&reply), ErrorCode::BadArgument as u8, "{user:?}/{pass:?} was accepted");
     }
 }
 
 #[test]
 fn codes_wait_for_a_verified_clock() {
-    let totp = |d: &mut Device<Replay>| d.handle(&Packet { kind: kind::GET_TOTP, id: 3, body: Writer::new().str8("github.com").finish() });
-    let refused = Handled::Reply(kind::GET_TOTP | kind::REPLY, reply::totp(Approval::ClockNotVerified, "", 0).1);
+    let totp = |d: &mut Device<Replay>| {
+        d.handle(&Packet { kind: kind::GET_TOTP, id: 3, body: Writer::new().str8("github.com").finish() })
+    };
+    let refused =
+        Handled::Reply(kind::GET_TOTP | kind::REPLY, reply::totp(Approval::ClockNotVerified, "", 0).1);
     let mut d = device();
     assert_eq!(totp(&mut d), refused, "no clock at all");
     // the host's word sets the clock, but a host that could choose the time could collect codes
@@ -333,7 +359,10 @@ fn codes_wait_for_a_verified_clock() {
     assert_eq!(totp(&mut d), Handled::Ask(Ask::Totp { site: "github.com".into() }));
     // logins don't depend on the clock
     let mut d = device();
-    assert!(matches!(d.handle(&Packet { kind: kind::GET_LOGIN, id: 4, body: Writer::new().str8("github.com").finish() }), Handled::Ask(_)));
+    assert!(matches!(
+        d.handle(&Packet { kind: kind::GET_LOGIN, id: 4, body: Writer::new().str8("github.com").finish() }),
+        Handled::Ask(_)
+    ));
 }
 
 #[test]
@@ -394,7 +423,11 @@ fn backup_pieces_are_asked_for_by_offset() {
     );
     let piece = vec![7u8; 100];
     assert_eq!(
-        d.handle(&Packet { kind: kind::BACKUP_PUT, id: 2, body: Writer::new().u32(300).u32(200).bytes16(&piece).finish() }),
+        d.handle(&Packet {
+            kind: kind::BACKUP_PUT,
+            id: 2,
+            body: Writer::new().u32(300).u32(200).bytes16(&piece).finish()
+        }),
         Handled::Backup(Backup::Put { total: 300, offset: 200, data: piece.clone() })
     );
     // pieces that can't be part of a backup maki would take
@@ -410,7 +443,10 @@ fn backup_replies_carry_nothing_unless_approved() {
     let (k, body) = reply::backup_piece(Approval::Locked, 999, 0, &[1, 2, 3]);
     assert_eq!(k, kind::BACKUP_GET | kind::REPLY);
     let mut r = Reader::new(&body);
-    assert_eq!((r.u8().unwrap(), r.u32().unwrap(), r.u32().unwrap(), r.bytes16().unwrap()), (Approval::Locked as u8, 999, 0, &[][..]));
+    assert_eq!(
+        (r.u8().unwrap(), r.u32().unwrap(), r.u32().unwrap(), r.bytes16().unwrap()),
+        (Approval::Locked as u8, 999, 0, &[][..])
+    );
     let (_, body) = reply::restore_piece(true, Approval::Denied, 5, 6, 7);
     let mut r = Reader::new(&body);
     assert_eq!(
@@ -420,7 +456,10 @@ fn backup_replies_carry_nothing_unless_approved() {
     r.end().unwrap();
     let (_, body) = reply::restore_piece(true, Approval::Approved, 5, 6, 7);
     let mut r = Reader::new(&body);
-    assert_eq!((r.u8().unwrap(), r.u8().unwrap(), r.u16().unwrap(), r.u16().unwrap(), r.u16().unwrap()), (1, 0, 5, 6, 7));
+    assert_eq!(
+        (r.u8().unwrap(), r.u8().unwrap(), r.u16().unwrap(), r.u16().unwrap(), r.u16().unwrap()),
+        (1, 0, 5, 6, 7)
+    );
 }
 
 #[test]
@@ -442,7 +481,10 @@ fn bitcoin_and_ethereum_are_wallet_apps_now() {
 #[test]
 fn app_requests_go_to_the_host() {
     let mut d = device();
-    assert_eq!(handled(&mut d, kind::APP_LIST, Writer::new().u32(2).finish()), Handled::Apps(Apps::List { index: 2 }));
+    assert_eq!(
+        handled(&mut d, kind::APP_LIST, Writer::new().u32(2).finish()),
+        Handled::Apps(Apps::List { index: 2 })
+    );
     assert_eq!(handled(&mut d, kind::APP_SPACE, Vec::new()), Handled::Apps(Apps::Space));
     let piece = vec![b'M', b'A', b'K', b'I'];
     assert_eq!(
@@ -454,7 +496,11 @@ fn app_requests_go_to_the_host() {
         Handled::Apps(Apps::Remove { id: "com.leviathan.maki.dice".into() })
     );
     assert_eq!(
-        handled(&mut d, kind::APP_MESSAGE, Writer::new().str8("com.leviathan.maki.ssh").bytes16(b"list").finish()),
+        handled(
+            &mut d,
+            kind::APP_MESSAGE,
+            Writer::new().str8("com.leviathan.maki.ssh").bytes16(b"list").finish()
+        ),
         Handled::Apps(Apps::Message { id: "com.leviathan.maki.ssh".into(), message: b"list".to_vec() })
     );
     assert_eq!(
@@ -480,12 +526,18 @@ fn app_requests_out_of_range_are_refused() {
         (kind::APP_REMOVE, Writer::new().str8("com..dice").finish()),
         (kind::APP_REMOVE, Writer::new().str8("").finish()),
         (kind::APP_MESSAGE, Writer::new().str8("SSH").bytes16(b"list").finish()),
-        (kind::APP_MESSAGE, Writer::new().str8("com.leviathan.maki.ssh").bytes16(&vec![0; MAX_APP_MESSAGE + 1]).finish()),
+        (
+            kind::APP_MESSAGE,
+            Writer::new().str8("com.leviathan.maki.ssh").bytes16(&vec![0; MAX_APP_MESSAGE + 1]).finish(),
+        ),
         (kind::STORE_UPDATE, Writer::new().u32(0).u32(0).bytes16(&[1]).finish()),
         (kind::STORE_UPDATE, Writer::new().u32(0).u32(4).bytes16(&[]).finish()),
         (kind::STORE_UPDATE, Writer::new().u32(MAX_STORE_RECORD + 1).u32(0).bytes16(&[1]).finish()),
         (kind::STORE_UPDATE, Writer::new().u32(10).u32(5).bytes16(&[0; 6]).finish()),
-        (kind::STORE_UPDATE, Writer::new().u32(MAX_STORE_RECORD).u32(0).bytes16(&vec![0; STORE_PIECE + 1]).finish()),
+        (
+            kind::STORE_UPDATE,
+            Writer::new().u32(MAX_STORE_RECORD).u32(0).bytes16(&vec![0; STORE_PIECE + 1]).finish(),
+        ),
     ];
     for (k, body) in bad {
         let reply = ask(&mut d, k, body.clone());
@@ -517,8 +569,14 @@ fn app_replies_carry_only_what_the_answer_allows() {
     assert_eq!(k, kind::APP_LIST | kind::REPLY);
     let mut r = Reader::new(&body);
     assert_eq!((r.u8().unwrap(), r.u32().unwrap(), r.u8().unwrap()), (0, 2, 1));
-    assert_eq!((r.str8().unwrap(), r.str8().unwrap(), r.u32().unwrap(), r.str8().unwrap()), ("com.leviathan.maki.dice", "Dice", 3, "1.2"));
-    assert_eq!((r.bytes16().unwrap(), r.u8().unwrap(), r.u8().unwrap(), r.u32().unwrap()), (&[7u8; 32][..], 0, 1, 4));
+    assert_eq!(
+        (r.str8().unwrap(), r.str8().unwrap(), r.u32().unwrap(), r.str8().unwrap()),
+        ("com.leviathan.maki.dice", "Dice", 3, "1.2")
+    );
+    assert_eq!(
+        (r.bytes16().unwrap(), r.u8().unwrap(), r.u8().unwrap(), r.u32().unwrap()),
+        (&[7u8; 32][..], 0, 1, 4)
+    );
     assert_eq!(r.bytes16().unwrap().len(), 512);
     assert_eq!((r.u32().unwrap(), r.u32().unwrap()), (9417, 1024));
     r.end().unwrap();
@@ -534,7 +592,10 @@ fn app_replies_carry_only_what_the_answer_allows() {
     assert_eq!(k, kind::APP_SPACE | kind::REPLY);
     let mut r = Reader::new(&body);
     assert_eq!(r.u8().unwrap(), 0);
-    assert_eq!((r.u32().unwrap(), r.u32().unwrap(), r.u32().unwrap(), r.u32().unwrap()), (2, 32, 2 << 20, 11465));
+    assert_eq!(
+        (r.u32().unwrap(), r.u32().unwrap(), r.u32().unwrap(), r.u32().unwrap()),
+        (2, 32, 2 << 20, 11465)
+    );
     r.end().unwrap();
     // locked: none of it
     let (_, body) = reply::app_space(Approval::Locked, &space);
@@ -557,7 +618,8 @@ fn app_replies_carry_only_what_the_answer_allows() {
     assert_eq!(body, [Approval::Unavailable as u8, 0, 0]);
 
     let state = StoreState { root: 2, revocations: 7, revocations_expires: 1_800_000_000 };
-    let (k, body) = reply::store_update(true, Approval::Refused, state, "the revocation list: older than what maki has");
+    let (k, body) =
+        reply::store_update(true, Approval::Refused, state, "the revocation list: older than what maki has");
     assert_eq!(k, kind::STORE_UPDATE | kind::REPLY);
     let mut r = Reader::new(&body);
     assert_eq!((r.u8().unwrap(), r.u8().unwrap()), (1, Approval::Refused as u8));

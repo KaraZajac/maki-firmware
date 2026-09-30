@@ -4,9 +4,9 @@
 //! (`xmr bench: ...`), in maki's own time: the emulator's, or a badge's.
 
 use maki_xmr::bulletproof::{self, Generators};
-use maki_xmr::request::{read_destination, Input, Member, Payment, Request};
-use maki_xmr::sign::{self, Scalar, G};
-use maki_xmr::{spend, Keys, Network};
+use maki_xmr::request::{Input, Member, Payment, Request, read_destination};
+use maki_xmr::sign::{self, G, Scalar};
+use maki_xmr::{Keys, Network, spend};
 
 fn scalar(n: u64) -> Scalar { Scalar::from_bytes_mod_order(maki_xmr::keccak(&n.to_le_bytes())) }
 
@@ -21,7 +21,11 @@ pub fn spawn() {
                 f(i);
             }
             let ms = tt.elapsed_ms() - start;
-            log::warn!("xmr bench: {what}: {}.{:01} ms each ({runs} in {ms} ms)", ms / runs, ms * 10 / runs % 10);
+            log::warn!(
+                "xmr bench: {what}: {}.{:01} ms each ({runs} in {ms} ms)",
+                ms / runs,
+                ms * 10 / runs % 10
+            );
         };
         time("hash onto the curve", 8, &mut |i| {
             core::hint::black_box(sign::hash_to_point(&i.to_le_bytes()));
@@ -45,7 +49,8 @@ pub fn spawn() {
             .collect();
         let pseudo_out = sign::commit(&pseudo_mask, amount);
         time("CLSAG, a ring of 16", 2, &mut |i| {
-            let signed = sign::clsag(&ring, 7, &secret, &(mask - pseudo_mask), &pseudo_out, &[i as u8; 32], &[0; 32]);
+            let signed =
+                sign::clsag(&ring, 7, &secret, &(mask - pseudo_mask), &pseudo_out, &[i as u8; 32], &[0; 32]);
             if signed.is_err() {
                 log::warn!("xmr bench: CLSAG refused: {signed:?}");
             }
@@ -61,11 +66,14 @@ pub fn spawn() {
         });
         // a whole transaction, as maki signs one: two inputs, a payment and change
         let (keys, request) = transaction();
-        time("a transaction, two inputs, two outputs", 1, &mut |i| {
-            match spend::sign_with(&keys, &request, &[i as u8; 32], &mut generators) {
-                Ok(signed) => log::warn!("xmr bench: signed {} bytes", signed.transaction.len()),
-                Err(e) => log::warn!("xmr bench: not signed: {e}"),
-            }
+        time("a transaction, two inputs, two outputs", 1, &mut |i| match spend::sign_with(
+            &keys,
+            &request,
+            &[i as u8; 32],
+            &mut generators,
+        ) {
+            Ok(signed) => log::warn!("xmr bench: signed {} bytes", signed.transaction.len()),
+            Err(e) => log::warn!("xmr bench: not signed: {e}"),
         });
     });
 }
@@ -84,14 +92,27 @@ fn transaction() -> (Keys, Request) {
                 .map(|i| Member {
                     global: 1000 * n + 10 * i + 1,
                     key: if i == 3 { out.key } else { (G * scalar(3000 + 16 * n + i)).compress().to_bytes() },
-                    commitment: if i == 3 { out.commitment } else { sign::commit(&scalar(4000 + i), i).compress().to_bytes() },
+                    commitment: if i == 3 {
+                        out.commitment
+                    } else {
+                        sign::commit(&scalar(4000 + i), i).compress().to_bytes()
+                    },
                 })
                 .collect();
             Input { amount, tx_key: (G * r).compress().to_bytes(), index: 1, subaddress: 0, real: 3, ring }
         })
         .collect();
-    let to = "49vDbkSo7eve3J41sBdjvjaBUyz8qHohsQcGtRf63qEUTMBvmA45fpp5pSacMdSg7A3b71RejLzB8EkGbfjp5PELVF2N4Zn";
-    let payment = Payment { address: to.into(), amount: 12_000_000_000, destination: read_destination(to).unwrap().1 };
-    let request = Request { network: Network::Mainnet, account: 0, fee: 40_000_000, change: 2_960_000_000, payments: vec![payment], inputs };
+    let to =
+        "49vDbkSo7eve3J41sBdjvjaBUyz8qHohsQcGtRf63qEUTMBvmA45fpp5pSacMdSg7A3b71RejLzB8EkGbfjp5PELVF2N4Zn";
+    let payment =
+        Payment { address: to.into(), amount: 12_000_000_000, destination: read_destination(to).unwrap().1 };
+    let request = Request {
+        network: Network::Mainnet,
+        account: 0,
+        fee: 40_000_000,
+        change: 2_960_000_000,
+        payments: vec![payment],
+        inputs,
+    };
     (keys, request)
 }

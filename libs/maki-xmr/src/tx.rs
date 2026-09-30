@@ -78,7 +78,8 @@ pub fn varint(mut n: u64, out: &mut Vec<u8>) {
 impl Prefix {
     /// Its bytes, the transaction's version (2) first.
     pub fn to_bytes(&self) -> Vec<u8> {
-        let mut out = Vec::with_capacity(64 + self.inputs.len() * 64 + self.outputs.len() * 40 + self.extra.len());
+        let mut out =
+            Vec::with_capacity(64 + self.inputs.len() * 64 + self.outputs.len() * 40 + self.extra.len());
         varint(2, &mut out);
         varint(self.unlock_time, &mut out);
         varint(self.inputs.len() as u64, &mut out);
@@ -211,7 +212,8 @@ impl Transaction {
             return None;
         }
         let fee = r.varint()?;
-        let encrypted_amounts = (0..outputs.len()).map(|_| r.take(8).map(|a| a.try_into().unwrap())).collect::<Option<_>>()?;
+        let encrypted_amounts =
+            (0..outputs.len()).map(|_| r.take(8).map(|a| a.try_into().unwrap())).collect::<Option<_>>()?;
         let commitments = (0..outputs.len()).map(|_| r.bytes32()).collect::<Option<_>>()?;
         if r.varint()? != 1 {
             return None;
@@ -230,7 +232,10 @@ impl Transaction {
         proof.L = (0..n).map(|_| r.bytes32()).collect::<Option<_>>()?;
         let n = r.count(16)?;
         proof.R = (0..n).map(|_| r.bytes32()).collect::<Option<_>>()?;
-        let clsags = inputs.iter().map(|i| r.take(32 * (i.key_offsets.len() + 2)).map(|c| c.to_vec())).collect::<Option<_>>()?;
+        let clsags = inputs
+            .iter()
+            .map(|i| r.take(32 * (i.key_offsets.len() + 2)).map(|c| c.to_vec()))
+            .collect::<Option<_>>()?;
         let pseudo_outs = (0..inputs.len()).map(|_| r.bytes32()).collect::<Option<_>>()?;
         if !r.0.is_empty() {
             return None;
@@ -278,5 +283,7 @@ impl Reader<'_> {
     }
 
     /// A count of at most `most`.
-    fn count(&mut self, most: u64) -> Option<usize> { self.varint().filter(|n| *n <= most).map(|n| n as usize) }
+    fn count(&mut self, most: u64) -> Option<usize> {
+        self.varint().filter(|n| *n <= most).map(|n| n as usize)
+    }
 }

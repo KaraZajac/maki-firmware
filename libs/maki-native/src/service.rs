@@ -3,14 +3,14 @@
 //! `APP_SERVICE` (its stub connected it before it was confined: it's all the app has, beside the
 //! ticktimer and the log) and sends:
 //!
-//! - blocking scalars for what fits in a few words: `WAIT` (arg1: the timeout in milliseconds,
-//!   `u32::MAX` for none; the answer's first word is the event's code, as `maki_wasm::Event::code`,
-//!   or `EXITED` if it was told to exit already), `MILLIS`, `UNIX_TIME`, `MOTION`;
-//! - everything else as a buffer lent mutably: a head of two little-endian u32s, a status and a
-//!   length, then the payload. The request's payload goes in; the answer's comes back in its
-//!   place, with the status (0, or one of `maki_wasm`'s codes, `REFUSED` among them) and length;
-//! - `EXIT` (a plain scalar) when it's done: arg1 0 when it returned, 1 when it crashed (it
-//!   sends `LOG` with why first).
+//! - blocking scalars for what fits in a few words: `WAIT` (arg1: the timeout in milliseconds, `u32::MAX` for
+//!   none; the answer's first word is the event's code, as `maki_wasm::Event::code`, or `EXITED` if it was
+//!   told to exit already), `MILLIS`, `UNIX_TIME`, `MOTION`;
+//! - everything else as a buffer lent mutably: a head of two little-endian u32s, a status and a length, then
+//!   the payload. The request's payload goes in; the answer's comes back in its place, with the status (0, or
+//!   one of `maki_wasm`'s codes, `REFUSED` among them) and length;
+//! - `EXIT` (a plain scalar) when it's done: arg1 0 when it returned, 1 when it crashed (it sends `LOG` with
+//!   why first).
 //!
 //! A request from any process but the app's is refused.
 

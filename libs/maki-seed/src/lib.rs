@@ -73,12 +73,11 @@ pub fn to_entropy(words: &[&str]) -> Result<Vec<u8>, Error> {
     }
     let checksum_bits = words.len() / 3;
     let entropy_bits = bits.len() - checksum_bits;
-    let mut entropy: Vec<u8> = bits[..entropy_bits]
-        .chunks(8)
-        .map(|c| c.iter().fold(0u8, |acc, &b| (acc << 1) | b as u8))
-        .collect();
+    let mut entropy: Vec<u8> =
+        bits[..entropy_bits].chunks(8).map(|c| c.iter().fold(0u8, |acc, &b| (acc << 1) | b as u8)).collect();
     let hash = Sha256::digest(&entropy);
-    let expected = (0..checksum_bits).all(|i| bits[entropy_bits + i] == ((hash[i / 8] >> (7 - i % 8)) & 1 == 1));
+    let expected =
+        (0..checksum_bits).all(|i| bits[entropy_bits + i] == ((hash[i / 8] >> (7 - i % 8)) & 1 == 1));
     if expected {
         Ok(entropy)
     } else {

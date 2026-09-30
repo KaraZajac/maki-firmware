@@ -1,7 +1,7 @@
 //! The BIP39 test phrase's Monero wallet ("abandon" eleven times, then "about"), as two others
 //! make it: Ledger's Monero app (its tests, which use this phrase: the keys, and the stagenet
 //! address) and monero-python 1.1.1 (the 25 words, every network's address, subaddresses).
-use maki_xmr::{address, read_address, words, Keys, Kind, Network};
+use maki_xmr::{Keys, Kind, Network, address, read_address, words};
 
 /// The phrase's BIP32 key at m/44'/128'/0'/0/0 (rust-bitcoin).
 const BIP32: &str = "db9e57474be8b64118b6acf6ecebd13f8f7c326b3bc1b19f4546573d6bac9dcf";
@@ -33,10 +33,19 @@ fn keys_are_ledgers() {
 fn addresses_are_every_wallets() {
     let (spend, view) = keys().public();
     for (network, expected) in [
-        (Network::Mainnet, "49vDbkSo7eve3J41sBdjvjaBUyz8qHohsQcGtRf63qEUTMBvmA45fpp5pSacMdSg7A3b71RejLzB8EkGbfjp5PELVF2N4Zn"),
-        (Network::Testnet, "A1Tm6174Q22e3J41sBdjvjaBUyz8qHohsQcGtRf63qEUTMBvmA45fpp5pSacMdSg7A3b71RejLzB8EkGbfjp5PELVKKfJLQ"),
+        (
+            Network::Mainnet,
+            "49vDbkSo7eve3J41sBdjvjaBUyz8qHohsQcGtRf63qEUTMBvmA45fpp5pSacMdSg7A3b71RejLzB8EkGbfjp5PELVF2N4Zn",
+        ),
+        (
+            Network::Testnet,
+            "A1Tm6174Q22e3J41sBdjvjaBUyz8qHohsQcGtRf63qEUTMBvmA45fpp5pSacMdSg7A3b71RejLzB8EkGbfjp5PELVKKfJLQ",
+        ),
         // Ledger's test_crypto.py has this one
-        (Network::Stagenet, "5A8FgbMkmG2e3J41sBdjvjaBUyz8qHohsQcGtRf63qEUTMBvmA45fpp5pSacMdSg7A3b71RejLzB8EkGbfjp5PELVHCRUaE"),
+        (
+            Network::Stagenet,
+            "5A8FgbMkmG2e3J41sBdjvjaBUyz8qHohsQcGtRf63qEUTMBvmA45fpp5pSacMdSg7A3b71RejLzB8EkGbfjp5PELVHCRUaE",
+        ),
     ] {
         let a = address(network, Kind::Standard, &spend, &view);
         assert_eq!(a, expected);
@@ -48,13 +57,41 @@ fn addresses_are_every_wallets() {
 fn subaddresses_are_every_wallets() {
     let k = keys();
     for (network, (major, minor), expected) in [
-        (Network::Mainnet, (0, 1), "8AB7PQPtducdkghYFN2prK3rZ7zPeL9f2REEdqE4WXYbSZr3797Aqti5xAjRsVy4jTdcwMW11GWejQtqk2kNXxj2QZxJwPZ"),
-        (Network::Mainnet, (0, 2), "8696JpJ6Yvw8VtJqpQ7V8gNLBdgwLK5xYLQPfE7DpzdQGo4gKPWMJSubTt8rvvTrWagePa2q1P3k3TvRkGiHZGGUL1cuAwo"),
-        (Network::Mainnet, (1, 0), "8BwfMo73i9GeqjRg6vctzrL7vTuG3Ap6JDaT8cqWrLTJGsHuJP2aSq4NFutnw8giH7goWTFSbg5ny3Rukad8cBQeEv9KMst"),
-        (Network::Mainnet, (2, 7), "85mwm6zoWkeAydxd69jdubASfvsVFhy3f9Jt8a4FiNmKfzNd9epYvpTAkFQz33F97YLqKpUCGKCdk7DHBBVriZtyFxJFEoS"),
-        (Network::Testnet, (0, 1), "BfuEgMbFQXUdkghYFN2prK3rZ7zPeL9f2REEdqE4WXYbSZr3797Aqti5xAjRsVy4jTdcwMW11GWejQtqk2kNXxj2QXUerjA"),
-        (Network::Stagenet, (0, 1), "79y5JZUvzJWdkghYFN2prK3rZ7zPeL9f2REEdqE4WXYbSZr3797Aqti5xAjRsVy4jTdcwMW11GWejQtqk2kNXxj2QWJ9bkP"),
-        (Network::Stagenet, (2, 7), "75ZugG5qs9YAydxd69jdubASfvsVFhy3f9Jt8a4FiNmKfzNd9epYvpTAkFQz33F97YLqKpUCGKCdk7DHBBVriZtyG1F1MsE"),
+        (
+            Network::Mainnet,
+            (0, 1),
+            "8AB7PQPtducdkghYFN2prK3rZ7zPeL9f2REEdqE4WXYbSZr3797Aqti5xAjRsVy4jTdcwMW11GWejQtqk2kNXxj2QZxJwPZ",
+        ),
+        (
+            Network::Mainnet,
+            (0, 2),
+            "8696JpJ6Yvw8VtJqpQ7V8gNLBdgwLK5xYLQPfE7DpzdQGo4gKPWMJSubTt8rvvTrWagePa2q1P3k3TvRkGiHZGGUL1cuAwo",
+        ),
+        (
+            Network::Mainnet,
+            (1, 0),
+            "8BwfMo73i9GeqjRg6vctzrL7vTuG3Ap6JDaT8cqWrLTJGsHuJP2aSq4NFutnw8giH7goWTFSbg5ny3Rukad8cBQeEv9KMst",
+        ),
+        (
+            Network::Mainnet,
+            (2, 7),
+            "85mwm6zoWkeAydxd69jdubASfvsVFhy3f9Jt8a4FiNmKfzNd9epYvpTAkFQz33F97YLqKpUCGKCdk7DHBBVriZtyFxJFEoS",
+        ),
+        (
+            Network::Testnet,
+            (0, 1),
+            "BfuEgMbFQXUdkghYFN2prK3rZ7zPeL9f2REEdqE4WXYbSZr3797Aqti5xAjRsVy4jTdcwMW11GWejQtqk2kNXxj2QXUerjA",
+        ),
+        (
+            Network::Stagenet,
+            (0, 1),
+            "79y5JZUvzJWdkghYFN2prK3rZ7zPeL9f2REEdqE4WXYbSZr3797Aqti5xAjRsVy4jTdcwMW11GWejQtqk2kNXxj2QWJ9bkP",
+        ),
+        (
+            Network::Stagenet,
+            (2, 7),
+            "75ZugG5qs9YAydxd69jdubASfvsVFhy3f9Jt8a4FiNmKfzNd9epYvpTAkFQz33F97YLqKpUCGKCdk7DHBBVriZtyG1F1MsE",
+        ),
     ] {
         let (spend, view) = k.subaddress(major, minor);
         assert_eq!(address(network, Kind::Subaddress, &spend, &view), expected, "{major},{minor}");

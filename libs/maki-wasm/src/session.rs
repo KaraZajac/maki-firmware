@@ -33,7 +33,16 @@ pub struct Session {
 impl Session {
     pub fn new(platform: Box<dyn Platform>, limits: Limits) -> Session {
         let started = platform.millis();
-        Session { platform, canvas: Canvas::default(), limits, sizes: None, started, exit_sent: false, wallet: None, allowance: (0, 0) }
+        Session {
+            platform,
+            canvas: Canvas::default(),
+            limits,
+            sizes: None,
+            started,
+            exit_sent: false,
+            wallet: None,
+            allowance: (0, 0),
+        }
     }
 
     fn sizes(&mut self) -> &mut BTreeMap<String, usize> {
@@ -50,7 +59,9 @@ impl Session {
 
     pub fn permitted(&self, p: Permission) -> bool { self.limits.granted.has(p) }
 
-    fn needs(&self, p: Permission) -> Result<(), i32> { if self.permitted(p) { Ok(()) } else { Err(REFUSED) } }
+    fn needs(&self, p: Permission) -> Result<(), i32> {
+        if self.permitted(p) { Ok(()) } else { Err(REFUSED) }
+    }
 
     pub fn present(&mut self) { self.platform.present(&self.canvas) }
 
@@ -72,9 +83,12 @@ impl Session {
         if text.len() > MENU_TEXT {
             return INVALID;
         }
-        let items: Vec<String> = if text.is_empty() { vec![] } else { text.split('\n').map(String::from).collect() };
+        let items: Vec<String> =
+            if text.is_empty() { vec![] } else { text.split('\n').map(String::from).collect() };
         if items.len() > MAX_MENU_ITEMS
-            || items.iter().any(|i| i.trim().is_empty() || i.len() > MAX_MENU_ITEM || i.chars().any(|c| c.is_control()))
+            || items
+                .iter()
+                .any(|i| i.trim().is_empty() || i.len() > MAX_MENU_ITEM || i.chars().any(|c| c.is_control()))
         {
             return INVALID;
         }
@@ -300,7 +314,10 @@ impl Session {
     /// form asked for.
     pub fn wallet_public(&mut self, path: &[u32], form: u8) -> Result<Vec<u8>, i32> {
         self.needs(Permission::Wallet)?;
-        if !matches!(form, WALLET_PUBLIC | WALLET_UNCOMPRESSED | WALLET_TAPROOT | WALLET_MONERO | WALLET_ED25519) {
+        if !matches!(
+            form,
+            WALLET_PUBLIC | WALLET_UNCOMPRESSED | WALLET_TAPROOT | WALLET_MONERO | WALLET_ED25519
+        ) {
             return Err(INVALID);
         }
         self.wallet_path(path, if form == WALLET_ED25519 { Curve::Ed25519 } else { Curve::Secp256k1 })?;
@@ -323,7 +340,8 @@ impl Session {
     /// at `path` (one of its own), itself, once they've said they want them. 0 shown, 1 not
     /// wanted, 2 no answer; the words never come to the app.
     pub fn wallet_show_backup(&mut self, path: &[u32]) -> i32 {
-        if let Err(e) = self.needs(Permission::Wallet).and_then(|_| self.wallet_path(path, Curve::Secp256k1)) {
+        if let Err(e) = self.needs(Permission::Wallet).and_then(|_| self.wallet_path(path, Curve::Secp256k1))
+        {
             return e;
         }
         match self.platform.show_backup(path) {
@@ -358,7 +376,9 @@ impl Session {
     /// digest, `WALLET_SIGN_*`, if the owner's last yes to a review allows one more.
     pub fn wallet_sign(&mut self, path: &[u32], digest: &[u8], scheme: u8) -> Result<Vec<u8>, i32> {
         self.needs(Permission::Wallet)?;
-        if !matches!(scheme, WALLET_SIGN_ECDSA | WALLET_SIGN_SCHNORR | WALLET_SIGN_TAPROOT) || digest.len() != 32 {
+        if !matches!(scheme, WALLET_SIGN_ECDSA | WALLET_SIGN_SCHNORR | WALLET_SIGN_TAPROOT)
+            || digest.len() != 32
+        {
             return Err(INVALID);
         }
         self.wallet_path(path, Curve::Secp256k1)?;
@@ -472,7 +492,9 @@ impl Session {
     }
 }
 
-pub(crate) fn key_ok(key: &str) -> bool { !key.is_empty() && key.len() <= MAX_KEY && !key.chars().any(|c| c.is_control()) }
+pub(crate) fn key_ok(key: &str) -> bool {
+    !key.is_empty() && key.len() <= MAX_KEY && !key.chars().any(|c| c.is_control())
+}
 
 /// "question\ndetail\nyes\nno", the last three optional, as `ask` takes it.
 fn parse_ask(text: &str, timeout_s: i32) -> Option<Ask> {
@@ -486,7 +508,11 @@ fn parse_ask(text: &str, timeout_s: i32) -> Option<Ask> {
         detail: part(1),
         yes: part(2),
         no: part(3),
-        timeout_s: if timeout_s <= 0 { ASK_TIMEOUT_S } else { (timeout_s as u32).clamp(5, MAX_ASK_TIMEOUT_S) },
+        timeout_s: if timeout_s <= 0 {
+            ASK_TIMEOUT_S
+        } else {
+            (timeout_s as u32).clamp(5, MAX_ASK_TIMEOUT_S)
+        },
     };
     let fits = !ask.question.trim().is_empty()
         && ask.question.len() <= MAX_QUESTION
@@ -514,7 +540,12 @@ fn parse_review(text: &str, timeout_s: i32) -> Option<Review> {
             return None;
         }
         let field = |i: usize| fields.get(i).copied().unwrap_or("");
-        let page = Page { heading: field(0).into(), value: field(1).into(), mono: field(2).into(), prose: field(3).into() };
+        let page = Page {
+            heading: field(0).into(),
+            value: field(1).into(),
+            mono: field(2).into(),
+            prose: field(3).into(),
+        };
         // fixed-width text and prose may run over lines; nothing else is a control character
         let plain = |t: &str| !t.chars().any(|ch| ch.is_control());
         let lines = |t: &str| !t.chars().any(|ch| ch.is_control() && ch != '\n');
@@ -537,7 +568,11 @@ fn parse_review(text: &str, timeout_s: i32) -> Option<Review> {
         yes: part(2),
         no: part(3),
         pages,
-        timeout_s: if timeout_s <= 0 { REVIEW_TIMEOUT_S } else { (timeout_s as u32).clamp(5, MAX_REVIEW_TIMEOUT_S) },
+        timeout_s: if timeout_s <= 0 {
+            REVIEW_TIMEOUT_S
+        } else {
+            (timeout_s as u32).clamp(5, MAX_REVIEW_TIMEOUT_S)
+        },
     };
     let fits = !review.question.trim().is_empty()
         && review.question.len() <= MAX_QUESTION
@@ -558,7 +593,8 @@ fn schnorr_key(platform: &mut dyn Platform, label: &str) -> Option<k256::schnorr
     use sha2::{Digest, Sha256};
     let mut secret = platform.app_secret(label)?;
     let tag = Sha256::digest(b"maki/bip340");
-    let mut scalar: [u8; 32] = Sha256::new().chain_update(tag).chain_update(tag).chain_update(secret).finalize().into();
+    let mut scalar: [u8; 32] =
+        Sha256::new().chain_update(tag).chain_update(tag).chain_update(secret).finalize().into();
     let key = k256::schnorr::SigningKey::from_bytes(&scalar).ok();
     zeroize::Zeroize::zeroize(&mut secret);
     zeroize::Zeroize::zeroize(&mut scalar);
@@ -570,7 +606,8 @@ fn x25519_key(platform: &mut dyn Platform, label: &str) -> Option<[u8; 32]> {
     use sha2::{Digest, Sha256};
     let mut secret = platform.app_secret(label)?;
     let tag = Sha256::digest(b"maki/x25519");
-    let key: [u8; 32] = Sha256::new().chain_update(tag).chain_update(tag).chain_update(secret).finalize().into();
+    let key: [u8; 32] =
+        Sha256::new().chain_update(tag).chain_update(tag).chain_update(secret).finalize().into();
     zeroize::Zeroize::zeroize(&mut secret);
     Some(key)
 }

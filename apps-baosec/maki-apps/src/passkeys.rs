@@ -9,7 +9,7 @@ use std::io::Read;
 
 use blitstr2::GlyphStyle;
 use maki_launcher::Answer;
-use maki_ui::{Key, Screen, LINE};
+use maki_ui::{Key, LINE, Screen};
 
 /// How long the owner has to answer (the emulator skips through idle time: longer there).
 const ASK_TIMEOUT_S: u32 = maki_launcher::ask_timeout(30);
@@ -60,10 +60,12 @@ impl Passkeys {
         let mut list = Vec::new();
         if let Ok(keys) = self.pddb.list_keys(maki_fido::DICT, None) {
             for key in keys {
-                let Some(slot) = key.parse::<usize>().ok().filter(|n| maki_fido::CREDENTIALS.contains(n)) else {
+                let Some(slot) = key.parse::<usize>().ok().filter(|n| maki_fido::CREDENTIALS.contains(n))
+                else {
                     continue;
                 };
-                let Ok(mut k) = self.pddb.get(maki_fido::DICT, &key, None, false, false, None, None::<fn()>) else {
+                let Ok(mut k) = self.pddb.get(maki_fido::DICT, &key, None, false, false, None, None::<fn()>)
+                else {
                     continue;
                 };
                 let mut v = Vec::new();
@@ -121,7 +123,9 @@ impl Passkeys {
         self.draw();
     }
 
-    pub(crate) fn menu(&self) -> &'static [&'static str] { if self.list.is_empty() { &[] } else { &["Delete this passkey"] } }
+    pub(crate) fn menu(&self) -> &'static [&'static str] {
+        if self.list.is_empty() { &[] } else { &["Delete this passkey"] }
+    }
 
     /// An item of the menu: the only one deletes the passkey on screen.
     pub(crate) fn picked(&mut self, i: usize) {

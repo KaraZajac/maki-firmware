@@ -37,7 +37,12 @@ fn random_digit() -> u8 {
 
 impl PinPad {
     pub(crate) fn new(title: &str, note: &str) -> Self {
-        PinPad { title: title.into(), note: note.into(), entered: Vec::new(), choice: Opt::Digit(random_digit()) }
+        PinPad {
+            title: title.into(),
+            note: note.into(),
+            entered: Vec::new(),
+            choice: Opt::Digit(random_digit()),
+        }
     }
 
     fn options(&self) -> Vec<Opt> {
@@ -127,8 +132,14 @@ impl PinPad {
             if i == current && self.choice == Opt::Done {
                 let style = DrawStyle::new(PixelColor::Light, PixelColor::Light, 2);
                 let (l, m, r) = (x + cell / 5, x + cell / 2 - 1, x + cell - cell / 6);
-                screen.gfx.draw_line(Line::new_with_style(Point::new(l, y + 8), Point::new(m, y + 12), style)).ok();
-                screen.gfx.draw_line(Line::new_with_style(Point::new(m, y + 12), Point::new(r, y + 3), style)).ok();
+                screen
+                    .gfx
+                    .draw_line(Line::new_with_style(Point::new(l, y + 8), Point::new(m, y + 12), style))
+                    .ok();
+                screen
+                    .gfx
+                    .draw_line(Line::new_with_style(Point::new(m, y + 12), Point::new(r, y + 3), style))
+                    .ok();
             }
             let mut tv = TextView::new(
                 ux_api::service::api::Gid::dummy(),

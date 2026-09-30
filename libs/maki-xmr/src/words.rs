@@ -32,7 +32,9 @@ pub fn decode(words: &[&str]) -> Option<[u8; 32]> {
     let mut seed = [0u8; 32];
     for (i, three) in words[..24].chunks(3).enumerate() {
         let (w1, w2, w3) = (index(three[0])?, index(three[1])?, index(three[2])?);
-        let x = w1 as u64 + N as u64 * ((N + w2 - w1) % N) as u64 + (N as u64 * N as u64) * ((N + w3 - w2) % N) as u64;
+        let x = w1 as u64
+            + N as u64 * ((N + w2 - w1) % N) as u64
+            + (N as u64 * N as u64) * ((N + w3 - w2) % N) as u64;
         // three words can say more than four bytes hold
         if x > u32::MAX as u64 {
             return None;

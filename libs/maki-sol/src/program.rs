@@ -4,8 +4,8 @@
 use curve25519_dalek::edwards::CompressedEdwardsY;
 use sha2::{Digest, Sha256};
 
-use crate::base58::key;
 use crate::Key;
+use crate::base58::key;
 
 pub const SYSTEM: Key = key("11111111111111111111111111111111");
 pub const COMPUTE_BUDGET: Key = key("ComputeBudget111111111111111111111111111111");

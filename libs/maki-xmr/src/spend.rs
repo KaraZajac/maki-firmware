@@ -17,10 +17,10 @@ use zeroize::Zeroize;
 
 use crate::bulletproof::{self, Generators};
 use crate::keys::Keys;
-use crate::request::{Request, MAX_OUTPUTS};
-use crate::sign::{self, commit, derivation, output_scalar, point, EdwardsPoint, Member, Scalar, G};
+use crate::request::{MAX_OUTPUTS, Request};
+use crate::sign::{self, EdwardsPoint, G, Member, Scalar, commit, derivation, output_scalar, point};
 use crate::tx::{self, Base, Prefix, Transaction};
-use crate::{keccak, Kind};
+use crate::{Kind, keccak};
 
 /// Why maki didn't sign.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -119,7 +119,8 @@ impl Signed {
         let transaction = take(n)?.to_vec();
         let tx_key = take(32)?.try_into().ok()?;
         let n = take(1)?[0] as usize;
-        let additional_keys = (0..n).map(|_| take(32).map(|k| k.try_into().unwrap())).collect::<Option<_>>()?;
+        let additional_keys =
+            (0..n).map(|_| take(32).map(|k| k.try_into().unwrap())).collect::<Option<_>>()?;
         let n = take(1)?[0] as usize;
         let outputs = take(n)?
             .iter()
@@ -130,7 +131,8 @@ impl Signed {
             })
             .collect();
         let n = take(1)?[0] as usize;
-        let own = (0..n).map(|_| Some((take(1)?[0], take(32)?.try_into().unwrap()))).collect::<Option<_>>()?;
+        let own =
+            (0..n).map(|_| Some((take(1)?[0], take(32)?.try_into().unwrap()))).collect::<Option<_>>()?;
         (at == bytes.len()).then_some(Signed { transaction, tx_key, additional_keys, outputs, own })
     }
 }
@@ -238,7 +240,12 @@ pub fn sign(keys: &Keys, request: &Request, aux: &[u8; 32]) -> Result<Signed, Sp
 }
 
 /// The same, keeping the range proof's generators for the next.
-pub fn sign_with(keys: &Keys, request: &Request, aux: &[u8; 32], generators: &mut Generators) -> Result<Signed, SpendError> {
+pub fn sign_with(
+    keys: &Keys,
+    request: &Request,
+    aux: &[u8; 32],
+    generators: &mut Generators,
+) -> Result<Signed, SpendError> {
     let mut random = Randomness::new(keys, aux, &request.to_bytes());
     let account = request.account;
 
@@ -303,7 +310,14 @@ pub fn sign_with(keys: &Keys, request: &Request, aux: &[u8; 32], generators: &mu
     let change_address = if request.change > 0 {
         let (spend, view) = keys.subaddress_points(account, 0);
         let address = address_bytes(&spend.compress().to_bytes(), &view.compress().to_bytes());
-        outs.push(Out { paid: Paid::Change, spend, view, subaddress: account != 0, amount: request.change, address });
+        outs.push(Out {
+            paid: Paid::Change,
+            spend,
+            view,
+            subaddress: account != 0,
+            amount: request.change,
+            address,
+        });
         address
     } else if request.payments.len() == 1 {
         let (spend, view) = (G * random.scalar(), G * random.scalar());
@@ -350,7 +364,8 @@ pub fn sign_with(keys: &Keys, request: &Request, aux: &[u8; 32], generators: &mu
         let j = random.below(i as u64 + 1) as usize;
         outs.swap(i, j);
     }
-    let mut extra_keys: Vec<Scalar> = if additional { (0..outs.len()).map(|_| random.scalar()).collect() } else { Vec::new() };
+    let mut extra_keys: Vec<Scalar> =
+        if additional { (0..outs.len()).map(|_| random.scalar()).collect() } else { Vec::new() };
 
     let (view, spend_key) = (keys.view(), keys.spend());
     let mut made = Vec::with_capacity(outs.len());
@@ -416,7 +431,11 @@ pub fn sign_with(keys: &Keys, request: &Request, aux: &[u8; 32], generators: &mu
         inputs: spends
             .iter()
             .map(|s| tx::Input {
-                key_offsets: s.globals.iter().scan(0u64, |last, g| Some(g - core::mem::replace(last, *g))).collect(),
+                key_offsets: s
+                    .globals
+                    .iter()
+                    .scan(0u64, |last, g| Some(g - core::mem::replace(last, *g)))
+                    .collect(),
                 key_image: s.image,
             })
             .collect(),
@@ -429,7 +448,8 @@ pub fn sign_with(keys: &Keys, request: &Request, aux: &[u8; 32], generators: &mu
         commitments: made.iter().map(|o| o.commitment).collect(),
     };
     let amounts: Vec<(u64, Scalar)> = outs.iter().zip(&made).map(|(o, m)| (o.amount, m.mask)).collect();
-    let proof = bulletproof::prove(generators, &amounts, &mut || random.scalar()).ok_or(SpendError::TooBig)?;
+    let proof =
+        bulletproof::prove(generators, &amounts, &mut || random.scalar()).ok_or(SpendError::TooBig)?;
     let message = tx::signature_hash(&prefix, &base, &proof);
 
     // the inputs' pseudo-outputs hide their amounts again, with masks adding up to the outputs'
@@ -450,7 +470,15 @@ pub fn sign_with(keys: &Keys, request: &Request, aux: &[u8; 32], generators: &mu
         let pseudo_out = commit(a, s.amount);
         let mut difference = s.mask - a;
         let mut nonce = random.wide();
-        let signed = sign::clsag(&s.ring, s.real, &s.secret, &difference, &pseudo_out, &message, nonce[..32].try_into().unwrap());
+        let signed = sign::clsag(
+            &s.ring,
+            s.real,
+            &s.secret,
+            &difference,
+            &pseudo_out,
+            &message,
+            nonce[..32].try_into().unwrap(),
+        );
         difference.zeroize();
         nonce.zeroize();
         let (clsag, _) = signed.map_err(|_| SpendError::Amount(s.which))?;

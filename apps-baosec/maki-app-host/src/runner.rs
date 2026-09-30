@@ -11,10 +11,12 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use blitstr2::GlyphStyle;
-use maki_app_host_api::{AppMessage, RESULT_BUSY, RESULT_DENIED, RESULT_FAILED, RESULT_OK, RESULT_REFUSED, RESULT_TIMED_OUT};
+use maki_app_host_api::{
+    AppMessage, RESULT_BUSY, RESULT_DENIED, RESULT_FAILED, RESULT_OK, RESULT_REFUSED, RESULT_TIMED_OUT,
+};
 use maki_launcher::Answer;
-use maki_ui::{Key, Screen, LINE};
-use maki_wasm::{Ask, Canvas, Event, Platform, Review, Stop, HEIGHT, TOP, WIDTH};
+use maki_ui::{Key, LINE, Screen};
+use maki_wasm::{Ask, Canvas, Event, HEIGHT, Platform, Review, Stop, TOP, WIDTH};
 use ux_api::minigfx::{Point, Rectangle};
 
 use crate::store::{Record, Store};
@@ -162,7 +164,9 @@ impl Ctx {
         self.loaded.borrow().iter().find(|(i, v, _)| i == id && *v == version).map(|(_, _, a)| a.clone())
     }
 
-    fn clock(&self) -> String { crate::clock_text(self.time_conn, self.shared.lock().unwrap().time_state == 2) }
+    fn clock(&self) -> String {
+        crate::clock_text(self.time_conn, self.shared.lock().unwrap().time_state == 2)
+    }
 }
 
 /// What App info shows, a page at a time.
@@ -274,7 +278,10 @@ impl Device {
             InfoPage::About => (
                 "App info",
                 m.name.clone(),
-                vec![if m.label.is_empty() { format!("version {}", m.version) } else { m.label.clone() }, m.id.clone()],
+                vec![
+                    if m.label.is_empty() { format!("version {}", m.version) } else { m.label.clone() },
+                    m.id.clone(),
+                ],
                 "back",
             ),
             InfoPage::From => {
@@ -309,7 +316,11 @@ impl Device {
             }
             InfoPage::Permissions => (
                 "Permissions",
-                if m.permissions.is_empty() { "Only the basics".into() } else { format!("{}", m.permissions.len()) },
+                if m.permissions.is_empty() {
+                    "Only the basics".into()
+                } else {
+                    format!("{}", m.permissions.len())
+                },
                 m.permissions.iter().map(|(p, _)| p.title().to_string()).collect(),
                 "back",
             ),
@@ -322,7 +333,10 @@ impl Device {
             InfoPage::Backup => (
                 "In the backup",
                 if self.record.backup { "Yes".into() } else { "No".into() },
-                vec![if self.record.backup { "its data is backed up" } else { "its data stays on maki" }.into()],
+                vec![
+                    if self.record.backup { "its data is backed up" } else { "its data stays on maki" }
+                        .into(),
+                ],
                 if self.record.backup { "leave it out" } else { "back it up" },
             ),
             InfoPage::Remove => ("Remove", m.name.clone(), vec!["and its data".into()], "remove"),
@@ -416,7 +430,9 @@ impl ExitWatch {
 }
 
 impl Device {
-    pub(crate) fn watch(&self) -> ExitWatch { ExitWatch { ctx: self.ctx.clone(), state: self.state.clone(), slot: self.slot } }
+    pub(crate) fn watch(&self) -> ExitWatch {
+        ExitWatch { ctx: self.ctx.clone(), state: self.state.clone(), slot: self.slot }
+    }
 
     pub(crate) fn id(&self) -> &str { &self.id }
 
@@ -460,7 +476,9 @@ impl Platform for Device {
             // message is waiting for it to
             let idle_end = {
                 let st = self.state.borrow();
-                st.headless.then(|| st.idle_since + if st.handover.is_some() { HEADLESS_HOLD } else { HEADLESS_IDLE })
+                st.headless.then(|| {
+                    st.idle_since + if st.handover.is_some() { HEADLESS_HOLD } else { HEADLESS_IDLE }
+                })
             };
             // while App info is up, the app's own timers wait
             let timer = deadline.filter(|_| self.state.borrow().info.is_none());
@@ -471,16 +489,18 @@ impl Platform for Device {
             let deferred = self.state.borrow_mut().deferred.pop_front();
             let msg = match (deferred, wake) {
                 (Some(m), _) => m,
-                (None, Some(w)) => match self.ctx.rx.recv_timeout(w.saturating_duration_since(Instant::now())) {
-                    Ok(m) => m,
-                    Err(RecvTimeoutError::Timeout) if idle_end.is_some_and(|e| Instant::now() >= e) => {
-                        log::info!("{}: nothing more to do: ending it", self.id);
-                        self.state.borrow_mut().stopping = true;
-                        return Event::Exit;
+                (None, Some(w)) => {
+                    match self.ctx.rx.recv_timeout(w.saturating_duration_since(Instant::now())) {
+                        Ok(m) => m,
+                        Err(RecvTimeoutError::Timeout) if idle_end.is_some_and(|e| Instant::now() >= e) => {
+                            log::info!("{}: nothing more to do: ending it", self.id);
+                            self.state.borrow_mut().stopping = true;
+                            return Event::Exit;
+                        }
+                        Err(RecvTimeoutError::Timeout) => return Event::Timeout,
+                        Err(RecvTimeoutError::Disconnected) => return Event::Exit,
                     }
-                    Err(RecvTimeoutError::Timeout) => return Event::Timeout,
-                    Err(RecvTimeoutError::Disconnected) => return Event::Exit,
-                },
+                }
                 (None, None) => match self.ctx.rx.recv() {
                     Ok(m) => m,
                     Err(_) => return Event::Exit,
@@ -499,7 +519,9 @@ impl Platform for Device {
                 }
                 // another app's: one started for a message gives way once its own exchange is
                 // over, and that app runs next for it; one the owner opened keeps maki
-                ToRunner::Message(s, msg, bytes) if self.state.borrow().headless && self.state.borrow().handover.is_none() => {
+                ToRunner::Message(s, msg, bytes)
+                    if self.state.borrow().headless && self.state.borrow().handover.is_none() =>
+                {
                     log::info!("{}: another app's message waits for it", self.id);
                     self.state.borrow_mut().handover = Some((s, msg, bytes));
                 }
@@ -546,7 +568,9 @@ impl Platform for Device {
                     st.stopping = true;
                     return Event::Exit;
                 }
-                ToRunner::Key(s, _) if s == self.slot && self.state.borrow().quiet_until.is_some_and(|q| Instant::now() < q) => {}
+                ToRunner::Key(s, _)
+                    if s == self.slot
+                        && self.state.borrow().quiet_until.is_some_and(|q| Instant::now() < q) => {}
                 ToRunner::Key(s, key) if s == self.slot && self.state.borrow().front => {
                     if self.state.borrow().info.is_some() {
                         if let Some(e) = self.info_key(key) {
@@ -565,7 +589,8 @@ impl Platform for Device {
                     }
                 }
                 ToRunner::Menu(s, i) if s == self.slot => {
-                    let items = self.ctx.shared.lock().unwrap().menus.get(&self.slot).map(|m| m.len()).unwrap_or(0);
+                    let items =
+                        self.ctx.shared.lock().unwrap().menus.get(&self.slot).map(|m| m.len()).unwrap_or(0);
                     if i < items {
                         return Event::Menu(i as u32);
                     }
@@ -577,7 +602,9 @@ impl Platform for Device {
         }
     }
 
-    fn message(&mut self) -> Option<Vec<u8>> { self.state.borrow().current.as_ref().map(|(_, bytes)| bytes.clone()) }
+    fn message(&mut self) -> Option<Vec<u8>> {
+        self.state.borrow().current.as_ref().map(|(_, bytes)| bytes.clone())
+    }
 
     fn reply(&mut self, reply: &[u8]) -> bool {
         let current = self.state.borrow_mut().current.take();
@@ -599,7 +626,9 @@ impl Platform for Device {
         }
     }
 
-    fn set_menu(&mut self, items: &[String]) { self.ctx.shared.lock().unwrap().menus.insert(self.slot, items.to_vec()); }
+    fn set_menu(&mut self, items: &[String]) {
+        self.ctx.shared.lock().unwrap().menus.insert(self.slot, items.to_vec());
+    }
 
     fn millis(&self) -> u64 { crate::tt().elapsed_ms() }
 
@@ -623,7 +652,10 @@ impl Platform for Device {
         if self.state.borrow().removed || !self.ctx.unlocked() || value.len() > self.storage_quota {
             return Err(());
         }
-        self.ctx.store.data_set(&self.id, key, value).map_err(|e| log::warn!("{}: storing {key}: {e:?}", self.id))
+        self.ctx
+            .store
+            .data_set(&self.id, key, value)
+            .map_err(|e| log::warn!("{}: storing {key}: {e:?}", self.id))
     }
 
     fn storage_delete(&mut self, key: &str) -> bool {
@@ -647,7 +679,15 @@ impl Platform for Device {
             return maki_wasm::Answer::NoAnswer;
         }
         let timeout = maki_launcher::ask_timeout(ask.timeout_s);
-        match self.ctx.launcher.ask_app(&self.name, self.sideloaded, &ask.question, &ask.detail, &ask.yes, &ask.no, timeout) {
+        match self.ctx.launcher.ask_app(
+            &self.name,
+            self.sideloaded,
+            &ask.question,
+            &ask.detail,
+            &ask.yes,
+            &ask.no,
+            timeout,
+        ) {
             Ok(Answer::Allowed(_)) => maki_wasm::Answer::Yes,
             Ok(Answer::Denied) => maki_wasm::Answer::No,
             _ => maki_wasm::Answer::NoAnswer,
@@ -685,13 +725,27 @@ impl Platform for Device {
         let pages = review
             .pages
             .iter()
-            .map(|p| maki_launcher::Page { heading: p.heading.clone(), value: p.value.clone(), mono: p.mono.clone(), prose: p.prose.clone() })
+            .map(|p| maki_launcher::Page {
+                heading: p.heading.clone(),
+                value: p.value.clone(),
+                mono: p.mono.clone(),
+                prose: p.prose.clone(),
+            })
             .collect();
         let yes = if review.yes.is_empty() { "sign" } else { &review.yes };
         let no = if review.no.is_empty() { "reject" } else { &review.no };
         let timeout = maki_launcher::ask_timeout(review.timeout_s);
         log::info!("{}: a review of {} pages", self.id, review.pages.len());
-        match self.ctx.launcher.review_app(&self.name, self.sideloaded, &review.question, &review.detail, pages, yes, no, timeout) {
+        match self.ctx.launcher.review_app(
+            &self.name,
+            self.sideloaded,
+            &review.question,
+            &review.detail,
+            pages,
+            yes,
+            no,
+            timeout,
+        ) {
             Ok(Answer::Allowed(_)) => maki_wasm::Answer::Yes,
             Ok(Answer::Denied) => maki_wasm::Answer::No,
             _ => maki_wasm::Answer::NoAnswer,
@@ -790,7 +844,12 @@ impl Platform for Device {
         self.state.borrow_mut().typing = true;
         self.draw_frame();
         let typed = self.ctx.usb.send_str(text).is_ok();
-        log::info!("{}: typed {} characters: {}", self.id, text.len(), if typed { "done" } else { "not plugged in" });
+        log::info!(
+            "{}: typed {} characters: {}",
+            self.id,
+            text.len(),
+            if typed { "done" } else { "not plugged in" }
+        );
         self.state.borrow_mut().typing = false;
         self.draw_frame();
         typed
@@ -921,19 +980,32 @@ fn run(ctx: &Rc<Ctx>, slot: usize, message: Option<(xous::MessageEnvelope, Vec<u
             mono: String::new(),
             prose: format!("{why}\n\nOpen it only if you're sure; App info can remove it."),
         }];
-        let answer =
-            ctx.launcher.review(&info.name, "Open it anyway?", "revoked", pages, "open anyway", "don't", ASK_TIMEOUT_S);
+        let answer = ctx.launcher.review(
+            &info.name,
+            "Open it anyway?",
+            "revoked",
+            pages,
+            "open anyway",
+            "don't",
+            ASK_TIMEOUT_S,
+        );
         if !matches!(answer, Ok(Answer::Allowed(_))) {
             ctx.launcher.home().ok();
             return None;
         }
     }
-    log::info!("{} ready to run ({} ms){}", info.id, crate::tt().elapsed_ms() - started, if headless { ", for a message" } else { "" });
+    log::info!(
+        "{} ready to run ({} ms){}",
+        info.id,
+        crate::tt().elapsed_ms() - started,
+        if headless { ", for a message" } else { "" }
+    );
     let limits = match &code {
         Code::Wasm(app) => app.limits,
         Code::Native(_, limits) => *limits,
     };
-    let inbox: VecDeque<_> = message.take().map(|(msg, bytes)| (msg, bytes, Instant::now())).into_iter().collect();
+    let inbox: VecDeque<_> =
+        message.take().map(|(msg, bytes)| (msg, bytes, Instant::now())).into_iter().collect();
     let state = Rc::new(RefCell::new(RunState {
         front: !headless,
         info: None,

@@ -3,7 +3,7 @@
 
 use alloc::vec::Vec;
 
-use crate::tx::{write_varint, Cursor, ParseError, Tx};
+use crate::tx::{Cursor, ParseError, Tx, write_varint};
 
 pub const MAGIC: &[u8; 5] = b"psbt\xff";
 
@@ -89,7 +89,8 @@ impl Psbt {
                 return Err(ParseError("only PSBT version 0"));
             }
         }
-        let tx_pair = global.iter().find(|p| p.key == [GLOBAL_UNSIGNED_TX]).ok_or(ParseError("no transaction"))?;
+        let tx_pair =
+            global.iter().find(|p| p.key == [GLOBAL_UNSIGNED_TX]).ok_or(ParseError("no transaction"))?;
         let tx = Tx::parse(&tx_pair.value)?;
         if tx.inputs.iter().any(|i| !i.script_sig.is_empty()) {
             return Err(ParseError("transaction already has signatures"));
@@ -124,7 +125,8 @@ impl Psbt {
     /// account worth deriving to check the PSBT against.
     pub fn has_taproot(&self) -> bool {
         let tap_in = |p: &Pair| matches!(p.key.first(), Some(&(IN_TAP_KEY_SIG..=IN_TAP_MERKLE_ROOT)));
-        let tap_out = |p: &Pair| matches!(p.key.first(), Some(&(OUT_TAP_INTERNAL_KEY | OUT_TAP_BIP32_DERIVATION)));
+        let tap_out =
+            |p: &Pair| matches!(p.key.first(), Some(&(OUT_TAP_INTERNAL_KEY | OUT_TAP_BIP32_DERIVATION)));
         self.inputs.iter().flatten().any(tap_in) || self.outputs.iter().flatten().any(tap_out)
     }
 

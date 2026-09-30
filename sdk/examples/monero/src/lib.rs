@@ -15,25 +15,24 @@
 //! the link. A message starts with what it is; an answer with a status, then its fields (strings
 //! as a u16 length and the bytes, numbers little-endian):
 //!
-//! - `D` network, account (u32), index (u32): an address, once the owner has compared it on
-//!   maki's screen with the computer's (account 0's index 0 is the primary address);
-//! - `W` network: the primary address and the secret view key (32 bytes), once the owner agrees
-//!   to let the computer watch the wallet: see what comes in, and nothing to spend with;
-//! - `K` count (u8), then each output (80 bytes: its transaction's key, its index there (u64), the
-//!   subaddress it was paid to (account and index, u32s) and its key): each one's key image and
-//!   what proves it (96 bytes), for a wallet that's watching to see what's spent. Only once the
-//!   owner has let a computer watch;
-//! - `S` network, total (u32), offset (u32), then a piece of what to pay (`maki_xmr::request`):
-//!   the last piece is shown and, on a yes, made and signed by maki, and answered with the signed
-//!   transaction's size (or why not);
-//! - `G` offset (u32): a piece of the transaction last signed (`maki_xmr::spend::Signed`): total,
-//!   offset, the bytes.
+//! - `D` network, account (u32), index (u32): an address, once the owner has compared it on maki's screen
+//!   with the computer's (account 0's index 0 is the primary address);
+//! - `W` network: the primary address and the secret view key (32 bytes), once the owner agrees to let the
+//!   computer watch the wallet: see what comes in, and nothing to spend with;
+//! - `K` count (u8), then each output (80 bytes: its transaction's key, its index there (u64), the subaddress
+//!   it was paid to (account and index, u32s) and its key): each one's key image and what proves it (96
+//!   bytes), for a wallet that's watching to see what's spent. Only once the owner has let a computer watch;
+//! - `S` network, total (u32), offset (u32), then a piece of what to pay (`maki_xmr::request`): the last
+//!   piece is shown and, on a yes, made and signed by maki, and answered with the signed transaction's size
+//!   (or why not);
+//! - `G` offset (u32): a piece of the transaction last signed (`maki_xmr::spend::Signed`): total, offset, the
+//!   bytes.
 //!
 //! Network is 0 (Monero), 1 (testnet) or 2 (stagenet).
 
-use maki_app::wallet::{self, Page, Review, HARDENED};
+use maki_app::wallet::{self, HARDENED, Page, Review};
 use maki_app::*;
-use maki_xmr::request::{Request, MAX_INPUTS};
+use maki_xmr::request::{MAX_INPUTS, Request};
 use maki_xmr::{Kind, Network};
 
 const ADDRESS: u8 = b'D';
@@ -73,7 +72,9 @@ fn network(n: u8) -> Option<Network> {
     }
 }
 
-fn u32_at(b: &[u8], at: usize) -> Option<u32> { b.get(at..at + 4).map(|x| u32::from_le_bytes(x.try_into().unwrap())) }
+fn u32_at(b: &[u8], at: usize) -> Option<u32> {
+    b.get(at..at + 4).map(|x| u32::from_le_bytes(x.try_into().unwrap()))
+}
 
 /// Account `major`'s address `minor`: the primary address for 0 and 0, a subaddress otherwise.
 /// maki makes its keys.
@@ -99,15 +100,18 @@ struct Answer(Vec<u8>);
 
 impl Answer {
     fn new(status: u8) -> Answer { Answer(vec![status]) }
+
     fn text(mut self, s: &str) -> Answer {
         self.0.extend_from_slice(&(s.len() as u16).to_le_bytes());
         self.0.extend_from_slice(s.as_bytes());
         self
     }
+
     fn u32(mut self, n: u32) -> Answer {
         self.0.extend_from_slice(&n.to_le_bytes());
         self
     }
+
     fn bytes(mut self, b: &[u8]) -> Answer {
         self.0.extend_from_slice(b);
         self
@@ -132,7 +136,9 @@ fn failed(e: Error) -> Answer {
 
 /// `D`: an address, put on maki's screen for the owner to compare with the computer's.
 fn compare(m: &[u8]) -> Answer {
-    let (Some(net), Some(major), Some(minor)) = (m.get(1).and_then(|n| network(*n)), u32_at(m, 2), u32_at(m, 6)) else {
+    let (Some(net), Some(major), Some(minor)) =
+        (m.get(1).and_then(|n| network(*n)), u32_at(m, 2), u32_at(m, 6))
+    else {
         return Answer::new(BAD);
     };
     let address = match address(net, major, minor) {
@@ -164,7 +170,11 @@ fn watch(m: &[u8]) -> Answer {
     let asked = Review::new("Let computer watch?")
         .detail("it sees what comes in; spending still needs you")
         .answers("share", "don't")
-        .page(Page::new("Watch only").mono(&address).prose("The view key: this wallet's payments and balance, and nothing to spend with."))
+        .page(
+            Page::new("Watch only")
+                .mono(&address)
+                .prose("The view key: this wallet's payments and balance, and nothing to spend with."),
+        )
         .signatures(1)
         .timeout(60)
         .show();
@@ -196,7 +206,14 @@ fn key_images(m: &[u8]) -> Answer {
     for o in m[2..].chunks_exact(80) {
         let index = u64::from_le_bytes(o[32..40].try_into().unwrap());
         let (major, minor) = (u32_at(o, 40).unwrap(), u32_at(o, 44).unwrap());
-        match wallet::monero_key_image(&ACCOUNT, o[..32].try_into().unwrap(), index, major, minor, o[48..].try_into().unwrap()) {
+        match wallet::monero_key_image(
+            &ACCOUNT,
+            o[..32].try_into().unwrap(),
+            index,
+            major,
+            minor,
+            o[48..].try_into().unwrap(),
+        ) {
             Ok((image, proof)) => answer = answer.bytes(&image).bytes(&proof),
             Err(Error::Locked) => return Answer::new(LOCKED),
             Err(_) => return Answer::new(REFUSED).text("an output that isn't this wallet's"),
@@ -212,7 +229,8 @@ fn sign(net: Network, bytes: &[u8]) -> Result<Vec<u8>, Answer> {
     if request.network != net {
         return Err(Answer::new(REFUSED).text("a payment on another network"));
     }
-    let mut asked = Review::new("Sign and spend").detail(&request.summary()).answers("sign", "reject").timeout(300);
+    let mut asked =
+        Review::new("Sign and spend").detail(&request.summary()).answers("sign", "reject").timeout(300);
     for p in request.pages() {
         asked = asked.page(Page::new(&p.heading).value(&p.value).mono(&p.mono).prose(&p.prose));
     }
@@ -250,7 +268,9 @@ impl Wallet {
     }
 
     fn sign_piece(&mut self, m: &[u8]) -> Answer {
-        let (Some(net), Some(total), Some(offset)) = (m.get(1).and_then(|n| network(*n)), u32_at(m, 2), u32_at(m, 6)) else {
+        let (Some(net), Some(total), Some(offset)) =
+            (m.get(1).and_then(|n| network(*n)), u32_at(m, 2), u32_at(m, 6))
+        else {
             return Answer::new(BAD);
         };
         let (total, offset, piece) = (total as usize, offset as usize, &m[10..]);
@@ -319,15 +339,25 @@ impl View {
         if self.as_text {
             // 95 characters, seven lines of them
             for (i, start) in (0..address.len()).step_by(14).enumerate() {
-                screen::text_centred(2 + i as i32 * 15, &address[start..(start + 14).min(address.len())], Style::Mono, Color::Light);
+                screen::text_centred(
+                    2 + i as i32 * 15,
+                    &address[start..(start + 14).min(address.len())],
+                    Style::Mono,
+                    Color::Light,
+                );
             }
         } else {
             let data = address.as_bytes();
             let side = screen::qr(0, 0, data, 94).unwrap_or(0);
             screen::clear(Color::Dark);
             screen::qr((WIDTH - side) / 2, 0, data, 94);
-            let which = if self.index == 0 { String::from("primary") } else { format!("subaddress #{}", self.index) };
-            let net = if self.network == Network::Mainnet { String::new() } else { format!(" {}", self.network.name()) };
+            let which =
+                if self.index == 0 { String::from("primary") } else { format!("subaddress #{}", self.index) };
+            let net = if self.network == Network::Mainnet {
+                String::new()
+            } else {
+                format!(" {}", self.network.name())
+            };
             screen::text_centred(97, &format!("{which}{net}"), Style::Small, Color::Light);
         }
         screen::present();

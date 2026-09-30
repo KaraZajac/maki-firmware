@@ -12,12 +12,11 @@
 //! count), its public key (32 bytes) and the Ed25519 signature of all that (64).
 //!
 //! The link's messages, a byte saying what first:
-//! - `C`, then a card as above from its version to its lines: your card from now on, once the
-//!   owner says yes. Answered `0`, or `1` the owner said no, `2` no answer, `3` maki is locked,
-//!   `4` not a card it takes.
-//! - `P`: the people met, once the owner says yes: `0`, then for each, whether its card was
-//!   signed (a byte), when you met (u64, seconds since 1970, 0 if maki didn't know), its card as
-//!   above (a u16's length, little-endian, first), and its key (32 bytes) if signed.
+//! - `C`, then a card as above from its version to its lines: your card from now on, once the owner says yes.
+//!   Answered `0`, or `1` the owner said no, `2` no answer, `3` maki is locked, `4` not a card it takes.
+//! - `P`: the people met, once the owner says yes: `0`, then for each, whether its card was signed (a byte),
+//!   when you met (u64, seconds since 1970, 0 if maki didn't know), its card as above (a u16's length,
+//!   little-endian, first), and its key (32 bytes) if signed.
 
 use maki_app::*;
 
@@ -54,7 +53,8 @@ fn base45(data: &[u8]) -> String {
 }
 
 fn unbase45(text: &str) -> Option<Vec<u8>> {
-    let digits: Vec<u32> = text.bytes().map(|c| B45.iter().position(|&b| b == c).map(|i| i as u32)).collect::<Option<_>>()?;
+    let digits: Vec<u32> =
+        text.bytes().map(|c| B45.iter().position(|&b| b == c).map(|i| i as u32)).collect::<Option<_>>()?;
     let mut out = Vec::new();
     for group in digits.chunks(3) {
         match group {
@@ -89,7 +89,10 @@ fn text_ok(s: &str, most: usize) -> bool { s.len() <= most && !s.chars().any(|c|
 
 impl Card {
     fn ok(&self) -> bool {
-        !self.name.trim().is_empty() && text_ok(&self.name, NAME) && self.lines.len() <= LINES && self.lines.iter().all(|l| text_ok(l, LINE))
+        !self.name.trim().is_empty()
+            && text_ok(&self.name, NAME)
+            && self.lines.len() <= LINES
+            && self.lines.iter().all(|l| text_ok(l, LINE))
     }
 
     /// Its version, name and lines, as the card's bytes have them.
@@ -241,7 +244,10 @@ fn storage_key(card: &Card, signer: Option<&[u8; 32]>) -> String {
         Some(k) => format!("p:{}", hex(&k[..8])),
         None => {
             // FNV-1a over the card: the same card, the same person
-            let h = card.body().iter().fold(0xcbf2_9ce4_8422_2325u64, |h, &b| (h ^ b as u64).wrapping_mul(0x100_0000_01b3));
+            let h = card
+                .body()
+                .iter()
+                .fold(0xcbf2_9ce4_8422_2325u64, |h, &b| (h ^ b as u64).wrapping_mul(0x100_0000_01b3));
             format!("p:u{h:016x}")
         }
     }
@@ -270,7 +276,8 @@ fn load() -> Vec<Person> {
 
 /// A day from seconds since 1970 (the civil calendar from days since then).
 fn date(secs: u64) -> String {
-    const MONTHS: [&str; 12] = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+    const MONTHS: [&str; 12] =
+        ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
     let z = (secs / 86_400) as i64 + 719_468;
     let era = z.div_euclid(146_097);
     let doe = z - era * 146_097;
@@ -344,16 +351,34 @@ impl App {
                             screen::fill_rect(0, y, WIDTH, 16, Color::Light);
                         }
                         let color = if i == self.selected { Color::Dark } else { Color::Light };
-                        screen::text(3, y, &fit_width(&p.card.name, Style::Regular, WIDTH - 6), Style::Regular, color);
+                        screen::text(
+                            3,
+                            y,
+                            &fit_width(&p.card.name, Style::Regular, WIDTH - 6),
+                            Style::Regular,
+                            color,
+                        );
                     }
                 }
                 self.foot(&format!("{} people", self.people.len()));
             }
             View::Person(i) => {
                 let Some(p) = self.people.get(i) else { return };
-                screen::text(2, 0, &fit_width(&p.card.name, Style::Bold, WIDTH - 4), Style::Bold, Color::Light);
+                screen::text(
+                    2,
+                    0,
+                    &fit_width(&p.card.name, Style::Bold, WIDTH - 4),
+                    Style::Bold,
+                    Color::Light,
+                );
                 for (row, l) in p.card.lines.iter().enumerate() {
-                    screen::text(2, 18 + row as i32 * 13, &fit_width(l, Style::Small, WIDTH - 4), Style::Small, Color::Light);
+                    screen::text(
+                        2,
+                        18 + row as i32 * 13,
+                        &fit_width(l, Style::Small, WIDTH - 4),
+                        Style::Small,
+                        Color::Light,
+                    );
                 }
                 let met = if p.met > 0 { format!("met {}", date(p.met)) } else { "met".to_string() };
                 screen::text(2, 60, &met, Style::Small, Color::Light);
@@ -418,8 +443,13 @@ impl App {
                 if !rest.is_empty() {
                     return vec![BAD];
                 }
-                let detail = if card.lines.is_empty() { card.name.clone() } else { format!("{}: {}", card.name, card.lines.join(", ")) };
-                match Ask::new("Make this your card?").detail(&fit(&detail, 120)).answers("yes", "no").show() {
+                let detail = if card.lines.is_empty() {
+                    card.name.clone()
+                } else {
+                    format!("{}: {}", card.name, card.lines.join(", "))
+                };
+                match Ask::new("Make this your card?").detail(&fit(&detail, 120)).answers("yes", "no").show()
+                {
                     Ok(Answer::Yes) => {}
                     Ok(Answer::No) => return vec![DENIED],
                     _ => return vec![NO_ANSWER],
@@ -433,7 +463,11 @@ impl App {
             }
             Some(b'P') if message.len() == 1 => {
                 let detail = format!("{} people", self.people.len());
-                match Ask::new("Share who you met with the computer?").detail(&detail).answers("share", "no").show() {
+                match Ask::new("Share who you met with the computer?")
+                    .detail(&detail)
+                    .answers("share", "no")
+                    .show()
+                {
                     Ok(Answer::Yes) => {}
                     Ok(Answer::No) => return vec![DENIED],
                     _ => return vec![NO_ANSWER],
@@ -452,7 +486,8 @@ impl App {
 fn main() {
     let _ = menu(&["Scan a card", "People you met", "Your card", "Forget this one"]);
     let mut buf = [0u8; 256];
-    let card = storage::get("card", &mut buf).and_then(|n| Card::read(&buf[..n.min(buf.len())]).map(|(c, _)| c));
+    let card =
+        storage::get("card", &mut buf).and_then(|n| Card::read(&buf[..n.min(buf.len())]).map(|(c, _)| c));
     let code = card.as_ref().and_then(your_code);
     let mut app = App { card, code, people: load(), selected: 0, view: View::Card, note: String::new() };
     loop {
@@ -473,7 +508,9 @@ fn main() {
             }
             (_, Event::Exit) => return,
             (_, Event::Menu(0)) => app.scan(),
-            (_, Event::Menu(1)) | (View::Card, Event::Centre) | (View::Person(_), Event::Centre) => app.view = View::People,
+            (_, Event::Menu(1)) | (View::Card, Event::Centre) | (View::Person(_), Event::Centre) => {
+                app.view = View::People
+            }
             (_, Event::Menu(2)) => app.view = View::Card,
             (View::Person(i), Event::Menu(3)) => {
                 let p = app.people.remove(i);

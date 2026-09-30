@@ -3,21 +3,21 @@
 //!
 //! What maki takes, beyond what EIP-712 asks:
 //!
-//! - `types` names `EIP712Domain`, with only the fields EIP-712 defines for it, of their types.
-//!   Wallets differ on typed data without it (some hash the domain as having no fields at all).
+//! - `types` names `EIP712Domain`, with only the fields EIP-712 defines for it, of their types. Wallets
+//!   differ on typed data without it (some hash the domain as having no fields at all).
 //! - No type refers to itself, however indirectly: EIP-712 leaves it open, and wallets differ.
-//! - Every value is declared by its type, and every declared value is there (a struct may be
-//!   null or left out, and hashes to zero, as v4 has it). An undeclared value isn't signed, so
-//!   maki won't take one to show.
-//! - Integers are JSON numbers or strings, decimal or `0x` hex; `bytes` and `bytesN` are hex (N
-//!   bytes exactly); addresses are 20 bytes of hex; booleans are `true` or `false`.
+//! - Every value is declared by its type, and every declared value is there (a struct may be null or left
+//!   out, and hashes to zero, as v4 has it). An undeclared value isn't signed, so maki won't take one to
+//!   show.
+//! - Integers are JSON numbers or strings, decimal or `0x` hex; `bytes` and `bytesN` are hex (N bytes
+//!   exactly); addresses are 20 bytes of hex; booleans are `true` or `false`.
 
 use alloc::collections::BTreeSet;
 use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
 
-use crate::account::{keccak256, Account};
+use crate::account::{Account, keccak256};
 use crate::json::{self, Value};
 
 /// The most JSON maki takes.
@@ -132,7 +132,9 @@ fn fixed_bytes_type(base: &str) -> Option<usize> {
 }
 
 fn atomic(base: &str) -> bool {
-    matches!(base, "address" | "bool" | "string" | "bytes") || integer_type(base).is_some() || fixed_bytes_type(base).is_some()
+    matches!(base, "address" | "bool" | "string" | "bytes")
+        || integer_type(base).is_some()
+        || fixed_bytes_type(base).is_some()
 }
 
 /// A hex string's bytes: `0x` and an even number of digits.
@@ -141,10 +143,7 @@ pub fn hex_bytes(s: &str) -> Option<Vec<u8>> {
     if digits.len() % 2 != 0 {
         return None;
     }
-    (0..digits.len())
-        .step_by(2)
-        .map(|i| u8::from_str_radix(digits.get(i..i + 2)?, 16).ok())
-        .collect()
+    (0..digits.len()).step_by(2).map(|i| u8::from_str_radix(digits.get(i..i + 2)?, 16).ok()).collect()
 }
 
 /// A 256-bit number, big-endian, from decimal digits.
@@ -230,7 +229,9 @@ impl TypedData {
         }
         let root = json::parse(text)?;
         let Some(top) = root.as_object() else { return shape("not a JSON object".into()) };
-        if let Some((k, _)) = top.iter().find(|(k, _)| !matches!(k.as_str(), "types" | "primaryType" | "domain" | "message")) {
+        if let Some((k, _)) =
+            top.iter().find(|(k, _)| !matches!(k.as_str(), "types" | "primaryType" | "domain" | "message"))
+        {
             return shape(format!("\"{}\" isn't part of typed data", k));
         }
         let Some(types_value) = root.get("types").and_then(Value::as_object) else {
@@ -245,12 +246,16 @@ impl TypedData {
             if !identifier(name) || atomic(name) {
                 return shape(format!("\"{}\" isn't a type name", name));
             }
-            let Some(fields) = fields.as_array() else { return shape(format!("{}: not a list of fields", name)) };
+            let Some(fields) = fields.as_array() else {
+                return shape(format!("{}: not a list of fields", name));
+            };
             let mut list: Vec<Field> = Vec::new();
             for f in fields {
-                let (Some(obj), Some(fname), Some(fty)) =
-                    (f.as_object(), f.get("name").and_then(Value::as_str), f.get("type").and_then(Value::as_str))
-                else {
+                let (Some(obj), Some(fname), Some(fty)) = (
+                    f.as_object(),
+                    f.get("name").and_then(Value::as_str),
+                    f.get("type").and_then(Value::as_str),
+                ) else {
                     return shape(format!("{}: a field without a name and a type", name));
                 };
                 if obj.len() != 2 {
@@ -288,7 +293,9 @@ impl TypedData {
         // every field's type exists
         for (name, fields) in &td.types {
             for f in fields {
-                let Some((base, _)) = split_type(&f.ty) else { return shape(format!("{}.{}: \"{}\" isn't a type", name, f.name, f.ty)) };
+                let Some((base, _)) = split_type(&f.ty) else {
+                    return shape(format!("{}.{}: \"{}\" isn't a type", name, f.name, f.ty));
+                };
                 if !atomic(base) && td.fields(base).is_none() {
                     return shape(format!("{}.{}: no type \"{}\"", name, f.name, base));
                 }
@@ -315,7 +322,9 @@ impl TypedData {
             }
         }
         // the domain as EIP-712 defines it
-        let Some(domain_fields) = td.fields("EIP712Domain") else { return shape("types has no EIP712Domain".into()) };
+        let Some(domain_fields) = td.fields("EIP712Domain") else {
+            return shape("types has no EIP712Domain".into());
+        };
         let mut last = None;
         for f in domain_fields {
             let Some(at) = DOMAIN_FIELDS.iter().position(|(n, _)| *n == f.name) else {
@@ -338,7 +347,9 @@ impl TypedData {
     }
 
     /// A struct type's fields.
-    pub fn fields(&self, ty: &str) -> Option<&[Field]> { self.types.iter().find(|(n, _)| n == ty).map(|(_, f)| f.as_slice()) }
+    pub fn fields(&self, ty: &str) -> Option<&[Field]> {
+        self.types.iter().find(|(n, _)| n == ty).map(|(_, f)| f.as_slice())
+    }
 
     /// EIP-712's `encodeType`: the type, then the struct types it refers to (however deep),
     /// sorted by name.
@@ -348,7 +359,8 @@ impl TypedData {
         while let Some(t) = todo.pop() {
             let Some(fields) = self.fields(&t) else { return shape(format!("no type \"{}\"", t)) };
             for f in fields {
-                let (base, _) = split_type(&f.ty).ok_or_else(|| Error::Shape(format!("\"{}\" isn't a type", f.ty)))?;
+                let (base, _) =
+                    split_type(&f.ty).ok_or_else(|| Error::Shape(format!("\"{}\" isn't a type", f.ty)))?;
                 if self.fields(base).is_some() && base != ty && found.insert(base.into()) {
                     todo.push(base.into());
                 }
@@ -372,7 +384,9 @@ impl TypedData {
         Ok(out)
     }
 
-    pub fn type_hash(&self, ty: &str) -> Result<[u8; 32], Error> { Ok(keccak256(self.encode_type(ty)?.as_bytes())) }
+    pub fn type_hash(&self, ty: &str) -> Result<[u8; 32], Error> {
+        Ok(keccak256(self.encode_type(ty)?.as_bytes()))
+    }
 
     /// EIP-712's `hashStruct`: the type's hash, then each field's value encoded.
     pub fn hash_struct(&self, ty: &str, value: &Value) -> Result<[u8; 32], Error> {
@@ -444,7 +458,9 @@ impl TypedData {
                         _ => return shape(format!("not {} bytes of hex", n)),
                     }
                 } else if let Some((signed, bits)) = integer_type(base) {
-                    let Some((negative, magnitude)) = integer_value(v) else { return shape("not a whole number".into()) };
+                    let Some((negative, magnitude)) = integer_value(v) else {
+                        return shape("not a whole number".into());
+                    };
                     word = if !signed {
                         if negative || !fits(&magnitude, bits) {
                             return shape(format!("out of range for {}", base));
@@ -462,11 +478,7 @@ impl TypedData {
                         if !ok {
                             return shape(format!("out of range for {}", base));
                         }
-                        if negative {
-                            negate(&magnitude)
-                        } else {
-                            magnitude
-                        }
+                        if negative { negate(&magnitude) } else { magnitude }
                     };
                 } else {
                     return shape(format!("\"{}\" isn't a type", base));
@@ -476,7 +488,9 @@ impl TypedData {
         Ok(word)
     }
 
-    pub fn domain_separator(&self) -> Result<[u8; 32], Error> { self.hash_struct("EIP712Domain", &self.domain) }
+    pub fn domain_separator(&self) -> Result<[u8; 32], Error> {
+        self.hash_struct("EIP712Domain", &self.domain)
+    }
 
     /// What's signed: `keccak256(0x19 0x01 || domain separator || hashStruct(message))`.
     pub fn signing_hash(&self) -> Result<[u8; 32], Error> {

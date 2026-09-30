@@ -2,7 +2,7 @@
 //! typed data of every shape, what maki refuses, and what the owner reads.
 
 use maki_eth::display::{self, Page};
-use maki_eth::{keccak256, Account, TypedData};
+use maki_eth::{Account, TypedData, keccak256};
 use maki_hd::seed::OneKey;
 
 /// One bare private key, as other software makes them, at every path.
@@ -43,11 +43,26 @@ const MAIL: &str = r#"{
 #[test]
 fn the_spec_example_hashes_and_signs_as_the_spec_says() {
     let td = TypedData::parse(MAIL).unwrap();
-    assert_eq!(td.encode_type("Mail").unwrap(), "Mail(Person from,Person to,string contents)Person(string name,address wallet)");
-    assert_eq!(hex(&td.type_hash("Mail").unwrap()), "a0cedeb2dc280ba39b857546d74f5549c3a1d7bdc2dd96bf881f76108e23dac2");
-    assert_eq!(hex(&td.hash_struct("Mail", &td.message).unwrap()), "c52c0ee5d84264471806290a3f2c4cecfc5490626bf912d01f240d7a274b371e");
-    assert_eq!(hex(&td.domain_separator().unwrap()), "f2cee375fa42b42143804025fc449deafd50cc031ca257e0b194a650a912090f");
-    assert_eq!(hex(&td.signing_hash().unwrap()), "be609aee343fb3c4b28e1df9e632fca64fcfaede20f02e86244efddf30957bd2");
+    assert_eq!(
+        td.encode_type("Mail").unwrap(),
+        "Mail(Person from,Person to,string contents)Person(string name,address wallet)"
+    );
+    assert_eq!(
+        hex(&td.type_hash("Mail").unwrap()),
+        "a0cedeb2dc280ba39b857546d74f5549c3a1d7bdc2dd96bf881f76108e23dac2"
+    );
+    assert_eq!(
+        hex(&td.hash_struct("Mail", &td.message).unwrap()),
+        "c52c0ee5d84264471806290a3f2c4cecfc5490626bf912d01f240d7a274b371e"
+    );
+    assert_eq!(
+        hex(&td.domain_separator().unwrap()),
+        "f2cee375fa42b42143804025fc449deafd50cc031ca257e0b194a650a912090f"
+    );
+    assert_eq!(
+        hex(&td.signing_hash().unwrap()),
+        "be609aee343fb3c4b28e1df9e632fca64fcfaede20f02e86244efddf30957bd2"
+    );
     // the spec's key: keccak256("cow"), whose address is Cow's
     let cow = Account::new(one(&keccak256(b"cow")), 0).unwrap();
     assert_eq!(cow.address_string(), "0xCD2a3d9F938E13CD947Ec05AbC7FE734Df8DD826");
@@ -185,11 +200,23 @@ fn mail_with(from: &str, to: &str) -> String {
 #[test]
 fn what_maki_wont_take() {
     // a value its type doesn't declare, which wouldn't be signed
-    assert!(refused(&mail_with(r#""contents": "Hello, Bob!""#, r#""contents": "Hello, Bob!", "amount": "1000000""#)).contains("not declared"));
+    assert!(
+        refused(&mail_with(
+            r#""contents": "Hello, Bob!""#,
+            r#""contents": "Hello, Bob!", "amount": "1000000""#
+        ))
+        .contains("not declared")
+    );
     // a declared value left out
     assert!(refused(&mail_with(",\n    \"contents\": \"Hello, Bob!\"", "")).contains("missing"));
     // a type that refers to itself, however indirectly
-    assert!(refused(&mail_with(r#"{"name": "wallet", "type": "address"}"#, r#"{"name": "wallet", "type": "address"}, {"name": "last", "type": "Mail"}"#)).contains("refers to itself"));
+    assert!(
+        refused(&mail_with(
+            r#"{"name": "wallet", "type": "address"}"#,
+            r#"{"name": "wallet", "type": "address"}, {"name": "last", "type": "Mail"}"#
+        ))
+        .contains("refers to itself")
+    );
     // wrong kinds of value
     assert!(refused(&mail_with(r#""chainId": 1"#, r#""chainId": 1.5"#)).contains("whole numbers"));
     assert!(refused(&mail_with(r#""chainId": 1"#, r#""chainId": true"#)).contains("whole number"));
@@ -197,15 +224,39 @@ fn what_maki_wont_take() {
     assert!(refused(&mail_with(r#""contents": "Hello, Bob!""#, r#""contents": 7"#)).contains("string"));
     // a type nobody declared, and types that aren't
     assert!(refused(&mail_with(r#""type": "Person"}"#, r#""type": "Persona"}"#)).contains("no type"));
-    assert!(refused(&mail_with(r#""contents", "type": "string""#, r#""contents", "type": "string[0]""#)).contains("isn't a type"));
-    assert!(refused(&mail_with(r#""contents", "type": "string""#, r#""contents", "type": "uint7""#)).contains("no type \"uint7\""));
+    assert!(
+        refused(&mail_with(r#""contents", "type": "string""#, r#""contents", "type": "string[0]""#))
+            .contains("isn't a type")
+    );
+    assert!(
+        refused(&mail_with(r#""contents", "type": "string""#, r#""contents", "type": "uint7""#))
+            .contains("no type \"uint7\"")
+    );
     // the domain: EIP-712's fields only, of their types, in its order
-    assert!(refused(&mail_with(r#"{"name": "version", "type": "string"},"#, r#"{"name": "version", "type": "uint256"},"#)).contains("should be string"));
-    assert!(refused(&mail_with(r#""EIP712Domain": ["#, r#""EIP712Domain": [{"name": "owner", "type": "address"},"#)).contains("isn't a domain field"));
+    assert!(
+        refused(&mail_with(
+            r#"{"name": "version", "type": "string"},"#,
+            r#"{"name": "version", "type": "uint256"},"#
+        ))
+        .contains("should be string")
+    );
+    assert!(
+        refused(&mail_with(
+            r#""EIP712Domain": ["#,
+            r#""EIP712Domain": [{"name": "owner", "type": "address"},"#
+        ))
+        .contains("isn't a domain field")
+    );
     assert!(refused(&MAIL.replace("EIP712Domain", "Domain")).contains("EIP712Domain"));
     // JSON that's too loose: a name twice, a trailing comma, more after the end, deep nesting
-    assert!(refused(&mail_with(r#""contents": "Hello, Bob!""#, r#""contents": "Hello, Bob!", "contents": "Hi""#)).contains("twice"));
-    assert!(refused(&mail_with(r#""contents": "Hello, Bob!""#, r#""contents": "Hello, Bob!","#)).contains("expected"));
+    assert!(
+        refused(&mail_with(r#""contents": "Hello, Bob!""#, r#""contents": "Hello, Bob!", "contents": "Hi""#))
+            .contains("twice")
+    );
+    assert!(
+        refused(&mail_with(r#""contents": "Hello, Bob!""#, r#""contents": "Hello, Bob!","#))
+            .contains("expected")
+    );
     assert!(refused(&format!("{} {{}}", MAIL)).contains("after the end"));
     assert!(refused(&format!("{}{}", "[".repeat(40), "]".repeat(40))).contains("deep"));
     // out of range
@@ -216,15 +267,30 @@ fn what_maki_wont_take() {
     assert!(refused(&edges.replacen(r#""i": 0"#, r#""i": -1"#, 1)).contains("out of range"));
     // a fixed-size array or bytesN of the wrong length
     let arrays = shapes()[3].clone();
-    assert!(refused(&arrays.replacen(r#""0x00000000000000000000000000000000000000fF"]"#, r#""0x00000000000000000000000000000000000000fF", "0x0000000000000000000000000000000000000001"]"#, 1)).contains("items"));
+    assert!(
+        refused(&arrays.replacen(
+            r#""0x00000000000000000000000000000000000000fF"]"#,
+            r#""0x00000000000000000000000000000000000000fF", "0x0000000000000000000000000000000000000001"]"#,
+            1
+        ))
+        .contains("items")
+    );
     let blob = shapes()[2].clone();
     assert!(refused(&blob.replacen(r#""one": "0x7f""#, r#""one": "0x7f00""#, 1)).contains("1 bytes"));
     // something other than typed data, and signing the domain itself
-    assert!(refused(r#"{"types": {}, "primaryType": "Mail", "domain": {}, "message": {}, "extra": 1}"#).contains("isn't part of typed data"));
-    assert!(refused(&mail_with(r#""primaryType": "Mail""#, r#""primaryType": "EIP712Domain""#)).contains("to sign"));
+    assert!(
+        refused(r#"{"types": {}, "primaryType": "Mail", "domain": {}, "message": {}, "extra": 1}"#)
+            .contains("isn't part of typed data")
+    );
+    assert!(
+        refused(&mail_with(r#""primaryType": "Mail""#, r#""primaryType": "EIP712Domain""#))
+            .contains("to sign")
+    );
 }
 
-fn show(pages: &[Page]) -> Vec<String> { pages.iter().map(|p| format!("{} | {} | {}", p.heading, p.value, p.mono)).collect() }
+fn show(pages: &[Page]) -> Vec<String> {
+    pages.iter().map(|p| format!("{} | {} | {}", p.heading, p.value, p.mono)).collect()
+}
 
 #[test]
 fn a_permit_is_spelled_out() {

@@ -14,19 +14,19 @@ use alloc::vec::Vec;
 use sha3::{Digest, Keccak256};
 
 #[cfg(feature = "keys")]
+pub mod bulletproof;
+#[cfg(feature = "keys")]
 mod english;
 #[cfg(feature = "keys")]
 mod keys;
-#[cfg(feature = "keys")]
-pub mod words;
+pub mod request;
 #[cfg(feature = "keys")]
 pub mod sign;
 #[cfg(feature = "keys")]
-pub mod bulletproof;
-#[cfg(feature = "keys")]
 pub mod spend;
-pub mod request;
 pub mod tx;
+#[cfg(feature = "keys")]
+pub mod words;
 
 #[cfg(feature = "keys")]
 pub use keys::Keys;
@@ -97,7 +97,12 @@ pub fn address(network: Network, kind: Kind, spend: &[u8; 32], view: &[u8; 32]) 
 
 /// An integrated address: a standard address with a payment ID, which a payment to it carries,
 /// encrypted (106 characters).
-pub fn integrated_address(network: Network, spend: &[u8; 32], view: &[u8; 32], payment_id: &[u8; 8]) -> String {
+pub fn integrated_address(
+    network: Network,
+    spend: &[u8; 32],
+    view: &[u8; 32],
+    payment_id: &[u8; 8],
+) -> String {
     let mut data = Vec::with_capacity(77);
     data.push(network.integrated_tag());
     data.extend_from_slice(spend);

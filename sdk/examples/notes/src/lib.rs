@@ -10,11 +10,9 @@
 //! the centre says so. The computer can ask for the titles, never for what a note says.
 //!
 //! The link's messages, a byte saying what first:
-//! - `A`, the title's length (a byte), the title, then the text: a note to keep, once the owner
-//!   says yes. Answered `0`, or `1` the owner said no, `2` no answer, `4` not a note it takes, `5`
-//!   no room for it.
+//! - `A`, the title's length (a byte), the title, then the text: a note to keep, once the owner says yes.
+//!   Answered `0`, or `1` the owner said no, `2` no answer, `4` not a note it takes, `5` no room for it.
 //! - `L`: the titles, a line each, after `0`.
-
 
 use maki_app::*;
 
@@ -66,7 +64,9 @@ fn read(key: &str) -> Option<String> {
 }
 
 /// A title the list can show: one line, not empty, not too long.
-fn title_ok(t: &str) -> bool { !t.trim().is_empty() && t.chars().count() <= TITLE && !t.chars().any(|c| c.is_control()) }
+fn title_ok(t: &str) -> bool {
+    !t.trim().is_empty() && t.chars().count() <= TITLE && !t.chars().any(|c| c.is_control())
+}
 
 /// Keeps a note; its key, or why not.
 fn keep(title: &str, text: &str) -> Result<String, u8> {
@@ -94,7 +94,17 @@ fn fit(text: &str, style: Style, room: i32) -> String {
 
 /// A line of text to draw: tabs as spaces, anything else that isn't printable as a `?`.
 fn printable(line: &str) -> String {
-    line.chars().map(|c| if c == '\t' { ' ' } else if c.is_control() { '?' } else { c }).collect()
+    line.chars()
+        .map(|c| {
+            if c == '\t' {
+                ' '
+            } else if c.is_control() {
+                '?'
+            } else {
+                c
+            }
+        })
+        .collect()
 }
 
 /// The lines `text` wraps to on the screen (at spaces where it can, anywhere where it can't; a
@@ -154,9 +164,18 @@ fn type_all(text: &str) -> Result<(), Error> {
 enum View {
     List,
     /// a note open: its title, its lines, the page
-    Note { at: usize, title: String, text: String, lines: Vec<String>, page: usize },
+    Note {
+        at: usize,
+        title: String,
+        text: String,
+        lines: Vec<String>,
+        page: usize,
+    },
     /// asking before typing what presses Enter or Tab
-    Typing { enters: usize, tabs: usize },
+    Typing {
+        enters: usize,
+        tabs: usize,
+    },
     /// asking before deleting the open note
     Deleting,
 }
@@ -204,7 +223,13 @@ impl App {
                 }
                 screen::text(2, 0, &fit(title, Style::Bold, room), Style::Bold, Color::Light);
                 for (row, line) in lines.iter().skip(page * LINES).take(LINES).enumerate() {
-                    screen::text(2, TOP + row as i32 * Style::Small.height(), &printable(line), Style::Small, Color::Light);
+                    screen::text(
+                        2,
+                        TOP + row as i32 * Style::Small.height(),
+                        &printable(line),
+                        Style::Small,
+                        Color::Light,
+                    );
                 }
                 self.foot();
             }
@@ -225,7 +250,12 @@ impl App {
             View::Deleting => {
                 screen::text_centred(20, "Delete it?", Style::Bold, Color::Light);
                 if let Some((_, title, ..)) = &self.open {
-                    screen::text_centred(44, &fit(title, Style::Regular, WIDTH - 6), Style::Regular, Color::Light);
+                    screen::text_centred(
+                        44,
+                        &fit(title, Style::Regular, WIDTH - 6),
+                        Style::Regular,
+                        Color::Light,
+                    );
                 }
                 screen::text_centred(66, "gone for good", Style::Small, Color::Light);
                 screen::line(0, 97, WIDTH - 1, 97, Color::Light);
@@ -270,13 +300,18 @@ impl App {
             }
             Some(b'A') => {
                 let n = message.get(1).copied().unwrap_or(0) as usize;
-                let (Some(title), Some(text)) = (message.get(2..2 + n), message.get(2 + n..)) else { return vec![BAD] };
-                let (Ok(title), Ok(text)) = (std::str::from_utf8(title), std::str::from_utf8(text)) else { return vec![BAD] };
+                let (Some(title), Some(text)) = (message.get(2..2 + n), message.get(2 + n..)) else {
+                    return vec![BAD];
+                };
+                let (Ok(title), Ok(text)) = (std::str::from_utf8(title), std::str::from_utf8(text)) else {
+                    return vec![BAD];
+                };
                 if !title_ok(title) || text.len() > TEXT {
                     return vec![BAD];
                 }
                 let detail = format!("\"{title}\", {} characters", text.chars().count());
-                match Ask::new("Keep a note from the computer?").detail(&detail).answers("keep", "no").show() {
+                match Ask::new("Keep a note from the computer?").detail(&detail).answers("keep", "no").show()
+                {
                     Ok(Answer::Yes) => {}
                     Ok(Answer::No) => return vec![DENIED],
                     _ => return vec![NO_ANSWER],
@@ -354,7 +389,9 @@ fn main() {
                 app.open(app.selected);
                 continue;
             }
-            (View::Note { at, title, text, lines, page }, Event::Left) => View::Note { at, title, text, lines, page: page.saturating_sub(1) },
+            (View::Note { at, title, text, lines, page }, Event::Left) => {
+                View::Note { at, title, text, lines, page: page.saturating_sub(1) }
+            }
             (View::Note { at, title, text, lines, page }, Event::Right) => {
                 let last = lines.len().div_ceil(LINES).max(1) - 1;
                 View::Note { at, title, text, lines, page: (page + 1).min(last) }

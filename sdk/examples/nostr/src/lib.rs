@@ -9,11 +9,11 @@
 //!
 //! Messages (maki desktop's `src/shared/nostr.ts` makes them), numbers big-endian:
 //!
-//! - `1, site` (a byte of length, then the site): the public key. Answer: `0` and the 32-byte
-//!   x-only key, or `1` if the owner said no.
-//! - `2, site, created_at (8 bytes), kind (4), tags (4 bytes of length, then JSON: an array of
-//!   arrays of strings, as JSON.stringify writes it), content (4 bytes of length, then UTF-8)`:
-//!   a signature. Answer: `0`, the event's 32-byte id and the 64-byte signature; or `1`.
+//! - `1, site` (a byte of length, then the site): the public key. Answer: `0` and the 32-byte x-only key, or
+//!   `1` if the owner said no.
+//! - `2, site, created_at (8 bytes), kind (4), tags (4 bytes of length, then JSON: an array of arrays of
+//!   strings, as JSON.stringify writes it), content (4 bytes of length, then UTF-8)`: a signature. Answer:
+//!   `0`, the event's 32-byte id and the 64-byte signature; or `1`.
 //!
 //! Anything else is answered `2`, and `3` means the key isn't there (maki is locked).
 
@@ -223,8 +223,12 @@ fn answer(msg: &[u8], out: &mut [u8; 97]) -> usize {
                 let mut npub = Buf::<72>::new();
                 bech32("npub", &public, &mut npub);
                 let mut detail = Buf::<128>::new();
-                let _ = write!(detail, "{site} as {}…{}", &npub.as_str()[..12], &npub.as_str()[npub.len() - 6..]);
-                let asked = Ask::new("Let it see your Nostr key?").detail(detail.as_str()).answers("let it", "don't").show();
+                let _ =
+                    write!(detail, "{site} as {}…{}", &npub.as_str()[..12], &npub.as_str()[npub.len() - 6..]);
+                let asked = Ask::new("Let it see your Nostr key?")
+                    .detail(detail.as_str())
+                    .answers("let it", "don't")
+                    .show();
                 if asked != Ok(Answer::Yes) {
                     out[0] = NO;
                     return 1;
@@ -236,7 +240,9 @@ fn answer(msg: &[u8], out: &mut [u8; 97]) -> usize {
             33
         }
         2 => {
-            let (Some(created_at), Some(kind), Some(tags), Some(content)) = (r.u64(), r.u32(), r.str32(), r.str32()) else {
+            let (Some(created_at), Some(kind), Some(tags), Some(content)) =
+                (r.u64(), r.u32(), r.str32(), r.str32())
+            else {
                 out[0] = BAD;
                 return 1;
             };
@@ -262,7 +268,11 @@ fn answer(msg: &[u8], out: &mut [u8; 97]) -> usize {
             } else {
                 preview(content, room, &mut detail);
             }
-            let asked = Ask::new(question.as_str()).detail(detail.as_str()).answers("sign", "cancel").timeout(60).show();
+            let asked = Ask::new(question.as_str())
+                .detail(detail.as_str())
+                .answers("sign", "cancel")
+                .timeout(60)
+                .show();
             if asked != Ok(Answer::Yes) {
                 out[0] = NO;
                 return 1;

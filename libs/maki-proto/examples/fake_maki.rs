@@ -30,7 +30,8 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use hmac::{Hmac, Mac};
 use maki_proto::device::{
-    reply, AppEntry, AppSpace, Approval, Apps, Ask, Backup, Device, Handled, Platform, StoreState, TimeState, BACKUP_PIECE,
+    AppEntry, AppSpace, Approval, Apps, Ask, BACKUP_PIECE, Backup, Device, Handled, Platform, StoreState,
+    TimeState, reply,
 };
 use maki_proto::frame::{self, Deframer};
 use maki_proto::site;
@@ -57,7 +58,9 @@ impl Platform for Host {
         self.clock = Some((utc_ms, Instant::now()));
     }
 
-    fn time_state_changed(&mut self, state: TimeState) { println!("  time is now {state:?}"); }
+    fn time_state_changed(&mut self, state: TimeState) {
+        println!("  time is now {state:?}");
+    }
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -174,37 +177,68 @@ impl maki_wasm::Platform for FakeApp {
             Err(_) => maki_wasm::Event::Exit,
         }
     }
+
     fn present(&mut self, _: &maki_wasm::Canvas) {}
+
     fn set_menu(&mut self, _: &[String]) {}
+
     fn millis(&self) -> u64 { self.start.elapsed().as_millis() as u64 }
+
     fn unix_time(&self) -> Option<(u64, bool)> { Some((host_utc_ms() / 1000, false)) }
+
     fn random(&mut self, buf: &mut [u8]) {
         std::fs::File::open("/dev/urandom").and_then(|mut f| f.read_exact(buf)).expect("no /dev/urandom");
     }
+
     fn log(&mut self, line: &str) { println!("  {}: {line}", self.name) }
+
     fn storage_get(&mut self, key: &str) -> Option<Vec<u8>> {
         self.store.lock().unwrap().app_data.get(&self.id).and_then(|d| d.get(key).cloned())
     }
+
     fn storage_set(&mut self, key: &str, value: &[u8]) -> Result<(), ()> {
-        self.store.lock().unwrap().app_data.entry(self.id.clone()).or_default().insert(key.into(), value.into());
+        self.store
+            .lock()
+            .unwrap()
+            .app_data
+            .entry(self.id.clone())
+            .or_default()
+            .insert(key.into(), value.into());
         Ok(())
     }
+
     fn storage_delete(&mut self, key: &str) -> bool {
         self.store.lock().unwrap().app_data.get_mut(&self.id).is_some_and(|d| d.remove(key).is_some())
     }
+
     fn storage_keys(&mut self) -> Vec<String> {
-        self.store.lock().unwrap().app_data.get(&self.id).map(|d| d.keys().cloned().collect()).unwrap_or_default()
+        self.store
+            .lock()
+            .unwrap()
+            .app_data
+            .get(&self.id)
+            .map(|d| d.keys().cloned().collect())
+            .unwrap_or_default()
     }
+
     fn ask(&mut self, ask: &maki_wasm::Ask) -> maki_wasm::Answer {
         match approve(self.policy, &format!("{}: {} {}", self.name, ask.question, ask.detail)) {
             Approval::Approved => maki_wasm::Answer::Yes,
             _ => maki_wasm::Answer::No,
         }
     }
+
     /// A review: its pages printed, as maki would show them, and answered by the policy.
     fn review(&mut self, review: &maki_wasm::Review) -> maki_wasm::Answer {
         for p in &review.pages {
-            println!("  {} shows [{}] {} {} {}", self.name, p.heading, p.value, p.mono.replace('\n', " "), p.prose.replace('\n', " "));
+            println!(
+                "  {} shows [{}] {} {} {}",
+                self.name,
+                p.heading,
+                p.value,
+                p.mono.replace('\n', " "),
+                p.prose.replace('\n', " ")
+            );
         }
         match approve(self.policy, &format!("{}: {} {}", self.name, review.question, review.detail)) {
             Approval::Approved => maki_wasm::Answer::Yes,
@@ -212,6 +246,7 @@ impl maki_wasm::Platform for FakeApp {
             _ => maki_wasm::Answer::No,
         }
     }
+
     /// What maki-keys answers the app host, from the phrase: the host has checked the path. No
     /// randomness in its Schnorr signatures, as in the simulator: the same every time, so tests
     /// can hold them to the fixtures' (maki adds fresh randomness, as BIP340 advises).
@@ -224,17 +259,24 @@ impl maki_wasm::Platform for FakeApp {
             _ => maki_wasm::FAILED,
         })
     }
+
     /// A wallet's backup words: asked about by the policy, then "shown" (the fake has no screen,
     /// and doesn't print them: its phrase can be someone's). The app hears only the answer.
     fn show_backup(&mut self, path: &[u32]) -> Result<maki_wasm::Answer, i32> {
         if self.keys.is_none() {
             self.keys = Some(maki_hd::seed::SeedKeys::from_seed(&self.seed).map_err(|_| maki_wasm::FAILED)?);
         }
-        let words = maki_hd::seed::answer(self.keys.as_ref().unwrap(), maki_hd::op::MONERO_WORDS, path, &[], &[0; 32])
-            .map_err(|e| match e {
-                maki_hd::Error::Path => maki_wasm::NOT_FOUND,
-                _ => maki_wasm::FAILED,
-            })?;
+        let words = maki_hd::seed::answer(
+            self.keys.as_ref().unwrap(),
+            maki_hd::op::MONERO_WORDS,
+            path,
+            &[],
+            &[0; 32],
+        )
+        .map_err(|e| match e {
+            maki_hd::Error::Path => maki_wasm::NOT_FOUND,
+            _ => maki_wasm::FAILED,
+        })?;
         match approve(self.policy, &format!("{}: show its backup words?", self.name)) {
             Approval::Approved => {
                 println!("  maki shows its owner {} backup words", words.split(|b| *b == b' ').count());
@@ -244,12 +286,18 @@ impl maki_wasm::Platform for FakeApp {
             _ => Ok(maki_wasm::Answer::No),
         }
     }
-    fn app_secret(&mut self, label: &str) -> Option<[u8; 32]> { maki_seed::app_secret(&self.seed, &self.id, &self.developer, label) }
+
+    fn app_secret(&mut self, label: &str) -> Option<[u8; 32]> {
+        maki_seed::app_secret(&self.seed, &self.id, &self.developer, label)
+    }
+
     fn type_text(&mut self, text: &str) -> bool {
         println!("  {} would type {text:?}", self.name);
         true
     }
+
     fn message(&mut self) -> Option<Vec<u8>> { self.current.as_ref().map(|(m, _)| m.clone()) }
+
     fn reply(&mut self, reply: &[u8]) -> bool {
         match self.current.take() {
             Some((_, reply_to)) => {
@@ -286,7 +334,9 @@ fn app_message(
     for _ in 0..2 {
         let inbox = {
             let mut r = running.lock().unwrap();
-            r.entry(app.to_string()).or_insert_with(|| start_app(bundle.clone(), store.clone(), seed, policy)).clone()
+            r.entry(app.to_string())
+                .or_insert_with(|| start_app(bundle.clone(), store.clone(), seed, policy))
+                .clone()
         };
         let (reply_to, answer) = std::sync::mpsc::channel();
         if inbox.send((message.clone(), reply_to)).is_err() {
@@ -332,7 +382,8 @@ fn start_app(bundle: Vec<u8>, store: Arc<Mutex<Store>>, seed: [u8; 64], policy: 
     inbox
 }
 
-const TEST_PHRASE: &str = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
+const TEST_PHRASE: &str =
+    "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
 
 /// The fake's backup: its store as lines of text, not encrypted (the badge's is; the desktop
 /// can't tell the difference, which is the point).
@@ -347,7 +398,10 @@ fn unhex(s: &str) -> Option<Vec<u8>> {
 fn fake_backup(st: &Store) -> Vec<u8> {
     let mut out = FAKE_MAGIC.to_vec();
     for (site, user, pass) in &st.logins {
-        out.extend(format!("L\t{}\t{}\t{}\n", hex(site.as_bytes()), hex(user.as_bytes()), hex(pass.as_bytes())).bytes());
+        out.extend(
+            format!("L\t{}\t{}\t{}\n", hex(site.as_bytes()), hex(user.as_bytes()), hex(pass.as_bytes()))
+                .bytes(),
+        );
     }
     for (site, secret) in &st.totp {
         out.extend(format!("T\t{}\t{}\n", hex(site.as_bytes()), hex(secret)).bytes());
@@ -373,7 +427,9 @@ fn parse_fake(blob: &[u8]) -> Option<(Vec<(String, String, String)>, Vec<(String
 
 /// The last piece of a restore: open it, ask, add what's missing.
 fn finish_restore(blob: Vec<u8>, store: &Mutex<Store>, policy: Policy) -> (u8, Vec<u8>) {
-    let Some((logins, totp)) = parse_fake(&blob) else { return reply::restore_piece(true, Approval::NotYours, 0, 0, 0) };
+    let Some((logins, totp)) = parse_fake(&blob) else {
+        return reply::restore_piece(true, Approval::NotYours, 0, 0, 0);
+    };
     let (new_logins, new_totp): (Vec<_>, Vec<_>) = {
         let st = store.lock().unwrap();
         (
@@ -490,7 +546,11 @@ fn finish_install(bundle: Vec<u8>, store: &Mutex<Store>, policy: Policy, now: Op
         space.space.saturating_sub(space.taken - freed)
     };
     if takes(&bundle) > free {
-        return refused(&format!("maki hasn't the room: it needs {} KiB, and {} KiB is free", takes(&bundle).div_ceil(1024), free / 1024));
+        return refused(&format!(
+            "maki hasn't the room: it needs {} KiB, and {} KiB is free",
+            takes(&bundle).div_ceil(1024),
+            free / 1024
+        ));
     }
     let replacing = if installed.as_ref().is_some_and(|old| old.from_store) && !from_store {
         ", replacing the store's app"
@@ -510,14 +570,24 @@ fn finish_install(bundle: Vec<u8>, store: &Mutex<Store>, policy: Policy, now: Op
     if a == Approval::Approved {
         // the owner's choice of backup survives updates
         let backup = installed.map(|old| old.backup).unwrap_or(m.backup);
-        store.lock().unwrap().apps.insert(m.id.clone(), Installed { bundle: bundle.clone(), backup, from_store });
+        store
+            .lock()
+            .unwrap()
+            .apps
+            .insert(m.id.clone(), Installed { bundle: bundle.clone(), backup, from_store });
     }
     reply::app_install(true, a, "")
 }
 
 /// What maki's app host does with a store record: its pieces in order, then checked against the
 /// root maki trusts and kept if it's newer. Nobody's asked. `total` 0 just asks what maki has.
-fn store_update(store: &Mutex<Store>, total: u32, offset: u32, data: Vec<u8>, now: Option<u64>) -> (u8, Vec<u8>) {
+fn store_update(
+    store: &Mutex<Store>,
+    total: u32,
+    offset: u32,
+    data: Vec<u8>,
+    now: Option<u64>,
+) -> (u8, Vec<u8>) {
     let mut st = store.lock().unwrap();
     let mut done = true;
     let (status, reason) = if total == 0 {
@@ -559,9 +629,15 @@ fn take_store_record(st: &mut Store, bytes: &[u8], now: Option<u64>) -> Result<(
         st.store_root = Some(next);
         return Ok(());
     }
-    let list = maki_store::SignedRevocations::decode(bytes).map_err(|e| format!("not a store record: {e}"))?;
-    list.replaces(st.root(), now, st.revocations.as_ref()).map_err(|e| format!("the revocation list: {e}"))?;
-    println!("  maki store revocation list {} taken ({} entries)", list.list.version, list.list.entries.len());
+    let list =
+        maki_store::SignedRevocations::decode(bytes).map_err(|e| format!("not a store record: {e}"))?;
+    list.replaces(st.root(), now, st.revocations.as_ref())
+        .map_err(|e| format!("the revocation list: {e}"))?;
+    println!(
+        "  maki store revocation list {} taken ({} entries)",
+        list.list.version,
+        list.list.entries.len()
+    );
     st.revocations = Some(list);
     Ok(())
 }
@@ -597,7 +673,8 @@ fn app_entry(app: &Installed) -> AppEntry {
 fn answer(ask: Ask, store: &Mutex<Store>, policy: Policy) -> (u8, Vec<u8>) {
     match ask {
         Ask::Login { site: s } => {
-            let found = store.lock().unwrap().logins.iter().find(|(saved, _, _)| site::covers(saved, &s)).cloned();
+            let found =
+                store.lock().unwrap().logins.iter().find(|(saved, _, _)| site::covers(saved, &s)).cloned();
             match found {
                 None => reply::login(Approval::NoMatch, "", ""),
                 Some((_, user, pass)) => {
@@ -630,7 +707,11 @@ fn answer(ask: Ask, store: &Mutex<Store>, policy: Policy) -> (u8, Vec<u8>) {
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    let addr = args.iter().find(|a| !a.starts_with("--") && a.contains(':')).cloned().unwrap_or("127.0.0.1:7878".into());
+    let addr = args
+        .iter()
+        .find(|a| !a.starts_with("--") && a.contains(':'))
+        .cloned()
+        .unwrap_or("127.0.0.1:7878".into());
     let policy = if args.iter().any(|a| a == "--deny") {
         Policy::Deny
     } else if args.iter().any(|a| a == "--ask") {
@@ -646,7 +727,8 @@ fn main() {
     let first_root = maki_store::SignedRoot::decode(&first_root).and_then(|r| r.trust_first().cloned());
     store.lock().unwrap().store_root = Some(first_root.expect("the first store root checks out"));
     let running = Arc::new(Mutex::new(std::collections::BTreeMap::new()));
-    let phrase = args.windows(2).find(|w| w[0] == "--phrase").map(|w| w[1].clone()).unwrap_or(TEST_PHRASE.into());
+    let phrase =
+        args.windows(2).find(|w| w[0] == "--phrase").map(|w| w[1].clone()).unwrap_or(TEST_PHRASE.into());
     let seed = {
         let words: Vec<&str> = phrase.split_whitespace().collect();
         maki_seed::to_entropy(&words).expect("--phrase isn't a BIP39 phrase");
@@ -660,7 +742,10 @@ fn main() {
     for set in args.windows(2).filter(|w| w[0] == "--storage").map(|w| &w[1]) {
         let (app, rest) = set.split_once(':').expect("--storage APP:KEY=HEX");
         let (key, value) = rest.split_once('=').expect("--storage APP:KEY=HEX");
-        let value = (0..value.len()).step_by(2).map(|i| u8::from_str_radix(&value[i..i + 2], 16).expect("--storage: hex")).collect();
+        let value = (0..value.len())
+            .step_by(2)
+            .map(|i| u8::from_str_radix(&value[i..i + 2], 16).expect("--storage: hex"))
+            .collect();
         store.lock().unwrap().app_data.entry(app.into()).or_default().insert(key.into(), value);
     }
     // apps installed before this start, as if the owner had said yes then: checked as ever
@@ -674,11 +759,15 @@ fn main() {
     // print the bound address, so a caller that asked for port 0 learns the real one
     println!("fake maki listening on {}", listener.local_addr().unwrap());
     // a maki roll, as a badge picks one the first time it starts (`--name` to choose)
-    let name = args.iter().position(|a| a == "--name").and_then(|i| args.get(i + 1)).cloned().unwrap_or_else(|| {
-        // any byte will do for a name: the clock's
-        let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.subsec_nanos()).unwrap_or(0);
-        maki_proto::names::pick((nanos >> 10) as u8).to_string()
-    });
+    let name =
+        args.iter().position(|a| a == "--name").and_then(|i| args.get(i + 1)).cloned().unwrap_or_else(|| {
+            // any byte will do for a name: the clock's
+            let nanos = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.subsec_nanos())
+                .unwrap_or(0);
+            maki_proto::names::pick((nanos >> 10) as u8).to_string()
+        });
     println!("this maki is {name}");
     let mut device = Device::new(Host { start: Instant::now(), clock: None }, name, "0.2.0-fake".into());
     if args.iter().any(|a| a == "--clock-verified") {
@@ -712,7 +801,13 @@ fn main() {
                 let handled = device.lock().unwrap().handle(&packet);
                 match handled {
                     Handled::Reply(kind, body) => {
-                        println!("  0x{:02x}#{} -> 0x{:02x} ({} bytes)", packet.kind, packet.id, kind, body.len());
+                        println!(
+                            "  0x{:02x}#{} -> 0x{:02x} ({} bytes)",
+                            packet.kind,
+                            packet.id,
+                            kind,
+                            body.len()
+                        );
                         writer.lock().unwrap().write_all(&frame::encode(kind, packet.id, &body)).ok();
                     }
                     Handled::Backup(Backup::Get { offset }) => {
@@ -722,7 +817,12 @@ fn main() {
                         }
                         let start = (offset as usize).min(st.sealed.len());
                         let end = (start + BACKUP_PIECE).min(st.sealed.len());
-                        let (kind, body) = reply::backup_piece(Approval::Approved, st.sealed.len() as u32, offset, &st.sealed[start..end]);
+                        let (kind, body) = reply::backup_piece(
+                            Approval::Approved,
+                            st.sealed.len() as u32,
+                            offset,
+                            &st.sealed[start..end],
+                        );
                         writer.lock().unwrap().write_all(&frame::encode(kind, packet.id, &body)).ok();
                     }
                     Handled::Backup(Backup::Put { total, offset, data }) => {
@@ -767,7 +867,8 @@ fn main() {
                     Handled::Apps(Apps::List { index }) => {
                         let st = store.lock().unwrap();
                         let entry = st.apps.values().nth(index as usize).map(app_entry);
-                        let (kind, body) = reply::app_list(Approval::Approved, st.apps.len() as u32, entry.as_ref());
+                        let (kind, body) =
+                            reply::app_list(Approval::Approved, st.apps.len() as u32, entry.as_ref());
                         writer.lock().unwrap().write_all(&frame::encode(kind, packet.id, &body)).ok();
                     }
                     Handled::Apps(Apps::Install { total, offset, data }) => {
@@ -786,7 +887,8 @@ fn main() {
                         };
                         match finished {
                             None => {
-                                let (kind, body) = reply::app_install(true, Approval::Refused, "pieces out of order");
+                                let (kind, body) =
+                                    reply::app_install(true, Approval::Refused, "pieces out of order");
                                 writer.lock().unwrap().write_all(&frame::encode(kind, packet.id, &body)).ok();
                             }
                             Some(false) => {
@@ -805,8 +907,14 @@ fn main() {
                         }
                     }
                     Handled::Apps(Apps::Message { id: app, message }) => {
-                        println!("  0x{:02x}#{} -> app message for {app} ({} bytes)", packet.kind, packet.id, message.len());
-                        let (writer, store, running, id) = (writer.clone(), store.clone(), running.clone(), packet.id);
+                        println!(
+                            "  0x{:02x}#{} -> app message for {app} ({} bytes)",
+                            packet.kind,
+                            packet.id,
+                            message.len()
+                        );
+                        let (writer, store, running, id) =
+                            (writer.clone(), store.clone(), running.clone(), packet.id);
                         std::thread::spawn(move || {
                             let (status, answer) = app_message(&app, message, &store, &running, seed, policy);
                             let (kind, body) = reply::app_message(status, &answer);
@@ -815,7 +923,12 @@ fn main() {
                     }
                     Handled::Apps(Apps::StoreUpdate { total, offset, data }) => {
                         let (kind, body) = store_update(&store, total, offset, data, verified_now(&device));
-                        println!("  0x{:02x}#{} -> store update ({} bytes)", packet.kind, packet.id, body.len());
+                        println!(
+                            "  0x{:02x}#{} -> store update ({} bytes)",
+                            packet.kind,
+                            packet.id,
+                            body.len()
+                        );
                         writer.lock().unwrap().write_all(&frame::encode(kind, packet.id, &body)).ok();
                     }
                     Handled::Apps(Apps::Remove { id: app }) => {

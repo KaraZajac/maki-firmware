@@ -21,12 +21,11 @@ mod pin;
 mod saver;
 mod setup;
 mod splash;
-use maki_ui as ui;
-
 use api::*;
 use ask::Asking;
 use blitstr2::GlyphStyle;
 use maki_keys::{Keys, PinResult, State};
+use maki_ui as ui;
 use menu::Menu;
 use num_traits::{FromPrimitive, ToPrimitive};
 use pin::PinPad;
@@ -118,7 +117,8 @@ fn forget(pin: String) {
 }
 
 fn set_focus(app: &App, focus: Focus) {
-    xous::send_message(app.conn, xous::Message::new_scalar(app.focus_op, focus.to_usize().unwrap(), 0, 0, 0)).ok();
+    xous::send_message(app.conn, xous::Message::new_scalar(app.focus_op, focus.to_usize().unwrap(), 0, 0, 0))
+        .ok();
 }
 
 /// The app's own menu items, which it fills in when asked. An app without a menu has none.
@@ -217,7 +217,12 @@ enum View {
     Home,
     Menu(Menu, MenuFor),
     /// a page of text, and what the centre can do from it (left and right choose, if more than one)
-    Info { title: String, lines: Vec<String>, actions: Vec<(&'static str, Next)>, selected: usize },
+    Info {
+        title: String,
+        lines: Vec<String>,
+        actions: Vec<(&'static str, Next)>,
+        selected: usize,
+    },
     Pin(PinPad, PinFor),
     /// the recovery phrase's words, to write down
     Phrase(Phrase),
@@ -309,7 +314,12 @@ impl System {
     /// A page of text offering more than one thing: left and right go between them.
     fn choose(&mut self, title: &str, lines: &[&str], actions: Vec<(&'static str, Next)>) {
         let actions = actions.into_iter().filter(|(a, _)| !a.is_empty()).collect();
-        self.view = View::Info { title: title.into(), lines: lines.iter().map(|l| l.to_string()).collect(), actions, selected: 0 };
+        self.view = View::Info {
+            title: title.into(),
+            lines: lines.iter().map(|l| l.to_string()).collect(),
+            actions,
+            selected: 0,
+        };
         self.redraw();
     }
 
@@ -332,7 +342,12 @@ impl System {
         } else {
             self.info(
                 "Recovery phrase",
-                &["24 words that bring back", "your wallet and backups if", "maki is lost or wiped.", "Have paper and a pen."],
+                &[
+                    "24 words that bring back",
+                    "your wallet and backups if",
+                    "maki is lost or wiped.",
+                    "Have paper and a pen.",
+                ],
                 "show my words",
                 Next::ShowPhrase,
             );
@@ -395,12 +410,20 @@ impl System {
                 match result {
                     PinResult::Ok => self.now_unlocked(),
                     PinResult::Wrong(left) => {
-                        let note = if left == 1 { "Wrong PIN. Last try!".to_string() } else { format!("Wrong PIN. {} tries left", left) };
+                        let note = if left == 1 {
+                            "Wrong PIN. Last try!".to_string()
+                        } else {
+                            format!("Wrong PIN. {} tries left", left)
+                        };
                         self.pin_pad("Enter your PIN", &note, PinFor::Enter)
                     }
                     PinResult::Wiped => self.info(
                         "Too many tries",
-                        &["maki's secrets were wiped.", "Choose a new PIN, then", "restore from your backup."],
+                        &[
+                            "maki's secrets were wiped.",
+                            "Choose a new PIN, then",
+                            "restore from your backup.",
+                        ],
                         "continue",
                         Next::ChoosePin,
                     ),
@@ -413,7 +436,12 @@ impl System {
                 forget(first);
                 if !same {
                     forget(pin);
-                    return self.info("PINs didn't match", &["Choose one again."], "try again", Next::ChoosePin);
+                    return self.info(
+                        "PINs didn't match",
+                        &["Choose one again."],
+                        "try again",
+                        Next::ChoosePin,
+                    );
                 }
                 self.busy("Setting up…");
                 let result = keys.set_pin(&pin);
@@ -435,7 +463,11 @@ impl System {
                     return self.info("PINs didn't match", &["Nothing changed."], "continue", Next::Home);
                 }
                 let left = keys.status().1;
-                let note = if left < maki_keys::MAX_TRIES { format!("{} tries left", left) } else { "to change it".into() };
+                let note = if left < maki_keys::MAX_TRIES {
+                    format!("{} tries left", left)
+                } else {
+                    "to change it".into()
+                };
                 self.pin_pad("Current PIN", &note, PinFor::Current(pin))
             }
             PinFor::Current(new) => {
@@ -444,15 +476,38 @@ impl System {
                 forget(pin);
                 forget(new);
                 match result {
-                    PinResult::Ok => self.info("PIN changed", &["Enter the new one each", "time maki is plugged in."], "continue", Next::Home),
+                    PinResult::Ok => self.info(
+                        "PIN changed",
+                        &["Enter the new one each", "time maki is plugged in."],
+                        "continue",
+                        Next::Home,
+                    ),
                     PinResult::Wrong(left) => {
-                        let tries = if left == 1 { "1 try left before".to_string() } else { format!("{} tries left before", left) };
-                        self.info("Wrong PIN", &["Nothing changed.", &tries, "maki wipes its secrets."], "continue", Next::Home)
+                        let tries = if left == 1 {
+                            "1 try left before".to_string()
+                        } else {
+                            format!("{} tries left before", left)
+                        };
+                        self.info(
+                            "Wrong PIN",
+                            &["Nothing changed.", &tries, "maki wipes its secrets."],
+                            "continue",
+                            Next::Home,
+                        )
                     }
                     PinResult::Wiped => {
                         self.unlocked = false;
                         self.asks_open = false;
-                        self.info("Too many tries", &["maki's secrets were wiped.", "Unplug maki, then set it", "up again from your phrase."], "", Next::Home)
+                        self.info(
+                            "Too many tries",
+                            &[
+                                "maki's secrets were wiped.",
+                                "Unplug maki, then set it",
+                                "up again from your phrase.",
+                            ],
+                            "",
+                            Next::Home,
+                        )
                     }
                     _ => self.info("Couldn't change it", &["Nothing changed."], "continue", Next::Home),
                 }
@@ -559,7 +614,10 @@ impl System {
             && self.ready
             && !self.asking.active()
             && self.asking.queue.is_empty()
-            && matches!(self.view, View::Home | View::Menu(_, MenuFor::Maki) | View::Info { .. } | View::Pin(_, PinFor::Enter))
+            && matches!(
+                self.view,
+                View::Home | View::Menu(_, MenuFor::Maki) | View::Info { .. } | View::Pin(_, PinFor::Enter)
+            )
     }
 
     fn rest(&mut self) {
@@ -652,7 +710,8 @@ impl System {
                 let n = actions.len();
                 match key {
                     Key::Left | Key::Right if n > 1 => {
-                        *selected = if key == Key::Left { (*selected + n - 1) % n } else { (*selected + 1) % n };
+                        *selected =
+                            if key == Key::Left { (*selected + n - 1) % n } else { (*selected + 1) % n };
                         self.redraw();
                     }
                     Key::Confirm if n > 0 => {
@@ -678,7 +737,12 @@ impl System {
                     CheckStep::Passed => self.setup_done(),
                     CheckStep::Wrong(n) => {
                         let title = format!("That's not word {}", n);
-                        self.info(&title, &["Look at what you wrote,", "then check again."], "see the words", Next::ReviewPhrase)
+                        self.info(
+                            &title,
+                            &["Look at what you wrote,", "then check again."],
+                            "see the words",
+                            Next::ReviewPhrase,
+                        )
                     }
                 }
                 for w in words {
@@ -690,13 +754,21 @@ impl System {
                 EntryStep::Done(words) => {
                     self.busy("Checking…");
                     let count = words.len();
-                    let result = self.keys.as_ref().map(|k| k.restore_phrase(&words)).unwrap_or(maki_keys::RESULT_FAILED);
+                    let result = self
+                        .keys
+                        .as_ref()
+                        .map(|k| k.restore_phrase(&words))
+                        .unwrap_or(maki_keys::RESULT_FAILED);
                     match result {
                         maki_keys::RESULT_OK => {
                             self.restoring = false;
                             self.info(
                                 "Phrase restored",
-                                &["Your wallet keys are back.", "Restore logins and codes", "from maki desktop."],
+                                &[
+                                    "Your wallet keys are back.",
+                                    "Restore logins and codes",
+                                    "from maki desktop.",
+                                ],
                                 "continue",
                                 Next::Home,
                             )
@@ -713,7 +785,9 @@ impl System {
             },
             View::Pin(pad, _) => {
                 if let Some(pin) = pad.key(key) {
-                    let View::Pin(_, purpose) = std::mem::replace(&mut self.view, View::Splash) else { return };
+                    let View::Pin(_, purpose) = std::mem::replace(&mut self.view, View::Splash) else {
+                        return;
+                    };
                     self.pin_entered(pin, purpose);
                 } else {
                     self.redraw();
@@ -805,8 +879,11 @@ fn main() -> ! {
         if shown < SPLASH_MIN_MS {
             tt.sleep_ms((SPLASH_MIN_MS - shown) as usize).ok();
         }
-        xous::send_message(conn, xous::Message::new_scalar(LauncherOp::Ready.to_usize().unwrap(), 0, 0, 0, 0))
-            .ok();
+        xous::send_message(
+            conn,
+            xous::Message::new_scalar(LauncherOp::Ready.to_usize().unwrap(), 0, 0, 0, 0),
+        )
+        .ok();
     });
 
     // keeps the clock current, and asks' countdowns (see `Pace`); the main loop only redraws
@@ -821,17 +898,22 @@ fn main() -> ! {
                     let state = PACE.state.lock().unwrap();
                     (state.wanted, state.rest_at)
                 };
-                let mut wait = if fast { std::time::Duration::from_secs(1) } else { until_next_minute(time_conn) };
+                let mut wait =
+                    if fast { std::time::Duration::from_secs(1) } else { until_next_minute(time_conn) };
                 if let Some(at) = rest_at {
-                    wait = wait.min(std::time::Duration::from_millis(at.saturating_sub(tt.elapsed_ms()) + 50));
+                    wait =
+                        wait.min(std::time::Duration::from_millis(at.saturating_sub(tt.elapsed_ms()) + 50));
                 }
                 let mut state = PACE.state.lock().unwrap();
                 if state.wanted == fast && state.rest_at == rest_at {
                     state.waiting = fast;
                     drop(PACE.wake.wait_timeout(state, wait).unwrap());
                 }
-                xous::send_message(conn, xous::Message::new_scalar(LauncherOp::Tick.to_usize().unwrap(), 0, 0, 0, 0))
-                    .ok();
+                xous::send_message(
+                    conn,
+                    xous::Message::new_scalar(LauncherOp::Tick.to_usize().unwrap(), 0, 0, 0, 0),
+                )
+                .ok();
             }
         })
         .unwrap();
@@ -877,16 +959,23 @@ fn main() -> ! {
                         // in alphabetical order, whichever started first: the home screen is
                         // the same every time
                         let key = reg.name.to_lowercase();
-                        let pos = sys.apps.iter().position(|a| a.name.to_lowercase() > key).unwrap_or(sys.apps.len());
-                        sys.apps.insert(pos, App {
-                            name: reg.name,
-                            server: reg.server_name,
-                            conn: app_conn,
-                            key_op: reg.key_op as usize,
-                            focus_op: reg.focus_op as usize,
-                            menu_op: reg.menu_op as usize,
-                            icon: reg.icon.as_slice().try_into().ok(),
-                        });
+                        let pos = sys
+                            .apps
+                            .iter()
+                            .position(|a| a.name.to_lowercase() > key)
+                            .unwrap_or(sys.apps.len());
+                        sys.apps.insert(
+                            pos,
+                            App {
+                                name: reg.name,
+                                server: reg.server_name,
+                                conn: app_conn,
+                                key_op: reg.key_op as usize,
+                                focus_op: reg.focus_op as usize,
+                                menu_op: reg.menu_op as usize,
+                                icon: reg.icon.as_slice().try_into().ok(),
+                            },
+                        );
                         // apps are known by position: move along those after it
                         let shift = |i: &mut usize| {
                             if *i >= pos {
@@ -916,8 +1005,10 @@ fn main() -> ! {
                     log::error!("malformed app unregistration");
                     continue;
                 };
-                let Some(pos) =
-                    sys.apps.iter().position(|a| a.server == reg.server_name && a.key_op == reg.key_op as usize)
+                let Some(pos) = sys
+                    .apps
+                    .iter()
+                    .position(|a| a.server == reg.server_name && a.key_op == reg.key_op as usize)
                 else {
                     continue;
                 };
@@ -1030,8 +1121,11 @@ fn main() -> ! {
                         }
                         // everything else is the app's, the jog dial included
                         let app = &sys.apps[i];
-                        xous::try_send_message(app.conn, xous::Message::new_scalar(app.key_op, c as usize, 0, 0, 0))
-                            .ok();
+                        xous::try_send_message(
+                            app.conn,
+                            xous::Message::new_scalar(app.key_op, c as usize, 0, 0, 0),
+                        )
+                        .ok();
                     } else if sys.ready {
                         if let Some(k) = key {
                             sys.key(k);

@@ -76,5 +76,9 @@ pub fn amount(token: &Token, smallest: &[u8; 32]) -> String {
         (String::from("0"), format!("{:0>width$}", digits, width = places))
     };
     let frac = frac.trim_end_matches('0');
-    if frac.is_empty() { format!("{} {}", whole, token.symbol) } else { format!("{}.{} {}", whole, frac, token.symbol) }
+    if frac.is_empty() {
+        format!("{} {}", whole, token.symbol)
+    } else {
+        format!("{}.{} {}", whole, frac, token.symbol)
+    }
 }

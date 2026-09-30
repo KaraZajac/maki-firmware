@@ -1,7 +1,7 @@
 //! Every byte from the host goes through the deframer and the device logic on maki: anything,
 //! however broken, must get an error reply or be dropped, never a panic.
 
-use std::panic::{catch_unwind, AssertUnwindSafe};
+use std::panic::{AssertUnwindSafe, catch_unwind};
 
 use maki_proto::device::{Device, Platform, TimeState};
 use maki_proto::frame::{self, Deframer, Packet};
@@ -15,15 +15,20 @@ impl Rng {
         self.0 ^= self.0 << 17;
         self.0
     }
+
     fn below(&mut self, n: usize) -> usize { (self.next() % n.max(1) as u64) as usize }
 }
 
 struct Host;
 impl Platform for Host {
     fn fill_random(&mut self, buf: &mut [u8]) { buf.fill(7) }
+
     fn uptime_ms(&self) -> u64 { 1_000 }
+
     fn utc_ms(&self) -> Option<u64> { None }
+
     fn set_time(&mut self, _: u64, _: i32) {}
+
     fn time_state_changed(&mut self, _: TimeState) {}
 }
 

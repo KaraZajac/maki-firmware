@@ -1,7 +1,7 @@
 //! Passkeys in the backup: the resident credentials and signature counter of the vault's FIDO
 //! authenticator, read with `maki_fido`.
 
-pub(crate) use maki_fido::{backed_up, credential_id, COUNTER, CREDENTIALS, DICT};
+pub(crate) use maki_fido::{COUNTER, CREDENTIALS, DICT, backed_up, credential_id};
 
 /// The emulator has no USB, so no passkey can be made there. Built with MAKI_DEMO_BACKUP, a
 /// backup gets a made-up one (for "demo.maki"), taken out again once the backup is sealed, so

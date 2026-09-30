@@ -12,7 +12,7 @@ use std::sync::{Arc, Mutex};
 
 use maki_app_host_api as app_host;
 use maki_proto::device::{
-    reply, AppEntry, AppSpace, Apps, Approval, Ask, Backup, Device, Handled, Platform, StoreState, TimeState,
+    AppEntry, AppSpace, Approval, Apps, Ask, Backup, Device, Handled, Platform, StoreState, TimeState, reply,
 };
 use maki_proto::frame::{self, Deframer};
 use num_traits::ToPrimitive;
@@ -168,8 +168,13 @@ fn vault_worker(work: mpsc::Receiver<Work>, waiting: Arc<AtomicU32>, send_lock: 
             Work::Ask(id, ask) => (id, ask),
             Work::Restore { id, total, offset, data } => {
                 let c = keys.restore_chunk(total, offset, data);
-                let (kind, body) =
-                    reply::restore_piece(true, approval(c.result), c.logins as u16, c.codes as u16, c.passkeys as u16);
+                let (kind, body) = reply::restore_piece(
+                    true,
+                    approval(c.result),
+                    c.logins as u16,
+                    c.codes as u16,
+                    c.passkeys as u16,
+                );
                 waiting.fetch_sub(1, Ordering::SeqCst);
                 send(&usb, &send_lock, &frame::encode(kind, id, &body));
                 continue;
@@ -211,7 +216,9 @@ fn vault_worker(work: mpsc::Receiver<Work>, waiting: Arc<AtomicU32>, send_lock: 
                 let (approval, code, valid_for_s) = vault.totp(site);
                 reply::totp(approval, &code, valid_for_s)
             }
-            Ask::SaveLogin { site, username, password } => reply::save(vault.save_login(site, username, password)),
+            Ask::SaveLogin { site, username, password } => {
+                reply::save(vault.save_login(site, username, password))
+            }
         };
         waiting.fetch_sub(1, Ordering::SeqCst);
         send(&usb, &send_lock, &frame::encode(kind, id, &body));
@@ -228,7 +235,12 @@ struct Badge {
 }
 
 #[cfg(feature = "board-baosec")]
-fn time_scalar(conn: xous::CID, op: bao1x_hal_service::api::TimeOp, hi: usize, lo: usize) -> Option<xous::Result> {
+fn time_scalar(
+    conn: xous::CID,
+    op: bao1x_hal_service::api::TimeOp,
+    hi: usize,
+    lo: usize,
+) -> Option<xous::Result> {
     xous::send_message(conn, xous::Message::new_blocking_scalar(op.to_usize().unwrap(), hi, lo, 0, 0)).ok()
 }
 
@@ -259,8 +271,18 @@ impl Platform for Badge {
         {
             use bao1x_hal_service::api::TimeOp;
             let tz_ms = _tz_offset_s as i64 * 1000;
-            time_scalar(self.time_conn, TimeOp::SetUtcTimeMs, (_utc_ms >> 32) as usize, _utc_ms as u32 as usize);
-            time_scalar(self.time_conn, TimeOp::SetTzOffsetMs, (tz_ms >> 32) as u32 as usize, tz_ms as u32 as usize);
+            time_scalar(
+                self.time_conn,
+                TimeOp::SetUtcTimeMs,
+                (_utc_ms >> 32) as usize,
+                _utc_ms as u32 as usize,
+            );
+            time_scalar(
+                self.time_conn,
+                TimeOp::SetTzOffsetMs,
+                (tz_ms >> 32) as u32 as usize,
+                tz_ms as u32 as usize,
+            );
         }
     }
 
@@ -337,34 +359,37 @@ fn main() -> ! {
     // Also tells the app host whether the time is verified (for apps): it may start after us,
     // or not be in the image at all, so connect when it appears and pass on every change. One
     // thread for both, with a small stack.
-    std::thread::Builder::new().stack_size(32 * 1024).spawn({
-        let (last_contact, linked, time_state) = (last_contact.clone(), linked.clone(), time_state.clone());
-        move || {
-            let xns = xous_names::XousNames::new().unwrap();
-            let launcher = maki_launcher::Launcher::new(&xns).expect("couldn't connect to the launcher");
-            let tt = ticktimer_server::Ticktimer::new().unwrap();
-            let mut host = None;
-            let mut told = u32::MAX;
-            loop {
-                // not often: when RAM is short, every wake-up pages this process back in
-                tt.sleep_ms(5_000).ok();
-                if host.is_none() {
-                    host = app_host::AppHost::try_new(&xns);
-                }
-                let now = time_state.load(Ordering::SeqCst);
-                if let Some(h) = host.filter(|_| now != told) {
-                    h.set_time_state(now as u8);
-                    told = now;
-                }
-                let quiet = (tt.elapsed_ms() as u32).wrapping_sub(last_contact.load(Ordering::SeqCst));
-                if quiet > LINK_TIMEOUT_MS && linked.swap(false, Ordering::SeqCst) {
-                    log::info!("desktop app gone quiet: unlinked");
-                    launcher.set_link_state(false).ok();
+    std::thread::Builder::new()
+        .stack_size(32 * 1024)
+        .spawn({
+            let (last_contact, linked, time_state) =
+                (last_contact.clone(), linked.clone(), time_state.clone());
+            move || {
+                let xns = xous_names::XousNames::new().unwrap();
+                let launcher = maki_launcher::Launcher::new(&xns).expect("couldn't connect to the launcher");
+                let tt = ticktimer_server::Ticktimer::new().unwrap();
+                let mut host = None;
+                let mut told = u32::MAX;
+                loop {
+                    // not often: when RAM is short, every wake-up pages this process back in
+                    tt.sleep_ms(5_000).ok();
+                    if host.is_none() {
+                        host = app_host::AppHost::try_new(&xns);
+                    }
+                    let now = time_state.load(Ordering::SeqCst);
+                    if let Some(h) = host.filter(|_| now != told) {
+                        h.set_time_state(now as u8);
+                        told = now;
+                    }
+                    let quiet = (tt.elapsed_ms() as u32).wrapping_sub(last_contact.load(Ordering::SeqCst));
+                    if quiet > LINK_TIMEOUT_MS && linked.swap(false, Ordering::SeqCst) {
+                        log::info!("desktop app gone quiet: unlinked");
+                        launcher.set_link_state(false).ok();
+                    }
                 }
             }
-        }
-    })
-    .unwrap();
+        })
+        .unwrap();
     let tt = ticktimer_server::Ticktimer::new().unwrap();
     let launcher = maki_launcher::Launcher::new(&xns).expect("couldn't connect to the launcher");
 
@@ -383,8 +408,16 @@ fn main() -> ! {
     if option_env!("MAKI_DEMO_ASKS").is_some() {
         log::warn!("demo requests queued (MAKI_DEMO_ASKS build)");
         let demo = [
-            Ask::SaveLogin { site: "github.com".into(), username: "kara".into(), password: "correct horse".into() },
-            Ask::SaveLogin { site: "github.com".into(), username: "kara-work".into(), password: "battery staple".into() },
+            Ask::SaveLogin {
+                site: "github.com".into(),
+                username: "kara".into(),
+                password: "correct horse".into(),
+            },
+            Ask::SaveLogin {
+                site: "github.com".into(),
+                username: "kara-work".into(),
+                password: "battery staple".into(),
+            },
             Ask::Login { site: "gist.github.com".into() },
             Ask::SaveLogin {
                 site: "accounts.a-rather-long-subdomain.login.example.co.uk".into(),
@@ -481,7 +514,8 @@ fn main() -> ! {
     if option_env!("MAKI_DEMO_SENSORS").is_some() {
         std::thread::spawn(|| {
             let host = demo_host();
-            let r = demo_install(&host, include_bytes!("../../../libs/maki-wasm/tests/fixtures/sensors.maki"));
+            let r =
+                demo_install(&host, include_bytes!("../../../libs/maki-wasm/tests/fixtures/sensors.maki"));
             log::warn!("demo sensors install: result {} '{}'", r.result, r.reason);
         });
     }
@@ -564,7 +598,10 @@ fn main() -> ! {
     if option_env!("MAKI_DEMO_NATIVE").is_some() {
         std::thread::spawn(|| {
             let host = demo_host();
-            let r = demo_install(&host, include_bytes!("../../../libs/maki-native/tests/fixtures/hello-native.maki"));
+            let r = demo_install(
+                &host,
+                include_bytes!("../../../libs/maki-native/tests/fixtures/hello-native.maki"),
+            );
             log::warn!("demo native install: result {} '{}'", r.result, r.reason);
         });
     }
@@ -700,10 +737,13 @@ fn main() -> ! {
                 Some(out)
             };
 
-            let unsigned: &[u8] = include_bytes!("../../../libs/maki-btc/tests/fixtures/abandon-unsigned.psbt");
+            let unsigned: &[u8] =
+                include_bytes!("../../../libs/maki-btc/tests/fixtures/abandon-unsigned.psbt");
             let expected: &[u8] = include_bytes!("../../../libs/maki-btc/tests/fixtures/abandon-signed.psbt");
-            let tap_unsigned: &[u8] = include_bytes!("../../../libs/maki-btc/tests/fixtures/abandon-taproot-unsigned.psbt");
-            let tap_expected: &[u8] = include_bytes!("../../../libs/maki-btc/tests/fixtures/abandon-taproot-signed.psbt");
+            let tap_unsigned: &[u8] =
+                include_bytes!("../../../libs/maki-btc/tests/fixtures/abandon-taproot-unsigned.psbt");
+            let tap_expected: &[u8] =
+                include_bytes!("../../../libs/maki-btc/tests/fixtures/abandon-taproot-signed.psbt");
             // taproot's signatures take fresh randomness: compare all but them (a key
             // signature's pair: key 0x13, 64 bytes)
             let blank = |b: &[u8]| {
@@ -718,7 +758,9 @@ fn main() -> ! {
                 }
                 v
             };
-            for (kind, name, unsigned, expected) in [(0u8, "", unsigned, expected), (1, " taproot", tap_unsigned, tap_expected)] {
+            for (kind, name, unsigned, expected) in
+                [(0u8, "", unsigned, expected), (1, " taproot", tap_unsigned, tap_expected)]
+            {
                 let a = ask(BTC, vec![b'A', 0, kind]);
                 log::warn!("demo wallet btc{name} account: status {:?} {:?}", a.first(), texts(&a));
                 let a = ask(BTC, [&[b'D', 0, kind, 0][..], &0u32.to_le_bytes()].concat());
@@ -738,8 +780,10 @@ fn main() -> ! {
             }
 
             let tx: &[u8] = include_bytes!("../../../libs/maki-eth/tests/fixtures/abandon-tx-unsigned.bin");
-            let tx_signed: &[u8] = include_bytes!("../../../libs/maki-eth/tests/fixtures/abandon-tx-signed.bin");
-            let message_sig: &[u8] = include_bytes!("../../../libs/maki-eth/tests/fixtures/abandon-message.sig");
+            let tx_signed: &[u8] =
+                include_bytes!("../../../libs/maki-eth/tests/fixtures/abandon-tx-signed.bin");
+            let message_sig: &[u8] =
+                include_bytes!("../../../libs/maki-eth/tests/fixtures/abandon-message.sig");
             let typed: &[u8] = include_bytes!("../../../libs/maki-eth/tests/fixtures/abandon-typed.json");
             let typed_sig: &[u8] = include_bytes!("../../../libs/maki-eth/tests/fixtures/abandon-typed.sig");
             // account 0, and the site asking
@@ -748,7 +792,11 @@ fn main() -> ! {
             let a = ask(ETH, [head(b'A'), site.clone()].concat());
             log::warn!("demo wallet eth account: status {:?} {:?}", a.first(), texts(&a));
             let a = ask(ETH, [head(b'M'), site.clone(), b"Sign in to demo.maki".to_vec()].concat());
-            log::warn!("demo wallet eth message: status {:?}, as expected: {}", a.first(), a.get(1..) == Some(message_sig));
+            log::warn!(
+                "demo wallet eth message: status {:?}, as expected: {}",
+                a.first(),
+                a.get(1..) == Some(message_sig)
+            );
             let a = pieces(ETH, &head(b'T'), &site, tx);
             let why = if a.first() == Some(&5) { texts(&a) } else { Vec::new() };
             log::warn!("demo wallet eth sign: status {:?} {why:?}", a.first());
@@ -756,14 +804,30 @@ fn main() -> ! {
                 log::warn!("demo wallet eth signed: {} bytes, as expected: {}", s.len(), s == tx_signed);
             }
             let a = pieces(ETH, &head(b'Y'), &site, typed);
-            log::warn!("demo wallet eth typed: status {:?}, as expected: {}", a.first(), a.get(1..) == Some(typed_sig));
+            log::warn!(
+                "demo wallet eth typed: status {:?}, as expected: {}",
+                a.first(),
+                a.get(1..) == Some(typed_sig)
+            );
 
             // Monero's addresses, as Ledger's Monero app and monero-python make them for the test
             // phrase: the primary address, on Monero and stagenet, and subaddress 1
             for (net, minor, expected) in [
-                (0u8, 0u32, "49vDbkSo7eve3J41sBdjvjaBUyz8qHohsQcGtRf63qEUTMBvmA45fpp5pSacMdSg7A3b71RejLzB8EkGbfjp5PELVF2N4Zn"),
-                (2, 0, "5A8FgbMkmG2e3J41sBdjvjaBUyz8qHohsQcGtRf63qEUTMBvmA45fpp5pSacMdSg7A3b71RejLzB8EkGbfjp5PELVHCRUaE"),
-                (0, 1, "8AB7PQPtducdkghYFN2prK3rZ7zPeL9f2REEdqE4WXYbSZr3797Aqti5xAjRsVy4jTdcwMW11GWejQtqk2kNXxj2QZxJwPZ"),
+                (
+                    0u8,
+                    0u32,
+                    "49vDbkSo7eve3J41sBdjvjaBUyz8qHohsQcGtRf63qEUTMBvmA45fpp5pSacMdSg7A3b71RejLzB8EkGbfjp5PELVF2N4Zn",
+                ),
+                (
+                    2,
+                    0,
+                    "5A8FgbMkmG2e3J41sBdjvjaBUyz8qHohsQcGtRf63qEUTMBvmA45fpp5pSacMdSg7A3b71RejLzB8EkGbfjp5PELVHCRUaE",
+                ),
+                (
+                    0,
+                    1,
+                    "8AB7PQPtducdkghYFN2prK3rZ7zPeL9f2REEdqE4WXYbSZr3797Aqti5xAjRsVy4jTdcwMW11GWejQtqk2kNXxj2QZxJwPZ",
+                ),
             ] {
                 let a = ask(XMR, [&[b'D', net][..], &0u32.to_le_bytes(), &minor.to_le_bytes()].concat());
                 log::warn!(
@@ -777,11 +841,16 @@ fn main() -> ! {
             // image; and a transaction (two of the wallet's outputs, 1.5 XMR paid, the change
             // back) made and signed by maki
             const VIEW_KEY: [u8; 32] = [
-                0x0f, 0x3f, 0xe2, 0x5d, 0x0c, 0x6d, 0x4c, 0x94, 0xdd, 0xe0, 0xc0, 0xbc, 0xc2, 0x14, 0xb2, 0x33, 0xe9,
-                0xc7, 0x29, 0x27, 0xf8, 0x13, 0x72, 0x8b, 0x0f, 0x01, 0xf2, 0x8f, 0x9d, 0x5e, 0x12, 0x01,
+                0x0f, 0x3f, 0xe2, 0x5d, 0x0c, 0x6d, 0x4c, 0x94, 0xdd, 0xe0, 0xc0, 0xbc, 0xc2, 0x14, 0xb2,
+                0x33, 0xe9, 0xc7, 0x29, 0x27, 0xf8, 0x13, 0x72, 0x8b, 0x0f, 0x01, 0xf2, 0x8f, 0x9d, 0x5e,
+                0x12, 0x01,
             ];
             let a = ask(XMR, vec![b'W', 0]);
-            log::warn!("demo wallet xmr watch: status {:?}, the view key as expected: {}", a.first(), a.ends_with(&VIEW_KEY));
+            log::warn!(
+                "demo wallet xmr watch: status {:?}, the view key as expected: {}",
+                a.first(),
+                a.ends_with(&VIEW_KEY)
+            );
             let output: &[u8] = include_bytes!("../../../libs/maki-xmr/tests/fixtures/abandon-output.bin");
             let a = ask(XMR, [&[b'K', 1][..], output].concat());
             log::warn!("demo wallet xmr key image: status {:?}, {} bytes", a.first(), a.len());
@@ -792,23 +861,36 @@ fn main() -> ! {
             if let Some(s) = signed(XMR, &a) {
                 // the transaction's length, then it: version 2, two inputs
                 let tx = s.get(4..).unwrap_or_default();
-                log::warn!("demo wallet xmr signed: {} bytes, a transaction of two inputs: {}", s.len(), tx.starts_with(&[2, 0, 2]));
+                log::warn!(
+                    "demo wallet xmr signed: {} bytes, a transaction of two inputs: {}",
+                    s.len(),
+                    tx.starts_with(&[2, 0, 2])
+                );
             }
 
             // Solana: the account Phantom makes from the test phrase (SLIP-10's Ed25519 key at
             // m/44'/501'/0'/0'), connected to demo.maki, and a USDC payment web3.js made, read,
             // shown and signed as web3.js signs it
             const PHANTOM: [u8; 32] = [
-                0xf0, 0x36, 0x27, 0x62, 0x46, 0xa7, 0x5b, 0x9d, 0xe3, 0x34, 0x9e, 0xd4, 0x2b, 0x15, 0xe2, 0x32, 0xf6,
-                0x51, 0x8f, 0xc2, 0x0f, 0x5f, 0xcd, 0x4f, 0x1d, 0x64, 0xe8, 0x1f, 0x9b, 0xd2, 0x58, 0xf7,
+                0xf0, 0x36, 0x27, 0x62, 0x46, 0xa7, 0x5b, 0x9d, 0xe3, 0x34, 0x9e, 0xd4, 0x2b, 0x15, 0xe2,
+                0x32, 0xf6, 0x51, 0x8f, 0xc2, 0x0f, 0x5f, 0xcd, 0x4f, 0x1d, 0x64, 0xe8, 0x1f, 0x9b, 0xd2,
+                0x58, 0xf7,
             ];
             let a = ask(SOL, [head(b'A'), site.clone()].concat());
-            log::warn!("demo wallet sol account: status {:?}, Phantom's: {}", a.first(), a.get(1..) == Some(&PHANTOM[..]));
+            log::warn!(
+                "demo wallet sol account: status {:?}, Phantom's: {}",
+                a.first(),
+                a.get(1..) == Some(&PHANTOM[..])
+            );
             let usdc: &[u8] = include_bytes!("../../../libs/maki-sol/tests/fixtures/usdc.bin");
             let usdc_sig: &[u8] = include_bytes!("../../../libs/maki-sol/tests/fixtures/usdc.sig");
             let a = ask(SOL, [head(b'T'), site.clone(), usdc.to_vec()].concat());
             let why = if a.first() == Some(&5) { texts(&a) } else { Vec::new() };
-            log::warn!("demo wallet sol sign: status {:?} {why:?}, as web3.js signs it: {}", a.first(), a.get(1..) == Some(usdc_sig));
+            log::warn!(
+                "demo wallet sol sign: status {:?} {why:?}, as web3.js signs it: {}",
+                a.first(),
+                a.get(1..) == Some(usdc_sig)
+            );
         });
     }
 
@@ -872,8 +954,10 @@ fn main() -> ! {
             }
             let a = ask(BTC, m);
             log::warn!("demo sudo multisig add: status {:?}", a.first());
-            let unsigned: &[u8] = include_bytes!("../../../libs/maki-btc/tests/fixtures/multisig-unsigned.psbt");
-            let expected: &[u8] = include_bytes!("../../../libs/maki-btc/tests/fixtures/multisig-signed.psbt");
+            let unsigned: &[u8] =
+                include_bytes!("../../../libs/maki-btc/tests/fixtures/multisig-unsigned.psbt");
+            let expected: &[u8] =
+                include_bytes!("../../../libs/maki-btc/tests/fixtures/multisig-signed.psbt");
             let mut p = vec![b'P', 1];
             p.extend_from_slice(&(unsigned.len() as u32).to_le_bytes());
             p.extend_from_slice(&0u32.to_le_bytes());
@@ -890,7 +974,11 @@ fn main() -> ! {
                     signed.extend_from_slice(&g[9..]);
                 }
             }
-            log::warn!("demo sudo multisig sign: status {:?}, as expected: {}", a.first(), signed == expected);
+            log::warn!(
+                "demo sudo multisig sign: status {:?}, as expected: {}",
+                a.first(),
+                signed == expected
+            );
         });
     }
 
@@ -903,8 +991,10 @@ fn main() -> ! {
             launcher: maki_launcher::Launcher::new(&xns).expect("couldn't connect to the launcher"),
             time_state: time_state.clone(),
             #[cfg(feature = "board-baosec")]
-            time_conn: xous::connect(xous::SID::from_bytes(bao1x_hal_service::api::TIME_SERVER_PUBLIC).unwrap())
-                .unwrap(),
+            time_conn: xous::connect(
+                xous::SID::from_bytes(bao1x_hal_service::api::TIME_SERVER_PUBLIC).unwrap(),
+            )
+            .unwrap(),
         };
         const DEMO_UTC_MS: u64 = 1_790_563_080_000;
         badge.set_time(DEMO_UTC_MS, -4 * 3600);
@@ -926,9 +1016,14 @@ fn main() -> ! {
             const DEMO_UTC_MS: u64 = 1_790_600_000_000;
             #[cfg(feature = "board-baosec")]
             {
-                use bao1x_hal_service::api::{TimeOp, TIME_SERVER_PUBLIC};
+                use bao1x_hal_service::api::{TIME_SERVER_PUBLIC, TimeOp};
                 let conn = xous::connect(xous::SID::from_bytes(TIME_SERVER_PUBLIC).unwrap()).unwrap();
-                time_scalar(conn, TimeOp::SetUtcTimeMs, (DEMO_UTC_MS >> 32) as usize, DEMO_UTC_MS as u32 as usize);
+                time_scalar(
+                    conn,
+                    TimeOp::SetUtcTimeMs,
+                    (DEMO_UTC_MS >> 32) as usize,
+                    DEMO_UTC_MS as u32 as usize,
+                );
             }
             time_state.store(TimeState::Verified as u32, Ordering::SeqCst);
             host.set_time_state(TimeState::Verified as u8);
@@ -936,12 +1031,15 @@ fn main() -> ! {
             maki_launcher::Launcher::new(&xns).unwrap().set_time_state(TimeState::Verified as u8).ok();
             log::warn!("demo store: clock set and called verified");
 
-            let r = demo_store_update(&host, include_bytes!("../../../libs/maki-store/dev-store/roots/2.bin"));
+            let r =
+                demo_store_update(&host, include_bytes!("../../../libs/maki-store/dev-store/roots/2.bin"));
             log::warn!("demo store root 2: result {} '{}', root now {}", r.result, r.reason, r.root_version);
             let bundles: [(&str, &[u8]); 2] = [
                 (
                     "sensors from the store",
-                    include_bytes!("../../../libs/maki-store/dev-store/apps/com.leviathan.maki.sensors/1.maki"),
+                    include_bytes!(
+                        "../../../libs/maki-store/dev-store/apps/com.leviathan.maki.sensors/1.maki"
+                    ),
                 ),
                 ("tally sideloaded", include_bytes!("../../../libs/maki-wasm/tests/fixtures/tally.maki")),
             ];
@@ -949,7 +1047,10 @@ fn main() -> ! {
                 let r = demo_install(&host, bytes);
                 log::warn!("demo store install {name}: result {} '{}'", r.result, r.reason);
             }
-            let r = demo_store_update(&host, include_bytes!("../../../libs/maki-store/dev-store/revocations.bin"));
+            let r = demo_store_update(
+                &host,
+                include_bytes!("../../../libs/maki-store/dev-store/revocations.bin"),
+            );
             log::warn!(
                 "demo store revocations: result {} '{}', list {} until {}",
                 r.result,
@@ -958,16 +1059,19 @@ fn main() -> ! {
                 r.revocations_expires
             );
             // the same list again: nothing newer
-            let r = demo_store_update(&host, include_bytes!("../../../libs/maki-store/dev-store/revocations.bin"));
+            let r = demo_store_update(
+                &host,
+                include_bytes!("../../../libs/maki-store/dev-store/revocations.bin"),
+            );
             log::warn!("demo store revocations again: result {} '{}'", r.result, r.reason);
             let r = demo_install(&host, include_bytes!("../../../libs/maki-wasm/tests/fixtures/tally.maki"));
             log::warn!("demo store install tally again: result {} '{}'", r.result, r.reason);
             let list = host.list();
-            let names: Vec<String> = list.apps.iter().map(|a| format!("{} store: {}", a.id, a.from_store)).collect();
+            let names: Vec<String> =
+                list.apps.iter().map(|a| format!("{} store: {}", a.id, a.from_store)).collect();
             log::warn!("demo store list: {:?}", names);
         });
     }
-
 
     let usb = usb_bao1x::UsbHid::new();
     let mut deframer = Deframer::default();
@@ -1007,7 +1111,9 @@ fn main() -> ! {
                                 }
                             }
                         }
-                        Handled::Apps(Apps::List { index }) => app_list(app_host::AppHost::try_new(&xns), index),
+                        Handled::Apps(Apps::List { index }) => {
+                            app_list(app_host::AppHost::try_new(&xns), index)
+                        }
                         Handled::Apps(Apps::Space) => app_space(app_host::AppHost::try_new(&xns)),
                         Handled::Apps(Apps::StoreUpdate { total, offset, data }) => {
                             store_update(app_host::AppHost::try_new(&xns), total, offset, data)
@@ -1035,8 +1141,12 @@ fn main() -> ! {
                                         Work::AppInstall { id: packet.id, total, offset, data }
                                     }
                                     Apps::Remove { id } => Work::AppRemove { id: packet.id, app: id },
-                                    Apps::Message { id, message } => Work::AppMessage { id: packet.id, app: id, message },
-                                    Apps::List { .. } | Apps::StoreUpdate { .. } | Apps::Space => unreachable!(),
+                                    Apps::Message { id, message } => {
+                                        Work::AppMessage { id: packet.id, app: id, message }
+                                    }
+                                    Apps::List { .. } | Apps::StoreUpdate { .. } | Apps::Space => {
+                                        unreachable!()
+                                    }
                                 };
                                 match to_vault.send(work) {
                                     Ok(()) => continue,

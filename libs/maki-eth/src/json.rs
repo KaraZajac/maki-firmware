@@ -244,7 +244,8 @@ impl Parser<'_> {
     }
 
     fn hex4(&mut self) -> Result<u32, Error> {
-        let digits = self.b.get(self.at..self.at + 4).ok_or_else(|| self.error("\\u needs four hex digits"))?;
+        let digits =
+            self.b.get(self.at..self.at + 4).ok_or_else(|| self.error("\\u needs four hex digits"))?;
         let mut n = 0u32;
         for &d in digits {
             let v = (d as char).to_digit(16).ok_or_else(|| self.error("\\u needs four hex digits"))?;

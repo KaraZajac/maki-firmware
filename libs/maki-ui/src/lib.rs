@@ -67,7 +67,12 @@ pub struct Screen {
 impl Screen {
     pub fn new(xns: &xous_names::XousNames) -> Self {
         let bar = ux_api::widgets::ScrollableList::default().row_height() as isize;
-        Screen { gfx: Gfx::new(xns).unwrap(), bar, name: RefCell::new("maki".into()), clock: RefCell::new("--:--".into()) }
+        Screen {
+            gfx: Gfx::new(xns).unwrap(),
+            bar,
+            name: RefCell::new("maki".into()),
+            clock: RefCell::new("--:--".into()),
+        }
     }
 
     /// Start a frame: whatever was queued goes out, then a blank screen.
@@ -90,10 +95,20 @@ impl Screen {
     /// Text in a band across the screen, light on dark; `highlight` for dark on light, as a
     /// selection is marked. Anything but fixed-width text ends in "…" if it runs long; callers
     /// lay fixed-width text out to fit (a site's end must never be cut).
-    pub fn text(&self, top: isize, height: isize, style: GlyphStyle, highlight: bool, centred: bool, s: &str) {
+    pub fn text(
+        &self,
+        top: isize,
+        height: isize,
+        style: GlyphStyle,
+        highlight: bool,
+        centred: bool,
+        s: &str,
+    ) {
         let band = Rectangle::new(Point::new(0, top), Point::new(W, top + height));
-        let mut tv =
-            TextView::new(Gid::dummy(), if centred { TextBounds::CenteredTop(band) } else { TextBounds::BoundingBox(band) });
+        let mut tv = TextView::new(
+            Gid::dummy(),
+            if centred { TextBounds::CenteredTop(band) } else { TextBounds::BoundingBox(band) },
+        );
         tv.style = style;
         tv.invert = !highlight;
         tv.draw_border = false;
@@ -118,15 +133,29 @@ impl Screen {
         let dark = DrawStyle::new(PixelColor::Dark, PixelColor::Dark, 1);
         let x = (W as u64 * left_ms.min(total_ms)).checked_div(total_ms).unwrap_or(0) as isize;
         if x < W {
-            self.gfx.draw_line(Line::new_with_style(Point::new(x, self.bar + 1), Point::new(W, self.bar + 1), dark)).ok();
+            self.gfx
+                .draw_line(Line::new_with_style(
+                    Point::new(x, self.bar + 1),
+                    Point::new(W, self.bar + 1),
+                    dark,
+                ))
+                .ok();
         }
         if x > 0 {
-            self.gfx.draw_line(Line::new_with_style(Point::new(0, self.bar + 2), Point::new(x, self.bar + 2), Self::light())).ok();
+            self.gfx
+                .draw_line(Line::new_with_style(
+                    Point::new(0, self.bar + 2),
+                    Point::new(x, self.bar + 2),
+                    Self::light(),
+                ))
+                .ok();
         }
     }
 
     /// The bar across the top with a title in place of the name: the heading of a page.
-    pub fn titled_bar(&self, title: &str, right: &str, linked: bool) { self.bar_from(0, title, right, linked) }
+    pub fn titled_bar(&self, title: &str, right: &str, linked: bool) {
+        self.bar_from(0, title, right, linked)
+    }
 
     /// The bar above an installed app: its name, and for an app that didn't come from the
     /// store, the sideloaded mark (a light square holding a dark "!"). Only maki draws the bar,
@@ -136,7 +165,8 @@ impl Screen {
             return self.bar_from(0, title, right, false);
         }
         let dark = DrawStyle::new(PixelColor::Dark, PixelColor::Dark, 1);
-        let square = |x0, y0, x1, y1, style| Rectangle::new_with_style(Point::new(x0, y0), Point::new(x1, y1), style);
+        let square =
+            |x0, y0, x1, y1, style| Rectangle::new_with_style(Point::new(x0, y0), Point::new(x1, y1), style);
         self.gfx.draw_rectangle(square(1, 3, 10, 13, Self::light())).ok();
         self.gfx.draw_rectangle(square(5, 5, 6, 9, dark)).ok();
         self.gfx.draw_rectangle(square(5, 10, 6, 11, dark)).ok();
@@ -146,7 +176,10 @@ impl Screen {
     fn bar_from(&self, left: isize, title: &str, right: &str, linked: bool) {
         let mut name = TextView::new(
             Gid::dummy(),
-            TextBounds::BoundingBox(Rectangle::new(Point::new(left, 0), Point::new(W - CLOCK_WIDTH, self.bar))),
+            TextBounds::BoundingBox(Rectangle::new(
+                Point::new(left, 0),
+                Point::new(W - CLOCK_WIDTH, self.bar),
+            )),
         );
         name.style = GlyphStyle::Bold;
         name.invert = true;
@@ -177,7 +210,11 @@ impl Screen {
                 .ok();
         }
         self.gfx
-            .draw_line(Line::new_with_style(Point::new(0, self.bar + 1), Point::new(W, self.bar + 1), Self::light()))
+            .draw_line(Line::new_with_style(
+                Point::new(0, self.bar + 1),
+                Point::new(W, self.bar + 1),
+                Self::light(),
+            ))
             .ok();
     }
 
@@ -186,7 +223,11 @@ impl Screen {
         for i in 0..size {
             let col = if left { x + i } else { x - i };
             self.gfx
-                .draw_line(Line::new_with_style(Point::new(col, y - i), Point::new(col, y + i), Self::light()))
+                .draw_line(Line::new_with_style(
+                    Point::new(col, y - i),
+                    Point::new(col, y + i),
+                    Self::light(),
+                ))
                 .ok();
         }
     }
@@ -256,7 +297,8 @@ impl Screen {
     /// quiet zone included: dark modules on light, however dark the screen around it. Returns
     /// false if it can't fit (too much text for the room).
     pub fn qr(&self, text: &str, x: isize, top: isize, size: isize) -> bool {
-        let Ok(code) = qrcode::QrCode::with_error_correction_level(text.as_bytes(), qrcode::EcLevel::L) else {
+        let Ok(code) = qrcode::QrCode::with_error_correction_level(text.as_bytes(), qrcode::EcLevel::L)
+        else {
             return false;
         };
         let modules = code.width() as isize;
@@ -282,7 +324,11 @@ impl Screen {
             }
         }
         self.gfx
-            .bitmap(&bits, Some(Point::new(x - side / 2, top)), Some(Rectangle::new(Point::new(0, 0), Point::new(side, side))))
+            .bitmap(
+                &bits,
+                Some(Point::new(x - side / 2, top)),
+                Some(Rectangle::new(Point::new(0, 0), Point::new(side, side))),
+            )
             .ok();
         true
     }
@@ -300,7 +346,9 @@ impl Screen {
             } else {
                 DrawStyle::new(PixelColor::Dark, PixelColor::Light, 1)
             };
-            self.gfx.draw_circle(Circle::new_with_style(Point::new(start + i as isize * gap, y), 2, style)).ok();
+            self.gfx
+                .draw_circle(Circle::new_with_style(Point::new(start + i as isize * gap, y), 2, style))
+                .ok();
         }
     }
 }

@@ -373,7 +373,8 @@ fn forget_ended(ss: &mut SwapperSharedState) {
 /// pages were taken for good: a few dozen with every app installed, until swap filled.
 fn forget_freed(ss: &mut SwapperSharedState) {
     loop {
-        let freed = match xous::rsyscall(xous::SysCall::SwapOp(SwapAbi::TakeFreed as usize, 0, 0, 0, 0, 0, 0)) {
+        let freed = match xous::rsyscall(xous::SysCall::SwapOp(SwapAbi::TakeFreed as usize, 0, 0, 0, 0, 0, 0))
+        {
             Ok(Result::Scalar5(a, b, c, d, e)) => [a, b, c, d, e],
             _ => return,
         };
@@ -741,10 +742,11 @@ fn swap_handler(
                         alloc_heap.push(entry);
                     }
                 }
-                // Inside the interrupt context, evict pages. No progress on any other process is made until this
-                // loop is done. The loop is "inside-out" compared to the EvictPage call -- we can't make calls to
-                // the kernel that would cause us to re-enter the swap context, because that would overwrite the
-                // stored thread `sepc`. The syscalls used here are all "simple calls" that don't require re-entry
+                // Inside the interrupt context, evict pages. No progress on any other process is made until
+                // this loop is done. The loop is "inside-out" compared to the EvictPage call
+                // -- we can't make calls to the kernel that would cause us to re-enter the
+                // swap context, because that would overwrite the stored thread `sepc`. The
+                // syscalls used here are all "simple calls" that don't require re-entry
                 // into the swapper context to handle.
 
                 // the needy process's own candidates, oldest first, in case others' don't suffice
@@ -759,7 +761,8 @@ fn swap_handler(
                             || candidate.raw_pid() == 2
                         {
                             wired += 1;
-                        } else if needy != 0 && candidate.raw_pid() == needy && deferred_len < deferred.len() {
+                        } else if needy != 0 && candidate.raw_pid() == needy && deferred_len < deferred.len()
+                        {
                             deferred[deferred_len] = candidate;
                             deferred_len += 1;
                         } else {

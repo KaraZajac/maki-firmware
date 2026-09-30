@@ -3,10 +3,9 @@
 
 /// Maki rolls, and what goes in them: 32, so a random byte picks one as likely as any other.
 pub const ROLLS: [&str; 32] = [
-    "natto", "uni", "unagi", "kappa", "tekka", "negitoro", "kanpyo", "oshinko",
-    "umekyu", "tamago", "ikura", "anago", "ebi", "hamachi", "negihama", "shake",
-    "maguro", "toro", "kani", "hotate", "saba", "ika", "tako", "takuan",
-    "gobo", "shiso", "kyuri", "futomaki", "hosomaki", "temaki", "gunkan", "uramaki",
+    "natto", "uni", "unagi", "kappa", "tekka", "negitoro", "kanpyo", "oshinko", "umekyu", "tamago", "ikura",
+    "anago", "ebi", "hamachi", "negihama", "shake", "maguro", "toro", "kani", "hotate", "saba", "ika",
+    "tako", "takuan", "gobo", "shiso", "kyuri", "futomaki", "hosomaki", "temaki", "gunkan", "uramaki",
 ];
 
 /// The longest name, in bytes: it goes over IPC in four words.
@@ -17,7 +16,9 @@ pub fn pick(random: u8) -> &'static str { ROLLS[random as usize % ROLLS.len()] }
 
 /// A name maki would keep: one of the rolls, or anything short and plain someone chose.
 pub fn valid(name: &str) -> bool {
-    !name.is_empty() && name.len() <= MAX_NAME && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == ' ')
+    !name.is_empty()
+        && name.len() <= MAX_NAME
+        && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == ' ')
 }
 
 #[cfg(test)]

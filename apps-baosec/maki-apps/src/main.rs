@@ -26,7 +26,12 @@ enum Op {
 fn keys_of(msg: &xous::MessageEnvelope) -> Vec<Key> {
     msg.body
         .scalar_message()
-        .map(|s| [s.arg1, s.arg2, s.arg3, s.arg4].iter().filter_map(|&k| char::from_u32(k as u32).and_then(Key::from_char)).collect())
+        .map(|s| {
+            [s.arg1, s.arg2, s.arg3, s.arg4]
+                .iter()
+                .filter_map(|&k| char::from_u32(k as u32).and_then(Key::from_char))
+                .collect()
+        })
         .unwrap_or_default()
 }
 
@@ -44,11 +49,18 @@ fn main() -> ! {
     let sid = xns.register_name(SERVER_NAME, None).expect("can't register server");
     let launcher = maki_launcher::Launcher::new(&xns).expect("couldn't connect to the launcher");
     #[allow(clippy::single_element_loop)] // the built-in apps registered here: one so far
-    for (name, key, focus, menu, icon) in [
-        ("Passkeys", Op::PasskeysKey, Op::PasskeysFocus, Op::PasskeysMenu, &maki_icons::PASSKEYS),
-    ] {
+    for (name, key, focus, menu, icon) in
+        [("Passkeys", Op::PasskeysKey, Op::PasskeysFocus, Op::PasskeysMenu, &maki_icons::PASSKEYS)]
+    {
         launcher
-            .register(name, SERVER_NAME, key.to_u32().unwrap(), focus.to_u32().unwrap(), menu.to_u32().unwrap(), Some(icon))
+            .register(
+                name,
+                SERVER_NAME,
+                key.to_u32().unwrap(),
+                focus.to_u32().unwrap(),
+                menu.to_u32().unwrap(),
+                Some(icon),
+            )
             .expect("couldn't register with the launcher");
     }
 

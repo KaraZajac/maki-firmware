@@ -18,42 +18,56 @@ use crate::totp::{TotpEntry, generate_totp_code, get_current_unix_time};
 
 pub(crate) fn start(main_conn: xous::CID) {
     // maki's requests: a smaller stack than the default (128 KiB), which is plenty
-    thread::Builder::new().stack_size(64 * 1024).spawn(move || {
-        let xns = xous_names::XousNames::new().unwrap();
-        // one connection, which maki-link makes at boot: no app can reach this
-        let sid = xns.register_name(SERVER_NAME_VAULT_LINK, Some(1)).expect("can't register the vault link");
-        let launcher = Launcher::new(&xns).expect("couldn't connect to the launcher");
-        pddb::Pddb::new().is_mounted_blocking();
-        // maki-link answers "locked" until the PIN is in; this is belt and braces
-        maki_keys::Keys::new(&xns).expect("couldn't connect to maki-keys").wait_unlocked();
-        let mut storage = storage::Manager::new(&xns);
-        loop {
-            let mut msg = xous::receive_message(sid).unwrap();
-            match FromPrimitive::from_usize(msg.body.id()) {
-                Some(VaultLinkOp::Request) => {
-                    let Some(mem) = msg.body.memory_message_mut() else { continue };
-                    let mut buffer = unsafe { Buffer::from_memory_message_mut(mem) };
-                    let Ok(mut request) = buffer.to_original::<Request, _>() else {
-                        log::warn!("vault link: malformed request");
-                        continue;
-                    };
-                    let changed = answer(&mut request, &mut storage, &launcher);
-                    log::info!("vault link: {} for {}: {}", kind_name(&request), request.site, request.approval);
-                    buffer.replace(request).ok();
-                    if changed {
-                        // the vault's own lists are cached: bring them up to date
-                        xous::send_message(
-                            main_conn,
-                            xous::Message::new_scalar(VaultOp::ReloadDbAndFullRedraw.to_usize().unwrap(), 0, 0, 0, 0),
-                        )
-                        .ok();
+    thread::Builder::new()
+        .stack_size(64 * 1024)
+        .spawn(move || {
+            let xns = xous_names::XousNames::new().unwrap();
+            // one connection, which maki-link makes at boot: no app can reach this
+            let sid =
+                xns.register_name(SERVER_NAME_VAULT_LINK, Some(1)).expect("can't register the vault link");
+            let launcher = Launcher::new(&xns).expect("couldn't connect to the launcher");
+            pddb::Pddb::new().is_mounted_blocking();
+            // maki-link answers "locked" until the PIN is in; this is belt and braces
+            maki_keys::Keys::new(&xns).expect("couldn't connect to maki-keys").wait_unlocked();
+            let mut storage = storage::Manager::new(&xns);
+            loop {
+                let mut msg = xous::receive_message(sid).unwrap();
+                match FromPrimitive::from_usize(msg.body.id()) {
+                    Some(VaultLinkOp::Request) => {
+                        let Some(mem) = msg.body.memory_message_mut() else { continue };
+                        let mut buffer = unsafe { Buffer::from_memory_message_mut(mem) };
+                        let Ok(mut request) = buffer.to_original::<Request, _>() else {
+                            log::warn!("vault link: malformed request");
+                            continue;
+                        };
+                        let changed = answer(&mut request, &mut storage, &launcher);
+                        log::info!(
+                            "vault link: {} for {}: {}",
+                            kind_name(&request),
+                            request.site,
+                            request.approval
+                        );
+                        buffer.replace(request).ok();
+                        if changed {
+                            // the vault's own lists are cached: bring them up to date
+                            xous::send_message(
+                                main_conn,
+                                xous::Message::new_scalar(
+                                    VaultOp::ReloadDbAndFullRedraw.to_usize().unwrap(),
+                                    0,
+                                    0,
+                                    0,
+                                    0,
+                                ),
+                            )
+                            .ok();
+                        }
                     }
+                    None => log::warn!("vault link: unknown opcode {}", msg.body.id()),
                 }
-                None => log::warn!("vault link: unknown opcode {}", msg.body.id()),
             }
-        }
-    })
-    .unwrap();
+        })
+        .unwrap();
 }
 
 fn kind_name(r: &Request) -> &'static str {
@@ -98,7 +112,13 @@ fn answer(r: &mut Request, storage: &mut storage::Manager, launcher: &Launcher) 
 }
 
 /// Ask the owner; with choices, which one. Anything but a yes becomes the approval to report.
-fn ask(launcher: &Launcher, site: &str, question: &str, detail: &str, choices: &[String]) -> Result<usize, Approval> {
+fn ask(
+    launcher: &Launcher,
+    site: &str,
+    question: &str,
+    detail: &str,
+    choices: &[String],
+) -> Result<usize, Approval> {
     match launcher.ask(site, question, detail, choices, TIMEOUT_S) {
         Ok(Answer::Allowed(i)) if choices.is_empty() || i < choices.len() => Ok(i),
         Ok(Answer::Allowed(_)) => Err(Approval::Unavailable),
@@ -117,7 +137,10 @@ const TIMEOUT_S: u32 = maki_launcher::ask_timeout(ASK_TIMEOUT_S);
 /// Everything of one kind in the vault. A vault that has never held any has no dictionary for
 /// it yet, which means nothing saved; and the vault's own screen may be reading the same list,
 /// which the PDDB turns away for a moment.
-fn all<T: StorageContent + Default>(storage: &storage::Manager, kind: ContentKind) -> Result<Vec<T>, Approval> {
+fn all<T: StorageContent + Default>(
+    storage: &storage::Manager,
+    kind: ContentKind,
+) -> Result<Vec<T>, Approval> {
     use std::io::ErrorKind;
     for _ in 0..5 {
         match storage.all::<T>(kind.clone()) {
@@ -164,12 +187,15 @@ fn login(r: &mut Request, storage: &mut storage::Manager, launcher: &Launcher) -
 fn likely_first(site: &str, entries: &[TotpRecord], mut order: Vec<usize>) -> Vec<usize> {
     let host = site::normalize(site);
     let labels: Vec<&str> = host.split('.').collect();
-    let words: Vec<&str> = labels[..labels.len().saturating_sub(1)].iter().copied().filter(|l| l.len() >= 3).collect();
+    let words: Vec<&str> =
+        labels[..labels.len().saturating_sub(1)].iter().copied().filter(|l| l.len() >= 3).collect();
     let score = |t: &TotpRecord| {
         let text = format!("{} {}", t.name, t.notes).to_ascii_lowercase();
         words.iter().filter(|w| text.contains(*w)).count()
     };
-    order.sort_by(|&a, &b| score(&entries[b]).cmp(&score(&entries[a])).then(entries[a].name.cmp(&entries[b].name)));
+    order.sort_by(|&a, &b| {
+        score(&entries[b]).cmp(&score(&entries[a])).then(entries[a].name.cmp(&entries[b].name))
+    });
     order
 }
 
@@ -199,8 +225,11 @@ fn totp(r: &mut Request, storage: &mut storage::Manager, launcher: &Launcher) ->
     let secret = t.secret.to_ascii_uppercase().replace(' ', "");
     let entry = TotpEntry {
         step_seconds: step,
-        shared_secret: base32::decode(base32::Alphabet::RFC4648 { padding: false }, secret.trim_end_matches('='))
-            .ok_or(Approval::Unavailable)?,
+        shared_secret: base32::decode(
+            base32::Alphabet::RFC4648 { padding: false },
+            secret.trim_end_matches('='),
+        )
+        .ok_or(Approval::Unavailable)?,
         digit_count: if t.digits == 0 { 6 } else { t.digits as u8 },
         algorithm: t.algorithm,
     };

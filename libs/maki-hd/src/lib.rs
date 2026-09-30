@@ -175,7 +175,9 @@ pub fn format_path(path: &[u32]) -> String {
 }
 
 /// Whether `path` is `prefix` or below it.
-pub fn under(path: &[u32], prefix: &[u32]) -> bool { path.len() >= prefix.len() && path[..prefix.len()] == *prefix }
+pub fn under(path: &[u32], prefix: &[u32]) -> bool {
+    path.len() >= prefix.len() && path[..prefix.len()] == *prefix
+}
 
 /// Whether a wallet may declare `prefix`: a purpose and a coin type at least, both hardened, so
 /// no wallet gets the whole tree, or every coin under a purpose.
@@ -209,7 +211,10 @@ mod tests {
     #[test]
     fn paths_read_and_write() {
         assert_eq!(parse_path("m/84'/0'/0'"), Some(alloc::vec![84 | HARDENED, HARDENED, HARDENED]));
-        assert_eq!(parse_path("84h/1h/0h/1/7"), Some(alloc::vec![84 | HARDENED, 1 | HARDENED, HARDENED, 1, 7]));
+        assert_eq!(
+            parse_path("84h/1h/0h/1/7"),
+            Some(alloc::vec![84 | HARDENED, 1 | HARDENED, HARDENED, 1, 7])
+        );
         assert_eq!(parse_path("m"), Some(alloc::vec![]));
         assert_eq!(parse_path("m/2147483648"), None);
         assert_eq!(parse_path("m/84'/x"), None);

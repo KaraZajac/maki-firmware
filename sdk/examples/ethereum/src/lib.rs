@@ -15,10 +15,9 @@
 //! site asking, as a length byte and the name:
 //!
 //! - `A` index (u32), site: the account's address, once the owner lets the site connect;
-//! - `M` index, site, then the message: its signature (EIP-191, 65 bytes), once the owner has
-//!   read it;
-//! - `T` index, total (u32), offset (u32), site, then a piece of a transaction: the last piece is
-//!   read, shown and signed, and answered with the signed transaction's size (or why not);
+//! - `M` index, site, then the message: its signature (EIP-191, 65 bytes), once the owner has read it;
+//! - `T` index, total (u32), offset (u32), site, then a piece of a transaction: the last piece is read, shown
+//!   and signed, and answered with the signed transaction's size (or why not);
 //! - `Y` the same for typed data (EIP-712, JSON): the last piece is answered with its signature;
 //! - `G` offset (u32): a piece of the transaction last signed: total, offset, the bytes.
 //!
@@ -32,7 +31,7 @@
 
 use maki_app::wallet::{HostKeys, Page, Review};
 use maki_app::*;
-use maki_eth::{display, Account, Tx, TypedData};
+use maki_eth::{Account, Tx, TypedData, display};
 
 const ACCOUNT: u8 = b'A';
 const MESSAGE: u8 = b'M';
@@ -61,22 +60,27 @@ struct Answer(Vec<u8>);
 
 impl Answer {
     fn new(status: u8) -> Answer { Answer(vec![status]) }
+
     fn text(mut self, s: &str) -> Answer {
         self.0.extend_from_slice(&(s.len() as u16).to_le_bytes());
         self.0.extend_from_slice(s.as_bytes());
         self
     }
+
     fn u32(mut self, n: u32) -> Answer {
         self.0.extend_from_slice(&n.to_le_bytes());
         self
     }
+
     fn bytes(mut self, b: &[u8]) -> Answer {
         self.0.extend_from_slice(b);
         self
     }
 }
 
-fn u32_at(b: &[u8], at: usize) -> Option<u32> { b.get(at..at + 4).map(|x| u32::from_le_bytes(x.try_into().unwrap())) }
+fn u32_at(b: &[u8], at: usize) -> Option<u32> {
+    b.get(at..at + 4).map(|x| u32::from_le_bytes(x.try_into().unwrap()))
+}
 
 /// The site at `at` (a length byte, then the name), and where what follows starts.
 fn site_at(b: &[u8], at: usize) -> Option<(&str, usize)> {
@@ -126,7 +130,9 @@ fn said_yes(asked: Result<maki_app::Answer, Error>) -> Result<(), Answer> {
     }
 }
 
-fn which(index: u32) -> String { if index == 0 { "ethereum account".into() } else { format!("account #{index}") } }
+fn which(index: u32) -> String {
+    if index == 0 { "ethereum account".into() } else { format!("account #{index}") }
+}
 
 /// A transaction or typed data coming in, and the transaction last signed.
 #[derive(Default)]
@@ -151,7 +157,9 @@ impl Wallet {
 
     fn piece(&mut self, m: &[u8]) -> Result<Answer, Answer> {
         let kind = m[0];
-        let (Some(index), Some(total), Some(offset), Some((site, at))) = (u32_at(m, 1), u32_at(m, 5), u32_at(m, 9), site_at(m, 13)) else {
+        let (Some(index), Some(total), Some(offset), Some((site, at))) =
+            (u32_at(m, 1), u32_at(m, 5), u32_at(m, 9), site_at(m, 13))
+        else {
             return Err(Answer::new(BAD));
         };
         let (total, offset, piece) = (total as usize, offset as usize, &m[at..]);
@@ -164,7 +172,11 @@ impl Wallet {
             self.incoming_total = total;
             self.incoming_kind = kind;
         }
-        if offset != self.incoming.len() || total != self.incoming_total || kind != self.incoming_kind || offset + piece.len() > total {
+        if offset != self.incoming.len()
+            || total != self.incoming_total
+            || kind != self.incoming_kind
+            || offset + piece.len() > total
+        {
             self.incoming.clear();
             return Err(Answer::new(BAD));
         }
@@ -198,7 +210,12 @@ impl Wallet {
 fn connect(m: &[u8]) -> Result<Answer, Answer> {
     let (Some(index), Some((site, _))) = (u32_at(m, 1), site_at(m, 5)) else { return Err(Answer::new(BAD)) };
     let account = account(index)?;
-    let asked = Review::new("Connect wallet?").detail(&which(index)).answers("connect", "don't").page(site_page(site)).signatures(0).timeout(60);
+    let asked = Review::new("Connect wallet?")
+        .detail(&which(index))
+        .answers("connect", "don't")
+        .page(site_page(site))
+        .signatures(0)
+        .timeout(60);
     said_yes(asked.show())?;
     Ok(Answer::new(OK).text(&account.address_string()))
 }
@@ -209,12 +226,14 @@ fn message(m: &[u8]) -> Result<Answer, Answer> {
     let (Some(index), Some((site, at))) = (u32_at(m, 1), site_at(m, 5)) else { return Err(Answer::new(BAD)) };
     let message = &m[at..];
     let account = account(index)?;
-    let mut asked = Review::new("Sign message?").detail("not a transaction").page(site_page(site)).timeout(120);
+    let mut asked =
+        Review::new("Sign message?").detail("not a transaction").page(site_page(site)).timeout(120);
     for p in display::message_pages(site, message) {
         asked = asked.page(page(p));
     }
     said_yes(asked.show())?;
-    let signature = account.sign_message(message).map_err(|_| Answer::new(REFUSED).text("maki couldn't sign it"))?;
+    let signature =
+        account.sign_message(message).map_err(|_| Answer::new(REFUSED).text("maki couldn't sign it"))?;
     Ok(Answer::new(OK).bytes(&signature))
 }
 
@@ -235,9 +254,11 @@ fn transaction(account: &Account, site: &str, bytes: &[u8]) -> Result<Vec<u8>, A
 /// which token, until when; anything else field by field), hashed from what was shown, and
 /// signed on a yes.
 fn typed(account: &Account, site: &str, bytes: &[u8]) -> Result<[u8; 65], Answer> {
-    let text = core::str::from_utf8(bytes).map_err(|_| Answer::new(REFUSED).text("not typed data maki can read: not UTF-8"))?;
+    let text = core::str::from_utf8(bytes)
+        .map_err(|_| Answer::new(REFUSED).text("not typed data maki can read: not UTF-8"))?;
     let typed = TypedData::parse(text).map_err(|e| Answer::new(REFUSED).text(&e.to_string()))?;
-    let (pages, title, line) = display::typed_review(&typed).map_err(|e| Answer::new(REFUSED).text(&e.to_string()))?;
+    let (pages, title, line) =
+        display::typed_review(&typed).map_err(|e| Answer::new(REFUSED).text(&e.to_string()))?;
     let mut asked = Review::new(title).detail(line).page(site_page(site)).timeout(300);
     for p in pages {
         asked = asked.page(page(p));
@@ -292,7 +313,16 @@ struct Request {
 fn read_request(cbor: &[u8]) -> Option<Request> {
     let mut d = minicbor::Decoder::new(cbor);
     let n = d.map().ok()??;
-    let mut r = Request { id: Vec::new(), data: Vec::new(), kind: 0, chain: None, path: Vec::new(), fingerprint: None, address: None, origin: String::new() };
+    let mut r = Request {
+        id: Vec::new(),
+        data: Vec::new(),
+        kind: 0,
+        chain: None,
+        path: Vec::new(),
+        fingerprint: None,
+        address: None,
+        origin: String::new(),
+    };
     for _ in 0..n {
         match d.u32().ok()? {
             1 => {
@@ -348,14 +378,17 @@ fn scan_request() -> Result<Request, String> {
     loop {
         screen::clear(Color::Dark);
         screen::text_centred(24, "Reading the request", Style::Bold, Color::Light);
-        let line = if of > 0 { format!("{} of {of} parts", seen.len()) } else { "from MetaMask's screen".into() };
+        let line =
+            if of > 0 { format!("{} of {of} parts", seen.len()) } else { "from MetaMask's screen".into() };
         screen::text_centred(50, &line, Style::Regular, Color::Light);
         screen::text_centred(80, "any button stops", Style::Small, Color::Light);
         screen::present();
         let mut buf = vec![0u8; 4400];
         let Some(text) = camera::scan_qr(&mut buf) else { return Err("stopped".into()) };
         let lower = text.trim().to_ascii_lowercase();
-        let Some(rest) = lower.strip_prefix("ur:eth-sign-request/") else { return Err("that isn't a request to sign".into()) };
+        let Some(rest) = lower.strip_prefix("ur:eth-sign-request/") else {
+            return Err("that isn't a request to sign".into());
+        };
         let cbor = match ur::ur::decode(&lower) {
             Ok((ur::ur::Kind::SinglePart, cbor)) => cbor,
             Ok((ur::ur::Kind::MultiPart, _)) => {
@@ -396,7 +429,11 @@ fn sign_request(r: &Request) -> Result<Vec<u8>, String> {
     if r.address.as_deref().is_some_and(|a| a != account.address()) {
         return Err("for another address".into());
     }
-    let asked_by = Page::new("Asked by").value("a QR code").mono(if r.origin.is_empty() { "the site isn't known" } else { &r.origin });
+    let asked_by = Page::new("Asked by").value("a QR code").mono(if r.origin.is_empty() {
+        "the site isn't known"
+    } else {
+        &r.origin
+    });
     let said = |asked: Result<maki_app::Answer, Error>| said_yes(asked).map_err(|a| refusal(&a));
     match r.kind {
         1 | 4 => {
@@ -426,7 +463,8 @@ fn sign_request(r: &Request) -> Result<Vec<u8>, String> {
         _ => {
             // the site isn't known, so a sign-in is for the site it names, which the owner reads
             let site = display::sign_in_site(&r.data).unwrap_or_default();
-            let mut asked = Review::new("Sign message?").detail("not a transaction").page(asked_by).timeout(120);
+            let mut asked =
+                Review::new("Sign message?").detail("not a transaction").page(asked_by).timeout(120);
             for p in display::message_pages(&site, &r.data) {
                 asked = asked.page(page(p));
             }
@@ -488,7 +526,12 @@ fn draw(index: u32, as_text: bool) {
     if as_text {
         screen::text_centred(2, &which(index), Style::Small, Color::Light);
         for (i, start) in (0..address.len()).step_by(14).enumerate() {
-            screen::text_centred(20 + i as i32 * 15, &address[start..(start + 14).min(address.len())], Style::Mono, Color::Light);
+            screen::text_centred(
+                20 + i as i32 * 15,
+                &address[start..(start + 14).min(address.len())],
+                Style::Mono,
+                Color::Light,
+            );
         }
     } else {
         let side = screen::qr(0, 0, address.as_bytes(), 94).unwrap_or(0);
@@ -528,15 +571,17 @@ fn main() {
                 Err(_) => note = "maki is locked".into(),
             },
             // no cable: MetaMask's request off its screen, signed, and the signature shown back
-            Event::Menu(1) => match scan_request().and_then(|r| sign_request(&r).map(|s| signature_ur(&r.id, &s))) {
-                Ok(code) => {
-                    if show_code(&code) {
-                        return;
+            Event::Menu(1) => {
+                match scan_request().and_then(|r| sign_request(&r).map(|s| signature_ur(&r.id, &s))) {
+                    Ok(code) => {
+                        if show_code(&code) {
+                            return;
+                        }
                     }
+                    Err(why) if why == "stopped" => {}
+                    Err(why) => note = why,
                 }
-                Err(why) if why == "stopped" => {}
-                Err(why) => note = why,
-            },
+            }
             Event::Left => index = index.saturating_sub(1),
             Event::Right => index = (index + 1).min(maki_app::wallet::HARDENED - 1),
             Event::Centre => as_text = !as_text,

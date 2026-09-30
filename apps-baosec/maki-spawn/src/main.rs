@@ -10,8 +10,8 @@
 #![no_std]
 #![no_main]
 
-use maki_native::load::*;
 use maki_native::PAGE;
+use maki_native::load::*;
 use xous::{MemoryAddress, MemoryFlags, SID};
 
 #[panic_handler]
@@ -47,13 +47,9 @@ fn load(buf: &mut [u8]) -> Result<Loaded, u32> {
         if segment.executable {
             flags |= MemoryFlags::X;
         }
-        let mut range = xous::map_memory(
-            None,
-            MemoryAddress::new(base as usize),
-            (end - base) as usize,
-            flags,
-        )
-        .map_err(|_| CANT_MAP)?;
+        let mut range =
+            xous::map_memory(None, MemoryAddress::new(base as usize), (end - base) as usize, flags)
+                .map_err(|_| CANT_MAP)?;
         let dest = unsafe { range.as_slice_mut::<u8>() };
         let at = (segment.memory.start - base) as usize;
         let bytes = &elf[segment.file.clone()];
@@ -78,7 +74,8 @@ fn load(buf: &mut [u8]) -> Result<Loaded, u32> {
 
     // the heap may take what's left: read the limit, then set it
     let heap = pages as usize * PAGE as usize;
-    if let Ok(xous::Result::Scalar2(_, current)) = xous::rsyscall(xous::SysCall::AdjustProcessLimit(1, 0, 0)) {
+    if let Ok(xous::Result::Scalar2(_, current)) = xous::rsyscall(xous::SysCall::AdjustProcessLimit(1, 0, 0))
+    {
         xous::rsyscall(xous::SysCall::AdjustProcessLimit(1, current, heap)).map_err(|_| NO_ROOM)?;
     }
     Ok(Loaded { entry: program.entry as usize, budget: pages as usize })
@@ -90,7 +87,8 @@ fn load(buf: &mut [u8]) -> Result<Loaded, u32> {
 pub extern "C" fn init(s1: u32, s2: u32, s3: u32, s4: u32) -> ! {
     let server = SID::from_u32(s1, s2, s3, s4);
     loop {
-        let Ok(xous::Result::MessageEnvelope(mut envelope)) = xous::rsyscall(xous::SysCall::ReceiveMessage(server))
+        let Ok(xous::Result::MessageEnvelope(mut envelope)) =
+            xous::rsyscall(xous::SysCall::ReceiveMessage(server))
         else {
             continue;
         };
@@ -120,4 +118,3 @@ pub extern "C" fn init(s1: u32, s2: u32, s3: u32, s4: u32) -> ! {
         start(0, core::ptr::null_mut());
     }
 }
-

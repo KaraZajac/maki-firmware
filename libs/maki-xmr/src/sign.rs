@@ -16,7 +16,7 @@
 use alloc::vec::Vec;
 
 use crypto_bigint::modular::constant_mod::{Residue, ResidueParams};
-use crypto_bigint::{const_residue, impl_modulus, Encoding, U256};
+use crypto_bigint::{Encoding, U256, const_residue, impl_modulus};
 /// The curve's points and scalars, as this module takes and gives them, and its generator G.
 pub use curve25519_dalek::constants::ED25519_BASEPOINT_POINT as G;
 use curve25519_dalek::edwards::CompressedEdwardsY;
@@ -68,8 +68,8 @@ pub fn hash_to_point(bytes: &[u8]) -> EdwardsPoint {
 /// H, the second generator, which amounts are committed to: Keccak-256 of G, read as a point,
 /// times 8.
 pub const H: [u8; 32] = [
-    0x8b, 0x65, 0x59, 0x70, 0x15, 0x37, 0x99, 0xaf, 0x2a, 0xea, 0xdc, 0x9f, 0xf1, 0xad, 0xd0, 0xea, 0x6c, 0x72, 0x51,
-    0xd5, 0x41, 0x54, 0xcf, 0xa9, 0x2c, 0x17, 0x3a, 0x0d, 0xd3, 0x9c, 0x1f, 0x94,
+    0x8b, 0x65, 0x59, 0x70, 0x15, 0x37, 0x99, 0xaf, 0x2a, 0xea, 0xdc, 0x9f, 0xf1, 0xad, 0xd0, 0xea, 0x6c,
+    0x72, 0x51, 0xd5, 0x41, 0x54, 0xcf, 0xa9, 0x2c, 0x17, 0x3a, 0x0d, 0xd3, 0x9c, 0x1f, 0x94,
 ];
 
 fn h() -> EdwardsPoint { CompressedEdwardsY(H).decompress().expect("H is a point") }
@@ -183,7 +183,9 @@ pub fn output(derivation: &[u8; 32], index: u64, spend: &EdwardsPoint, amount: u
 
 /// A key image (`generate_key_image`): what marks an output as spent, the same whichever ring
 /// spends it. `secret` is the output's one-time secret, `key` its key.
-pub fn key_image(secret: &Scalar, key: &EdwardsPoint) -> EdwardsPoint { secret * hash_to_point(key.compress().as_bytes()) }
+pub fn key_image(secret: &Scalar, key: &EdwardsPoint) -> EdwardsPoint {
+    secret * hash_to_point(key.compress().as_bytes())
+}
 
 /// A ring member: an output's key and amount commitment, as the chain has them.
 #[derive(Clone, Copy, Debug)]
@@ -334,7 +336,8 @@ pub fn clsag(
             c1 = c;
         }
         let (cp, cc) = (c * mu_p, c * mu_c);
-        let l = EdwardsPoint::multiscalar_mul([s[i], cp, cc], [G, ring[i].key, ring[i].commitment - pseudo_out]);
+        let l =
+            EdwardsPoint::multiscalar_mul([s[i], cp, cc], [G, ring[i].key, ring[i].commitment - pseudo_out]);
         let r = EdwardsPoint::multiscalar_mul([s[i], cp, cc], [hp[i], image, d]);
         c = challenge(&l, &r);
     }

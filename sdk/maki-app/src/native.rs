@@ -51,7 +51,8 @@ fn exchange(op: usize, payload: &[u8], room: usize) -> (i32, Vec<u8>, usize) {
         buf[service::HEAD..service::HEAD + payload.len()].copy_from_slice(payload);
         service::set_head(buf, 0, payload.len());
     }
-    let sent = xous::send_message(conn(), xous::Message::new_lend_mut(op, range, None, xous::MemorySize::new(size)));
+    let sent =
+        xous::send_message(conn(), xous::Message::new_lend_mut(op, range, None, xous::MemorySize::new(size)));
     let (status, got, whole) = {
         let buf = unsafe { range.as_slice::<u8>() };
         let (status, len) = service::head(buf);
@@ -81,7 +82,9 @@ unsafe fn slice_mut<'a>(ptr: *mut u8, len: usize) -> &'a mut [u8] {
     if len == 0 { &mut [] } else { core::slice::from_raw_parts_mut(ptr, len) }
 }
 
-unsafe fn str<'a>(ptr: *const u8, len: usize) -> &'a str { core::str::from_utf8(slice(ptr, len)).unwrap_or("") }
+unsafe fn str<'a>(ptr: *const u8, len: usize) -> &'a str {
+    core::str::from_utf8(slice(ptr, len)).unwrap_or("")
+}
 
 /// Copies what came back into the app's buffer as far as it fits, and returns its whole
 /// length, or the status if it isn't 0: what the WebAssembly imports return.
@@ -97,12 +100,21 @@ unsafe fn copy_out(status: i32, got: &[u8], whole: usize, ptr: *mut u8, cap: usi
 pub unsafe fn screen_width() -> i32 { crate::WIDTH }
 pub unsafe fn screen_height() -> i32 { crate::HEIGHT }
 pub unsafe fn clear(color: i32) { push(Draw::Clear { color: color as u8 }) }
-pub unsafe fn pixel(x: i32, y: i32, color: i32) { push(Draw::Pixel { x: x as i16, y: y as i16, color: color as u8 }) }
+pub unsafe fn pixel(x: i32, y: i32, color: i32) {
+    push(Draw::Pixel { x: x as i16, y: y as i16, color: color as u8 })
+}
 pub unsafe fn line(x0: i32, y0: i32, x1: i32, y1: i32, color: i32) {
     push(Draw::Line { x0: x0 as i16, y0: y0 as i16, x1: x1 as i16, y1: y1 as i16, color: color as u8 })
 }
 pub unsafe fn rect(x: i32, y: i32, w: i32, h: i32, color: i32, filled: i32) {
-    push(Draw::Rect { x: x as i16, y: y as i16, w: w as i16, h: h as i16, color: color as u8, filled: filled != 0 })
+    push(Draw::Rect {
+        x: x as i16,
+        y: y as i16,
+        w: w as i16,
+        h: h as i16,
+        color: color as u8,
+        filled: filled != 0,
+    })
 }
 pub unsafe fn text(x: i32, y: i32, ptr: *const u8, len: usize, style: i32, color: i32) -> i32 {
     let s = str(ptr, len);
@@ -156,7 +168,9 @@ pub unsafe fn storage_set(kptr: *const u8, klen: usize, vptr: *const u8, vlen: u
     payload.extend_from_slice(slice(vptr, vlen));
     request(service::STORAGE_SET, &payload, 0).0
 }
-pub unsafe fn storage_delete(kptr: *const u8, klen: usize) -> i32 { request(service::STORAGE_DELETE, slice(kptr, klen), 0).0 }
+pub unsafe fn storage_delete(kptr: *const u8, klen: usize) -> i32 {
+    request(service::STORAGE_DELETE, slice(kptr, klen), 0).0
+}
 pub unsafe fn storage_key(index: i32, ptr: *mut u8, cap: usize) -> i32 {
     let (status, got, whole) = exchange(service::STORAGE_KEY, &index.to_le_bytes(), cap);
     copy_out(status, &got, whole, ptr, cap)
@@ -212,8 +226,12 @@ unsafe fn key(op: usize, lptr: *const u8, llen: usize, out: *mut u8) -> i32 {
     }
     status
 }
-pub unsafe fn key_secret(lptr: *const u8, llen: usize, out: *mut u8) -> i32 { key(service::KEY_SECRET, lptr, llen, out) }
-pub unsafe fn key_public(lptr: *const u8, llen: usize, out: *mut u8) -> i32 { key(service::KEY_PUBLIC, lptr, llen, out) }
+pub unsafe fn key_secret(lptr: *const u8, llen: usize, out: *mut u8) -> i32 {
+    key(service::KEY_SECRET, lptr, llen, out)
+}
+pub unsafe fn key_public(lptr: *const u8, llen: usize, out: *mut u8) -> i32 {
+    key(service::KEY_PUBLIC, lptr, llen, out)
+}
 pub unsafe fn key_sign(lptr: *const u8, llen: usize, mptr: *const u8, mlen: usize, out: *mut u8) -> i32 {
     if llen > 255 {
         return INVALID;
@@ -262,12 +280,16 @@ pub unsafe fn key_x25519_agree(lptr: *const u8, llen: usize, pptr: *const u8, ou
     }
     status
 }
-pub unsafe fn type_text(ptr: *const u8, len: usize) -> i32 { request(service::TYPE_TEXT, slice(ptr, len), 0).0 }
+pub unsafe fn type_text(ptr: *const u8, len: usize) -> i32 {
+    request(service::TYPE_TEXT, slice(ptr, len), 0).0
+}
 pub unsafe fn link_read(ptr: *mut u8, cap: usize) -> i32 {
     let (status, got, whole) = exchange(service::LINK_READ, &[], cap.max(4096));
     copy_out(status, &got, whole, ptr, cap)
 }
-pub unsafe fn link_reply(ptr: *const u8, len: usize) -> i32 { request(service::LINK_REPLY, slice(ptr, len), 0).0 }
+pub unsafe fn link_reply(ptr: *const u8, len: usize) -> i32 {
+    request(service::LINK_REPLY, slice(ptr, len), 0).0
+}
 pub unsafe fn camera_scan_qr(ptr: *mut u8, cap: usize) -> i32 {
     let (status, got, whole) = exchange(service::SCAN_QR, &[], cap.max(1024));
     copy_out(status, &got, whole, ptr, cap)
@@ -349,7 +371,14 @@ mod wallet_calls {
         request(service::WALLET_REVIEW, &payload, 0).0
     }
 
-    pub unsafe fn wallet_sign(pptr: *const u32, plen: usize, dptr: *const u8, scheme: i32, out: *mut u8, cap: usize) -> i32 {
+    pub unsafe fn wallet_sign(
+        pptr: *const u32,
+        plen: usize,
+        dptr: *const u8,
+        scheme: i32,
+        out: *mut u8,
+        cap: usize,
+    ) -> i32 {
         let (Some(path), Ok(scheme)) = (path_bytes(pptr, plen), u8::try_from(scheme)) else { return INVALID };
         let mut payload = Vec::with_capacity(33 + path.len());
         payload.push(scheme);
@@ -359,7 +388,13 @@ mod wallet_calls {
         fits(status, &got, out, cap)
     }
 
-    pub unsafe fn wallet_subaddress(pptr: *const u32, plen: usize, major: i32, minor: i32, out: *mut u8) -> i32 {
+    pub unsafe fn wallet_subaddress(
+        pptr: *const u32,
+        plen: usize,
+        major: i32,
+        minor: i32,
+        out: *mut u8,
+    ) -> i32 {
         let Some(path) = path_bytes(pptr, plen) else { return INVALID };
         let mut payload = Vec::with_capacity(8 + path.len());
         payload.extend_from_slice(&(major as u32).to_le_bytes());
@@ -388,7 +423,12 @@ mod wallet_calls {
         }
     }
 
-    pub unsafe fn wallet_monero_key_image(pptr: *const u32, plen: usize, optr: *const u8, out: *mut u8) -> i32 {
+    pub unsafe fn wallet_monero_key_image(
+        pptr: *const u32,
+        plen: usize,
+        optr: *const u8,
+        out: *mut u8,
+    ) -> i32 {
         let Some(path) = path_bytes(pptr, plen) else { return INVALID };
         let mut payload = Vec::with_capacity(80 + path.len());
         payload.extend_from_slice(slice(optr, 80));
@@ -401,7 +441,14 @@ mod wallet_calls {
         }
     }
 
-    pub unsafe fn wallet_monero_sign(pptr: *const u32, plen: usize, rptr: *const u8, rlen: usize, out: *mut u8, cap: usize) -> i32 {
+    pub unsafe fn wallet_monero_sign(
+        pptr: *const u32,
+        plen: usize,
+        rptr: *const u8,
+        rlen: usize,
+        out: *mut u8,
+        cap: usize,
+    ) -> i32 {
         let Some(path) = path_bytes(pptr, plen) else { return INVALID };
         let mut payload = Vec::with_capacity(4 + rlen + path.len());
         payload.extend_from_slice(&(rlen as u32).to_le_bytes());
@@ -411,7 +458,13 @@ mod wallet_calls {
         fits(status, &got, out, cap)
     }
 
-    pub unsafe fn wallet_sign_ed25519(pptr: *const u32, plen: usize, mptr: *const u8, mlen: usize, out: *mut u8) -> i32 {
+    pub unsafe fn wallet_sign_ed25519(
+        pptr: *const u32,
+        plen: usize,
+        mptr: *const u8,
+        mlen: usize,
+        out: *mut u8,
+    ) -> i32 {
         let Some(path) = path_bytes(pptr, plen) else { return INVALID };
         let mut payload = Vec::with_capacity(4 + mlen + path.len());
         payload.extend_from_slice(&(mlen as u32).to_le_bytes());
