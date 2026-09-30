@@ -228,6 +228,9 @@ fn tally_counts_and_keeps_the_count() {
     assert_eq!(r.storage["count"], 11u32.to_le_bytes());
     let (_, r) = run_fixture("tally", &[Event::Left], r.storage);
     assert_eq!(r.storage["count"], 10u32.to_le_bytes());
+    // the jog dial counts one up or down
+    let (_, r) = run_fixture("tally", &[Event::Up, Event::Up, Event::Down], r.storage);
+    assert_eq!(r.storage["count"], 11u32.to_le_bytes());
     let (_, r) = run_fixture("tally", &[Event::Menu(0)], r.storage);
     assert_eq!(r.storage["count"], 0u32.to_le_bytes());
 }

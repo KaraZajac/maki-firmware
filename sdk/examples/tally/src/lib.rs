@@ -1,5 +1,6 @@
-//! A tally counter: the centre adds one, left takes one away, right adds ten. The count is
-//! kept in storage, so it survives leaving the app and unplugging maki.
+//! A tally counter: the centre adds one, left takes one away, right adds ten, and the jog dial on
+//! maki's side counts one up or down, for counting with a thumb. The count is kept in storage, so
+//! it survives leaving the app and unplugging maki.
 
 #![no_std]
 
@@ -61,7 +62,8 @@ fn main() {
         draw(count);
         let before = count;
         match wait(None) {
-            Event::Centre => count = (count + 1).min(99_999),
+            Event::Centre | Event::Up => count = (count + 1).min(99_999),
+            Event::Down => count = count.saturating_sub(1),
             Event::Right => count = (count + 10).min(99_999),
             Event::Left => count = count.saturating_sub(1),
             Event::Menu(0) => count = 0,
