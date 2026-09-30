@@ -188,7 +188,9 @@ The app draws, then waits for the next event, and returns from `main` when told 
   then `present`. Colours are `Dark`, `Light` and `Invert`. `segments` draws big digits with
   bars, as a seven-segment display does, any height, and turned to read from any edge
   (`Toward::Top` for someone across the table): the app draws them itself, so they're in every
-  maki.
+  maki. Host API 8's `screen::dark(true)` has the whole screen dark, maki's bar and all, for an
+  app that watches through the night: presses still reach it, maki lights the screen to show it's
+  typing, and maki's own screens show over it.
 - **Events** from `wait(timeout)`: `Left`, `Right`, `Centre`, `Menu(i)` for the app's own menu
   items (`menu(&[...])`, up to six), `Hidden` and `Shown` when something else takes the screen
   for a while (an ask, the menu), `Timeout`, and `Exit`: save anything worth saving and return.

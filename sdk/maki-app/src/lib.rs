@@ -90,6 +90,7 @@ mod sys {
         pub fn camera_scan_qr(ptr: *mut u8, cap: usize) -> i32;
         pub fn motion_read(ptr: *mut u8) -> i32;
         pub fn motion_range(g: i32) -> i32;
+        pub fn screen_dark(dark: i32);
         #[cfg(feature = "wallet")]
         pub fn wallet_fingerprint(out: *mut u8) -> i32;
         #[cfg(feature = "wallet")]
@@ -273,6 +274,11 @@ pub mod screen {
         let side = unsafe { sys::qr(x, y, data.as_ptr(), data.len(), size) };
         (side > 0).then_some(side)
     }
+
+    /// The whole screen dark, maki's bar and all, or lit again (host API 8): for an app that
+    /// watches through the night, and shouldn't wear the screen or say it's there. Presses still
+    /// reach the app; maki lights the screen to show it's typing, and its own screens show over it.
+    pub fn dark(dark: bool) { unsafe { sys::screen_dark(dark as i32) } }
 
     /// The edge of the screen whoever reads `segments` sits at: `Bottom` as maki is held, `Top`
     /// across a table from them (upside down), `Left` and `Right` at its sides (a quarter turn).

@@ -192,6 +192,8 @@ struct Shared {
     qr: Option<String>,
     /// the accelerometer's range, ±g: what it reads is cut there, as on maki
     range: u8,
+    /// the app asked for the whole screen dark
+    dark: bool,
 }
 
 pub struct Sim(Rc<RefCell<Shared>>);
@@ -244,6 +246,10 @@ fn save_storage(path: &std::path::Path, storage: &BTreeMap<String, Vec<u8>>) {
 
 impl Shared {
     fn screen(&self) -> Screen {
+        // dark: nothing, maki's bar neither
+        if self.dark {
+            return [[false; WIDTH]; WIDTH];
+        }
         compose(&bar(&self.manifest.name, self.options.sideloaded, &clock(self.unix())), &self.last)
     }
 
@@ -300,6 +306,7 @@ impl Sim {
             message: None,
             qr: None,
             range: 2,
+            dark: false,
         })))
     }
 
@@ -590,7 +597,7 @@ impl Platform for Sim {
 
     fn present(&mut self, canvas: &Canvas) {
         let mut s = self.0.borrow_mut();
-        s.last = canvas.clone();
+        s.last = if s.dark { Canvas::default() } else { canvas.clone() };
         s.frame += 1;
         if let Some(dir) = s.options.frames.clone() {
             let path = dir.join(format!("frame-{:04}.png", s.frame));
@@ -806,6 +813,8 @@ impl Platform for Sim {
         Some(g)
     }
 
+    fn set_dark(&mut self, dark: bool) { self.0.borrow_mut().dark = dark; }
+
     fn message(&mut self) -> Option<Vec<u8>> { self.0.borrow().message.clone() }
 
     fn reply(&mut self, reply: &[u8]) -> bool {
@@ -827,6 +836,7 @@ impl Platform for Sim {
 
     fn type_text(&mut self, text: &str) -> bool {
         let mut s = self.0.borrow_mut();
+        s.dark = false;
         let line = format!("typed: {text:?}");
         if !s.interactive {
             eprintln!("{line}");
@@ -837,6 +847,7 @@ impl Platform for Sim {
 
     fn press_key(&mut self, code: u8, shift: bool) -> bool {
         let mut s = self.0.borrow_mut();
+        s.dark = false;
         let line = format!("pressed: {}{}", if shift { "Shift+" } else { "" }, key_name(code));
         if !s.interactive {
             eprintln!("{line}");

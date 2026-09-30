@@ -27,7 +27,8 @@ pub const API_VERSION: u16 = 8;
 
 /// Host API 8: the jog dial on maki's side, up and down (`Event::Up`, `Event::Down`). Only an app
 /// that says this API or later gets them: an older one would read them as a timeout. The API also
-/// brings keys beyond text (`key_press`) and the accelerometer's range (`motion_range`).
+/// brings keys beyond text (`key_press`), the accelerometer's range (`motion_range`) and a dark
+/// screen (`screen_dark`).
 pub const API_JOG: u16 = 8;
 
 /// Whether maki gives an app the jog dial: a WebAssembly app of host API 8 or later, or a native
@@ -58,6 +59,7 @@ pub const SINCE: &[(&str, u16)] = &[
     ("ask_review", 7),
     ("key_press", 8),
     ("motion_range", 8),
+    ("screen_dark", 8),
 ];
 
 /// Keys an app may press beyond text (`key_press`, the keyboard permission), as USB HID usage IDs:
@@ -323,6 +325,10 @@ pub trait Platform {
     /// The accelerometer's range (the motion permission): ±`g`, one of 2, 4, 8 and 16, for as long
     /// as the app runs. The range it has now, or `None` if there's no accelerometer.
     fn motion_range(&mut self, _g: u8) -> Option<u8> { None }
+    /// The whole screen dark, maki's bar and all, while `dark` (host API 8): for an app that
+    /// watches through the night and shouldn't burn the screen or say it's there. Showing nothing,
+    /// it can't pass for maki's own screens; maki lights it again to show it's typing.
+    fn set_dark(&mut self, _dark: bool) {}
     /// A wallet app's key work (the wallet permission), done by maki, which keeps the seed: the
     /// master key's fingerprint (`op` 0, no path), a public key at `path` (`WALLET_PUBLIC`..), or
     /// a signature over `digest` (`WALLET_SIGN_*`). The session has held the path to the app's
@@ -1167,6 +1173,10 @@ fn link(linker: &mut Linker<State>) -> Result<(), Error> {
             Ok(c.data_mut().session.press_key(code, shift != 0))
         },
     )?;
+    linker.func_wrap(M, "screen_dark", |mut c: Caller<'_, State>, dark: i32| -> Result<(), Error> {
+        c.data_mut().session.screen_dark(dark != 0);
+        Ok(())
+    })?;
     linker.func_wrap(M, "motion_range", |mut c: Caller<'_, State>, g: i32| -> Result<i32, Error> {
         permitted(&c, Permission::Motion, "motion_range")?;
         Ok(c.data_mut().session.motion_range(g).map_or_else(|code| code, i32::from))

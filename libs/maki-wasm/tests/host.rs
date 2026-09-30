@@ -34,6 +34,8 @@ struct Record {
     motion: Option<[i16; 3]>,
     /// the accelerometer's range, if the app set one
     range: u8,
+    /// the app asked for the screen dark
+    dark: bool,
     /// maki's clock, in millis (5 s after boot, unless a test moves it)
     now: u64,
     /// what wallet apps put on maki's review screen
@@ -139,6 +141,8 @@ impl Platform for Script {
         self.0.borrow_mut().range = g;
         Some(g)
     }
+
+    fn set_dark(&mut self, dark: bool) { self.0.borrow_mut().dark = dark; }
 
     fn wallet(&mut self, op: u8, path: &[u32], digest: &[u8]) -> Result<Vec<u8>, i32> {
         let mut r = self.0.borrow_mut();
@@ -918,6 +922,18 @@ fn keys_beyond_text_are_pressed_and_shortcuts_are_not() {
         with(&[Permission::Keyboard]),
     );
     assert_eq!(result_of(&r), FAILED);
+}
+
+#[test]
+fn an_app_can_have_the_whole_screen_dark() {
+    let imports = r#"(import "maki" "screen_dark" (func $dark (param i32)))"#;
+    let wat = format!(
+        r#"(module {imports} (memory (export "memory") 1)
+            (func (export "maki_main") (call $dark (i32.const 1))))"#
+    );
+    let record = Rc::new(RefCell::new(Record::default()));
+    run(&module(&wat), Box::new(Script(record.clone())), with(&[]));
+    assert!(record.borrow().dark);
 }
 
 #[test]

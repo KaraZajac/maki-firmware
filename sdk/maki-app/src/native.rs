@@ -315,6 +315,7 @@ pub unsafe fn key_press(code: i32, shift: i32) -> i32 {
         _ => FAILED,
     }
 }
+pub unsafe fn screen_dark(dark: i32) { blocking(service::SCREEN_DARK, (dark != 0) as usize); }
 pub unsafe fn motion_range(g: i32) -> i32 {
     match blocking(service::MOTION_RANGE, g.clamp(0, 16) as usize) {
         Some(xous::Result::Scalar1(got)) => got as u32 as i32,

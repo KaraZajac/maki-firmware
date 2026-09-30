@@ -216,6 +216,10 @@ fn serve(ctx: &Ctx, session: &mut Session, watch: &ExitWatch, pid: xous::PID) ->
                 let status = session.press_key((arg & 0xff) as i32, arg & 0x100 != 0);
                 xous::return_scalar(msg.sender, status as u32 as usize).ok();
             }
+            service::SCREEN_DARK => {
+                session.screen_dark(msg.body.scalar_message().is_some_and(|s| s.arg1 != 0));
+                xous::return_scalar(msg.sender, 0).ok();
+            }
             service::MOTION_RANGE => {
                 let g = msg.body.scalar_message().map_or(0, |s| s.arg1);
                 let got = session.motion_range(g.min(16) as i32).map_or_else(|code| code, i32::from);

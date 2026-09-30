@@ -21,8 +21,8 @@ pub const SID: [u8; 16] = APP_SERVICE;
 
 /// The firmware a native app is built for, as its manifest's `firmware` says: the service's
 /// protocol and the kernel's rules. maki refuses an app built for one it doesn't run (`RUNS`).
-/// 2: WAIT also answers the jog dial on maki's side (Up, Down), and there are `KEY_PRESS` and
-/// `MOTION_RANGE` (host API 8's `key_press` and `motion_range`).
+/// 2: WAIT also answers the jog dial on maki's side (Up, Down), and there are `KEY_PRESS`,
+/// `MOTION_RANGE` and `SCREEN_DARK` (host API 8's `key_press`, `motion_range` and `screen_dark`).
 pub const FIRMWARE: &str = "maki-native-2";
 /// The same, before the jog dial: an app built for it doesn't get the dial (it would read it as a
 /// timeout), and runs as before.
@@ -43,6 +43,8 @@ pub const MOTION: usize = 4;
 pub const KEY_PRESS: usize = 5;
 /// The accelerometer's range in g: the one it has now comes back, or a status below 0.
 pub const MOTION_RANGE: usize = 6;
+/// The screen dark (1) or not (0); 0 comes back.
+pub const SCREEN_DARK: usize = 7;
 // lent buffers
 pub const PRESENT: usize = 10;
 pub const TEXT_WIDTH: usize = 11;

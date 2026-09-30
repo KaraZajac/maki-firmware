@@ -479,6 +479,9 @@ impl Session {
         }
     }
 
+    /// Host API 8: the whole screen dark, or not.
+    pub fn screen_dark(&mut self, dark: bool) { self.platform.set_dark(dark) }
+
     /// The link permission: the message the last Message event brought.
     pub fn link_read(&mut self) -> Result<Vec<u8>, i32> {
         self.needs(Permission::Link)?;

@@ -255,6 +255,8 @@ struct RunState {
     opened_ms: Option<u64>,
     /// Typing into the computer: maki's bar says so meanwhile.
     typing: bool,
+    /// The app asked for the whole screen dark (host API 8), bar and all.
+    dark: bool,
     /// Presses until then aren't the app's: the one that cancelled a scan.
     quiet_until: Option<Instant>,
     /// Messages from the computer the app hasn't been given yet, with when they came.
@@ -306,6 +308,11 @@ impl Device {
         }
         let s = &self.ctx.screen;
         s.begin();
+        if st.dark && !st.typing {
+            // nothing at all, maki's bar neither: a dark screen can't pass for maki's own
+            s.end();
+            return;
+        }
         let right = if st.typing { String::from("typing") } else { self.ctx.clock() };
         s.app_bar(&self.name, &right, self.sideloaded);
         s.gfx
@@ -900,12 +907,22 @@ impl Platform for Device {
     /// For the app running, in front or not: it's the one reading it.
     fn motion_range(&mut self, g: u8) -> Option<u8> { self.ctx.motion_range(g) }
 
+    fn set_dark(&mut self, dark: bool) {
+        self.state.borrow_mut().dark = dark;
+        self.draw_frame();
+    }
+
     /// Only for the app in front, with "typing" in maki's bar while it does.
     fn type_text(&mut self, text: &str) -> bool {
         if !self.state.borrow().front || !self.ctx.unlocked() {
             return false;
         }
-        self.state.borrow_mut().typing = true;
+        {
+            // typing always shows: a dark screen lights for it
+            let mut st = self.state.borrow_mut();
+            st.typing = true;
+            st.dark = false;
+        }
         self.draw_frame();
         let typed = self.ctx.usb.send_str(text).is_ok();
         log::info!(
@@ -928,7 +945,12 @@ impl Platform for Device {
         if shift {
             codes.push(UsbKeyCode::LeftShift);
         }
-        self.state.borrow_mut().typing = true;
+        {
+            // typing always shows: a dark screen lights for it
+            let mut st = self.state.borrow_mut();
+            st.typing = true;
+            st.dark = false;
+        }
         self.draw_frame();
         let pressed = self.ctx.usb.send_keycode(codes, true).is_ok();
         log::info!(
@@ -1102,6 +1124,7 @@ fn run(ctx: &Rc<Ctx>, slot: usize, message: Option<(xous::MessageEnvelope, Vec<u
         last: Canvas::default(),
         opened_ms: if headless { None } else { Some(opened) },
         typing: false,
+        dark: false,
         quiet_until: None,
         inbox,
         current: None,

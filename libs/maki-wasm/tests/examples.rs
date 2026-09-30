@@ -32,6 +32,8 @@ struct Record {
     motions: VecDeque<[i16; 3]>,
     /// the accelerometer's range, if the app set one
     range: u8,
+    /// the app asked for the screen dark
+    dark: bool,
     /// maki is locked: no wallet keys
     locked: bool,
     /// maki's clock, in millis, and whether it runs: then a timeout lets the whole of its wait
@@ -133,6 +135,8 @@ impl Platform for Script {
         self.0.borrow_mut().range = g;
         Some(g)
     }
+
+    fn set_dark(&mut self, dark: bool) { self.0.borrow_mut().dark = dark; }
 
     fn reply(&mut self, reply: &[u8]) -> bool {
         let mut r = self.0.borrow_mut();
@@ -481,7 +485,9 @@ fn life_keeps_poison_and_commander_damage_which_takes_life() {
 
 /// The Chess Clock's game as it keeps it: each side's main time, moves and periods left, whose
 /// clock was paused (and how far into its turn), and whose flag fell.
-fn clock_game(storage: &BTreeMap<String, Vec<u8>>) -> ([(i64, u32, u32); 2], Option<(u8, i64)>, Option<u8>) {
+type ClockGame = ([(i64, u32, u32); 2], Option<(u8, i64)>, Option<u8>);
+
+fn clock_game(storage: &BTreeMap<String, Vec<u8>>) -> ClockGame {
     let b = &storage["game"];
     let side = |i: usize| {
         let at = 17 + i * 25;
