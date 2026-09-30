@@ -34,6 +34,10 @@ struct Record {
     range: u8,
     /// maki is locked: no wallet keys
     locked: bool,
+    /// maki's clock, in millis, and whether it runs: then a timeout lets the whole of its wait
+    /// pass (for apps that keep time; otherwise it stays at 0)
+    now: u64,
+    clock: bool,
     /// what wallet apps put on maki's review screen
     reviews: Vec<Review>,
     /// backup words maki showed its owner (never the app)
@@ -52,9 +56,12 @@ fn test_seed() -> [u8; 64] {
 struct Script(Rc<RefCell<Record>>);
 
 impl Platform for Script {
-    fn wait(&mut self, _: Option<Duration>) -> Event {
+    fn wait(&mut self, timeout: Option<Duration>) -> Event {
         let mut r = self.0.borrow_mut();
         let event = r.events.pop_front().unwrap_or(Event::Exit);
+        if event == Event::Timeout && r.clock {
+            r.now += timeout.map_or(0, |t| t.as_millis() as u64);
+        }
         if event == Event::Message {
             r.current = r.inbox.pop_front();
         }
@@ -65,7 +72,7 @@ impl Platform for Script {
 
     fn set_menu(&mut self, items: &[String]) { self.0.borrow_mut().menu = items.to_vec() }
 
-    fn millis(&self) -> u64 { 0 }
+    fn millis(&self) -> u64 { self.0.borrow().now }
 
     fn unix_time(&self) -> Option<(u64, bool)> { None }
 
@@ -190,6 +197,16 @@ fn run_answering(
         answers: answers.iter().copied().collect(),
         ..Default::default()
     }));
+    let stop = run(bundle.code, Box::new(Script(record.clone())), limits);
+    (stop, Rc::try_unwrap(record).ok().unwrap().into_inner())
+}
+
+/// Runs a fixture with a record made to measure (a clock, messages, answers).
+fn run_record(name: &str, record: Record) -> (Stop, Record) {
+    let bytes = std::fs::read(format!("{}/tests/fixtures/{name}.maki", env!("CARGO_MANIFEST_DIR"))).unwrap();
+    let bundle = maki_bundle::read(&bytes).unwrap();
+    let limits = admit(&bundle.manifest, bundle.code).unwrap();
+    let record = Rc::new(RefCell::new(record));
     let stop = run(bundle.code, Box::new(Script(record.clone())), limits);
     (stop, Rc::try_unwrap(record).ok().unwrap().into_inner())
 }
@@ -332,6 +349,53 @@ fn initiative_passes_the_turn_and_the_dial_hurts_and_heals() {
     assert!(fight(&r.storage).3.is_empty());
     let (_, r) = run_fixture("initiative", &[Menu(3), Menu(4), Menu(5)], r.storage);
     assert_eq!(fight(&r.storage), (1, 0, false, vec![]));
+}
+
+#[test]
+fn presenter_turns_slides_blanks_the_screen_and_starts_the_show() {
+    use Event::*;
+    let (stop, r) = run_fixture(
+        "presenter",
+        &[Down, Up, Right, Left, Centre, Menu(0), Menu(1), Menu(2)],
+        BTreeMap::new(),
+    );
+    assert_eq!(stop, Stop::Finished);
+    // Page Down, Page Up; B blanks; F5 and Shift+F5 start the show, Esc ends it
+    assert_eq!(
+        r.pressed,
+        [
+            (0x4e, false),
+            (0x4b, false),
+            (0x4e, false),
+            (0x4b, false),
+            (0x3e, false),
+            (0x3e, true),
+            (0x29, false)
+        ]
+    );
+    assert_eq!(r.typed, ["b"]);
+    // the dial held down repeats: the same way at once is one turn
+    let (_, r) = run_fixture("presenter", &[Down, Down, Down], BTreeMap::new());
+    assert_eq!(r.pressed, [(0x4e, false)]);
+}
+
+#[test]
+fn presenter_counts_the_talk_down_and_lights_up_for_its_end() {
+    // a three-minute talk: the first slide forward starts it; 2:57 in, the screen's lit
+    let storage = BTreeMap::from([("length".to_string(), 3u32.to_le_bytes().to_vec())]);
+    let mut events = vec![Event::Down];
+    events.extend([Event::Timeout; 1770]);
+    let record = Record { events: events.into(), storage, clock: true, ..Default::default() };
+    let (_, r) = run_record("presenter", record);
+    let lit = |c: &Canvas| c.get(1, 40);
+    assert!(!lit(&r.frames[1]), "dark while there's time");
+    assert!(lit(r.frames.last().unwrap()), "lit in the last two minutes");
+    // the length is set from the menu, and kept: dial down to 15 minutes
+    let mut events = vec![Event::Menu(5)];
+    events.extend([Event::Down; 5]);
+    events.push(Event::Centre);
+    let (_, r) = run_fixture("presenter", &events, BTreeMap::new());
+    assert_eq!(r.storage["length"], 15u32.to_le_bytes());
 }
 
 #[test]

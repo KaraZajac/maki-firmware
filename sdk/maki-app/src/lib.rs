@@ -274,6 +274,118 @@ pub mod screen {
         (side > 0).then_some(side)
     }
 
+    /// The edge of the screen whoever reads `segments` sits at: `Bottom` as maki is held, `Top`
+    /// across a table from them (upside down), `Left` and `Right` at its sides (a quarter turn).
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub enum Toward {
+        Bottom,
+        Top,
+        Left,
+        Right,
+    }
+
+    /// Big digits drawn with bars, as a seven-segment display shows them, for numbers read at a
+    /// glance or from across a table: digits, `:`, `.`, `-`, `+` and spaces, `height` pixels tall
+    /// (a digit's about half as wide), filling the box at (x, y) that `segments_size` gives, and
+    /// reading right to whoever sits at `toward`.
+    pub fn segments(x: i32, y: i32, text: &str, height: i32, toward: Toward, color: Color) {
+        let (w, h) = (segments_width(text, height), height);
+        let gap = segment_sizes(height).2;
+        let mut at = 0;
+        for c in text.chars() {
+            let (bars, n) = segment_bars(c, height);
+            for &(bx, by, bw, bh) in &bars[..n] {
+                let bx = at + bx;
+                let (sx, sy, sw, sh) = match toward {
+                    Toward::Bottom => (x + bx, y + by, bw, bh),
+                    Toward::Top => (x + w - bx - bw, y + h - by - bh, bw, bh),
+                    Toward::Right => (x + by, y + w - bx - bw, bh, bw),
+                    Toward::Left => (x + h - by - bh, y + bx, bh, bw),
+                };
+                fill_rect(sx, sy, sw, sh, color);
+            }
+            at += segment_width(c, height) + gap;
+        }
+    }
+
+    /// The box `segments` draws `text` in, as (width, height) on the screen: a quarter turn
+    /// swaps them.
+    pub fn segments_size(text: &str, height: i32, toward: Toward) -> (i32, i32) {
+        let w = segments_width(text, height);
+        match toward {
+            Toward::Bottom | Toward::Top => (w, height),
+            Toward::Left | Toward::Right => (height, w),
+        }
+    }
+
+    /// Along the text, whichever way it's turned.
+    fn segments_width(text: &str, height: i32) -> i32 {
+        let gap = segment_sizes(height).2;
+        let (mut w, mut n) = (0, 0);
+        for c in text.chars() {
+            w += segment_width(c, height);
+            n += 1;
+        }
+        w + gap * (n - 1).max(0)
+    }
+
+    /// A digit's width, its bars' thickness and the gap between characters, for `height`.
+    fn segment_sizes(height: i32) -> (i32, i32, i32) {
+        ((height * 9 + 8) / 16, ((height + 4) / 8).max(2), ((height * 3 + 8) / 16).max(2))
+    }
+
+    fn segment_width(c: char, height: i32) -> i32 {
+        let (w, t, _) = segment_sizes(height);
+        if c == ':' || c == '.' { t } else { w }
+    }
+
+    /// A character's bars, as (x, y, w, h) in its own box, and how many there are. Segments a to
+    /// g (top, top right, bottom right, bottom, bottom left, top left, middle) are bits 0 to 6.
+    fn segment_bars(c: char, height: i32) -> ([(i32, i32, i32, i32); 7], usize) {
+        const DIGITS: [u8; 10] = [0x3f, 0x06, 0x5b, 0x4f, 0x66, 0x6d, 0x7d, 0x07, 0x7f, 0x6f];
+        let (w, t, _) = segment_sizes(height);
+        let h = height;
+        let (upper, lower) = (h / 2 + t / 2, h - h / 2 + t / 2);
+        let mid = h / 2 - t / 2;
+        let all = [
+            (0, 0, w, t),
+            (w - t, 0, t, upper),
+            (w - t, mid, t, lower),
+            (0, h - t, w, t),
+            (0, mid, t, lower),
+            (0, 0, t, upper),
+            (0, mid, w, t),
+        ];
+        let mut bars = [(0, 0, 0, 0); 7];
+        let mut n = 0;
+        let mut add = |bar: (i32, i32, i32, i32)| {
+            bars[n] = bar;
+            n += 1;
+        };
+        match c {
+            '0'..='9' => {
+                let on = DIGITS[c as usize - '0' as usize];
+                for (i, bar) in all.iter().enumerate() {
+                    if on & (1 << i) != 0 {
+                        add(*bar);
+                    }
+                }
+            }
+            '-' => add(all[6]),
+            '+' => {
+                add(all[6]);
+                add((w / 2 - t / 2, h / 2 - w / 2, t, w));
+            }
+            ':' => {
+                add((0, h / 3 - t / 2, t, t));
+                add((0, h * 2 / 3 - t / 2, t, t));
+            }
+            '.' => add((0, h - t, t, t)),
+            _ => {}
+        }
+        (bars, n)
+    }
+
     /// Shows what's been drawn.
     pub fn present() { unsafe { sys::present() } }
 }
@@ -721,11 +833,19 @@ pub fn log(s: &str) { unsafe { sys::log(s.as_ptr(), s.len()) } }
 /// Stops the app, showing `why` on maki's screen.
 pub fn abort(why: &str) -> ! { unsafe { sys::abort(why.as_ptr(), why.len()) } }
 
-/// A fixed buffer to format into without an allocator: `write!(buf, "{n}")`.
+/// A fixed buffer to format into without an allocator: `write!(buf, "{n}")`. Two are equal when
+/// their text is.
+#[derive(Clone)]
 pub struct Buf<const N: usize> {
     bytes: [u8; N],
     len: usize,
 }
+
+impl<const N: usize> PartialEq for Buf<N> {
+    fn eq(&self, other: &Self) -> bool { self.as_str() == other.as_str() }
+}
+
+impl<const N: usize> Eq for Buf<N> {}
 
 impl<const N: usize> Buf<N> {
     pub const fn new() -> Self { Buf { bytes: [0; N], len: 0 } }

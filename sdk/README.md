@@ -6,7 +6,7 @@ you can install"). Anyone can build one and sideload it through maki desktop; ma
 owner what it is, where it's from and what it may do before installing it, and a sideloaded
 app carries a mark in maki's top bar for as long as it's installed.
 
-This directory has the Rust crate apps are written with (`maki-app`), twenty-eight examples, and
+This directory has the Rust crate apps are written with (`maki-app`), twenty-nine examples, and
 the `maki` tool that packs, signs, checks and simulates them. The examples:
 
 - **Hello**, **Dice** and **Tally**: a screen, the buttons, storage and randomness. Dice takes the
@@ -34,6 +34,8 @@ the `maki` tool that packs, signs, checks and simulates them. The examples:
   a trusted comment dated by maki's own clock. minisign itself checks the signatures.
 - **Wi-Fi**: networks as QR codes for guests to join, from a QR code the camera reads (a router's
   sticker, a phone's share screen) or from the computer (the link permission).
+- **Presenter**: a slide clicker (Page Down and Page Up, host API 8's keys beyond text) with a
+  talk timer in `segments` digits, which flashes as the end nears.
 - **Passphrase**: diceware passphrases from maki's random number generator and the EFF's long
   word list, typed into the computer on request (the keyboard permission).
 - **Contacts**: your card as a QR code, signed with a key of its own, to swap at the con; it
@@ -172,7 +174,10 @@ The app draws, then waits for the next event, and returns from `main` when told 
 - **The screen below maki's bar**: 128 by 110 pixels, one bit each. Draw with `screen::`
   `clear`, `pixel`, `line`, `rect`, `fill_rect`, `text` (maki's fonts: `Regular`, `Bold`,
   `Small`, `Mono`, `Tall`), `blit` (a 1-bit bitmap, leftmost pixel in each byte's top bit), `qr`,
-  then `present`. Colours are `Dark`, `Light` and `Invert`.
+  then `present`. Colours are `Dark`, `Light` and `Invert`. `segments` draws big digits with
+  bars, as a seven-segment display does, any height, and turned to read from any edge
+  (`Toward::Top` for someone across the table): the app draws them itself, so they're in every
+  maki.
 - **Events** from `wait(timeout)`: `Left`, `Right`, `Centre`, `Menu(i)` for the app's own menu
   items (`menu(&[...])`, up to six), `Hidden` and `Shown` when something else takes the screen
   for a while (an ask, the menu), `Timeout`, and `Exit`: save anything worth saving and return.

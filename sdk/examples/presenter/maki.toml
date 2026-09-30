@@ -1,0 +1,12 @@
+id = "com.leviathan.maki.presenter"
+name = "Presenter"
+version = 1
+label = "1.0"
+api = 8
+storage = 1
+memory = 64
+backup = true
+description = "A slide clicker: the jog dial on maki's side goes to the next slide or back, the centre blanks the screen, and a timer you can read from the stage counts down your talk, flashing as the end nears."
+
+[permissions]
+keyboard = "To change your slides: Page Down, Page Up, B to blank the screen, F5 and Esc to start and end."
