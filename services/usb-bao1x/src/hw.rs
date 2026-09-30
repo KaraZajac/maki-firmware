@@ -2,7 +2,7 @@
 use std::borrow::BorrowMut;
 use std::cell::RefCell;
 use std::collections::VecDeque;
-use std::sync::atomic::{AtomicBool, compiler_fence};
+use std::sync::atomic::{AtomicBool, AtomicU8, compiler_fence};
 use std::sync::atomic::{AtomicPtr, Ordering};
 
 use bao1x_hal::usb::driver::*;
@@ -56,6 +56,8 @@ pub struct Bao1xUsb<'a> {
     pub double_lock: AtomicBool,
     pub led_state: KeyboardLedsReport,
     pub irq_serviced: AtomicBool,
+    /// maki: the endpoint FIDO's reports go out on (0 until the first one has), for U2fTx's pacing
+    pub fido_in_ep: AtomicU8,
 }
 
 impl<'a> Bao1xUsb<'a> {
@@ -123,6 +125,7 @@ impl<'a> Bao1xUsb<'a> {
             double_lock: AtomicBool::new(false),
             led_state: KeyboardLedsReport::default(),
             irq_serviced: AtomicBool::new(false),
+            fido_in_ep: AtomicU8::new(0),
         }
     }
 
@@ -336,6 +339,8 @@ pub(crate) fn composite_handler(_irq_no: usize, arg: *mut usize) {
                     crate::println!("handle inner");
                     if bao1x_hal::usb::driver::handle_event_inner(&mut corigine_usb, &mut event) {
                         crate::println!("~~~~~got reset~~~~");
+                        // maki: the reset drops whatever was queued to send
+                        bao1x_hal::usb::driver::reset_in_counts();
                         // reset the ready state
                         for ready in usb.wrapper.ep_out_ready.iter() {
                             ready.store(false, Ordering::SeqCst);
@@ -429,7 +434,10 @@ pub(crate) fn composite_handler(_irq_no: usize, arg: *mut usize) {
                 // more flexible if we decide we need to handle multiple Tx queued events in a single
                 // IRQ trigger.
                 while let Some(u2f_msg) = usb.fido_tx_queue.borrow_mut().pop_front() {
-                    u2f.write_report(&u2f_msg).ok();
+                    if u2f.write_report(&u2f_msg).is_ok() {
+                        // maki: which endpoint that was, for U2fTx to wait on
+                        usb.fido_in_ep.store(bao1x_hal::usb::driver::last_in_ep(), Ordering::SeqCst);
+                    }
                 }
                 usb.irq_serviced.store(true, Ordering::SeqCst);
             }

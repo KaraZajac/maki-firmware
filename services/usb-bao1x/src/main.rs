@@ -450,6 +450,19 @@ pub(crate) fn main_hw() -> ! {
                     continue;
                 }
                 if fido_listener_pid == msg.sender.pid() {
+                    // maki: one FIDO packet in flight at a time. The endpoint's buffer holds a few
+                    // packets and the host collects one per poll (5 ms); a reply written faster
+                    // than that laps the buffer and comes apart. So wait for the last packet to
+                    // be collected, or 25 ms in case its completion was missed, before the next.
+                    let fido_ep = cu.fido_in_ep.load(Ordering::SeqCst);
+                    if fido_ep != 0 {
+                        let start = tt.elapsed_ms();
+                        while bao1x_hal::usb::driver::in_pending(fido_ep) > 0
+                            && tt.elapsed_ms().saturating_sub(start) < 25
+                        {
+                            xous::yield_slice();
+                        }
+                    }
                     let mut u2f_msg = RawFidoReport::default();
                     assert_eq!(u2f_ipc.code, U2fCode::Tx, "Expected U2fCode::Tx in wrapper");
                     u2f_msg.packet.copy_from_slice(&u2f_ipc.data);

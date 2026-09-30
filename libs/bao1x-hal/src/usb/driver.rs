@@ -3,7 +3,7 @@ use core::convert::TryFrom;
 use core::mem::size_of;
 #[cfg(feature = "std")]
 use core::sync::atomic::AtomicBool;
-use core::sync::atomic::{AtomicPtr, Ordering, compiler_fence};
+use core::sync::atomic::{AtomicPtr, AtomicU8, AtomicU32, Ordering, compiler_fence};
 #[cfg(feature = "std")]
 use std::sync::{Arc, Mutex};
 
@@ -58,6 +58,30 @@ const CRG_UDC_EP_TRSIZE: usize = CRG_TD_RING_SIZE * CRG_EP_NUM * size_of::<Trans
 pub const CRG_UDC_EP0_REQBUFSIZE: usize = 256;
 pub const CRG_UDC_APP_BUF_LEN: usize = 512;
 pub const CRG_UDC_APP_BUFSIZE: usize = CRG_EP_NUM * CRG_UDC_APP_BUF_LEN;
+
+/// maki: IN packets queued by `write` and collected by the host (transfer events), per endpoint
+/// number, so a class can keep from lapping an endpoint's buffer slots with packets the host
+/// hasn't taken yet. Plain atomics, so they can be read without the hardware lock (the interrupt
+/// handler gives up if that's held).
+static IN_QUEUED: [AtomicU32; 16] = [const { AtomicU32::new(0) }; 16];
+static IN_SENT: [AtomicU32; 16] = [const { AtomicU32::new(0) }; 16];
+static LAST_IN_EP: AtomicU8 = AtomicU8::new(0);
+
+/// maki: packets queued on IN endpoint `ep` that the host hasn't collected yet.
+pub fn in_pending(ep: u8) -> u32 {
+    let ep = ep as usize & 15;
+    IN_QUEUED[ep].load(Ordering::SeqCst).wrapping_sub(IN_SENT[ep].load(Ordering::SeqCst))
+}
+
+/// maki: the endpoint number the last IN `write` queued a packet on.
+pub fn last_in_ep() -> u8 { LAST_IN_EP.load(Ordering::SeqCst) }
+
+/// maki: forget queued IN packets, as a bus reset drops them.
+pub fn reset_in_counts() {
+    for ep in 0..16 {
+        IN_SENT[ep].store(IN_QUEUED[ep].load(Ordering::SeqCst), Ordering::SeqCst);
+    }
+}
 
 #[cfg(not(any(feature = "board-baosec", feature = "loader-baosec")))]
 pub const CRG_IFRAM_PAGES: usize = 5;
@@ -1123,9 +1147,12 @@ impl CorigineUsb {
             // ignore the the dq pointer, overflow for now -- for some reason, we aren't
             // getting all the interrupts we expect to be getting. Maybe some of them are
             // being combined in a race condition or something like that?
-            new_index = 0;
+            // maki: this packet takes the first slot and the next one the second. Resetting the
+            // index to 0 gave the next packet the first slot as well, so at every wrap two packets
+            // in a row shared it and the second overwrote the first before the host had it: one
+            // write in eight lost a packet and sent the next twice (FIDO replies came apart).
+            new_index = mps;
             enq_index = 0;
-            self.app_enq_index[ep_num] = 0;
         }
         if
         /* new_index + mps > CRG_UDC_APP_BUF_LEN */
@@ -2665,6 +2692,9 @@ impl UsbBus for CorigineWrapper {
             } else {
                 panic!("attempt to access EP{} with no meta[{}] mapping", ep_addr.index(), pei - 2)
             }
+            // maki: counted before interrupts come back on, so its completion can't be counted first
+            IN_QUEUED[ep_addr.index() & 15].fetch_add(1, Ordering::SeqCst);
+            LAST_IN_EP.store(ep_addr.index() as u8, Ordering::SeqCst);
             #[cfg(feature = "verbose-debug")]
             crate::println!("ep{} initiated {}", ep_addr.index(), buf.len());
             self.irq_csr.wo(utralib::utra::irqarray1::EV_ENABLE, saved_enable);
@@ -3015,6 +3045,7 @@ pub fn handle_event_inner(this: &mut CorigineUsb, event_trb: &mut EventTrbS) -> 
                         ret = CrgEvent::Data(ep_onehot, 0, 0)
                     } else {
                         // in
+                        IN_SENT[ep as usize & 15].fetch_add(1, Ordering::SeqCst);
                         ret = CrgEvent::Data(0, ep_onehot, 0)
                     }
                 } else if comp_code == CompletionCode::MissedServiceError {
