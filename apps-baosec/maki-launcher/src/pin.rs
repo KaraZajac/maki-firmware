@@ -88,7 +88,7 @@ impl PinPad {
                     return Some(pin);
                 }
             },
-            Key::Menu => {}
+            Key::Menu | Key::Up | Key::Down => {}
         }
         None
     }

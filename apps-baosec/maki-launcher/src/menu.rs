@@ -41,7 +41,7 @@ impl Menu {
             Key::Left => self.selected = (self.selected + n - 1) % n,
             Key::Right => self.selected = (self.selected + 1) % n,
             Key::Confirm => return Some(self.selected),
-            Key::Menu => {}
+            Key::Menu | Key::Up | Key::Down => {}
         }
         None
     }

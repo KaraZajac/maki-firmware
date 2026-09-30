@@ -116,8 +116,9 @@ impl Passkeys {
             return;
         }
         match key {
-            Key::Left => self.index = (self.index + n - 1) % n,
-            Key::Right => self.index = (self.index + 1) % n,
+            // the jog dial too: down to the next, up to the one before
+            Key::Left | Key::Up => self.index = (self.index + n - 1) % n,
+            Key::Right | Key::Down => self.index = (self.index + 1) % n,
             _ => return,
         }
         self.draw();

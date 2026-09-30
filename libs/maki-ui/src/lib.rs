@@ -37,15 +37,19 @@ pub enum Key {
     Confirm,
     /// left and right together
     Menu,
+    /// the jog dial on the side, turned up or down
+    Up,
+    Down,
 }
 
 impl Key {
-    /// The face buttons. The jog dial's up and down mean nothing here; pressing it in does what
-    /// the centre does.
+    /// The face buttons and the jog dial; pressing the dial in does what the centre does.
     pub fn from_char(c: char) -> Option<Key> {
         match c {
             '←' => Some(Key::Left),
             '→' => Some(Key::Right),
+            '↑' => Some(Key::Up),
+            '↓' => Some(Key::Down),
             '🔥' | '∴' => Some(Key::Confirm),
             bao1x_api::keyboard::MENU => Some(Key::Menu),
             _ => None,

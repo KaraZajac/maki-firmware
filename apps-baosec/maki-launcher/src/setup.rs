@@ -46,7 +46,7 @@ impl Phrase {
             Key::Right => self.index = (self.index + 1).min(last),
             Key::Confirm if self.index == last => return PhraseStep::Check,
             Key::Confirm => self.index += 1,
-            Key::Menu => {}
+            Key::Menu | Key::Up | Key::Down => {}
         }
         PhraseStep::Stay
     }
@@ -131,7 +131,7 @@ impl PhraseCheck {
                 }
                 self.deal(words);
             }
-            Key::Menu => {}
+            Key::Menu | Key::Up | Key::Down => {}
         }
         CheckStep::Stay
     }
@@ -233,7 +233,7 @@ impl WordEntry {
                 }
                 self.selected = 0;
             }
-            Key::Menu => {}
+            Key::Menu | Key::Up | Key::Down => {}
         }
         EntryStep::Stay
     }

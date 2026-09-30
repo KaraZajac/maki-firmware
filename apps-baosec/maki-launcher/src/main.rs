@@ -699,6 +699,16 @@ impl System {
     }
 
     fn key(&mut self, key: Key) {
+        // the jog dial moves as left and right do: down to the next item of a list (the home
+        // screen, menus, choices, the phrase's pages), up to the next value where there's one to
+        // count up (the PIN's digits, a word's letters)
+        let key = match (key, &self.view) {
+            (Key::Up, View::Pin(..) | View::WordEntry(_)) => Key::Right,
+            (Key::Down, View::Pin(..) | View::WordEntry(_)) => Key::Left,
+            (Key::Down, _) => Key::Right,
+            (Key::Up, _) => Key::Left,
+            (key, _) => key,
+        };
         match &mut self.view {
             View::Splash | View::App(_) | View::Saver(_) => {}
             View::Home => match key {
@@ -1125,7 +1135,8 @@ fn main() -> ! {
                     let key = Key::from_char(c);
                     log::debug!("key {:?} ({:?})", c, key);
                     if sys.asking.active() {
-                        if let Some(k) = key {
+                        // an ask keeps to the face buttons: a nudged dial moves nothing towards a yes
+                        if let Some(k) = key.filter(|k| !matches!(k, Key::Up | Key::Down)) {
                             if let Some(answer) = sys.asking.key(k, &sys.screen, sys.linked) {
                                 sys.asking.finish(answer);
                                 sys.after_ask();

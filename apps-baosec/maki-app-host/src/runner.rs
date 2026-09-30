@@ -378,7 +378,7 @@ impl Device {
                     return Some(Event::Shown);
                 }
             },
-            Key::Menu => {}
+            Key::Menu | Key::Up | Key::Down => {}
         }
         let page = self.state.borrow().info;
         if let Some(page) = page {
@@ -587,7 +587,7 @@ impl Platform for Device {
                         Key::Left => return Event::Left,
                         Key::Right => return Event::Right,
                         Key::Confirm => return Event::Centre,
-                        Key::Menu => {}
+                        Key::Menu | Key::Up | Key::Down => {}
                     }
                 }
                 ToRunner::Jog(s, _)

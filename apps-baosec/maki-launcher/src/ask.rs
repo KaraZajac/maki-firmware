@@ -365,7 +365,7 @@ impl Asking {
                 Stop::No => return Some(ANSWER_DENIED),
             },
             // no menu over an ask: it has to be answered, or left to time out
-            Key::Menu => return None,
+            Key::Menu | Key::Up | Key::Down => return None,
         }
         p.draw(screen, now, linked);
         None
