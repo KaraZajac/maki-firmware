@@ -211,6 +211,16 @@ fn serve(ctx: &Ctx, session: &mut Session, watch: &ExitWatch, pid: xous::PID) ->
                 xous::return_scalar5(msg.sender, status as u32 as usize, w(xyz[0]), w(xyz[1]), w(xyz[2]), 0)
                     .ok();
             }
+            service::KEY_PRESS => {
+                let arg = msg.body.scalar_message().map_or(0, |s| s.arg1);
+                let status = session.press_key((arg & 0xff) as i32, arg & 0x100 != 0);
+                xous::return_scalar(msg.sender, status as u32 as usize).ok();
+            }
+            service::MOTION_RANGE => {
+                let g = msg.body.scalar_message().map_or(0, |s| s.arg1);
+                let got = session.motion_range(g.min(16) as i32).map_or_else(|code| code, i32::from);
+                xous::return_scalar(msg.sender, got as u32 as usize).ok();
+            }
             service::EXIT => return exit(&msg, session.exit_sent, last_log),
             _ => {
                 let Some(mem) = msg.body.memory_message_mut() else { continue };

@@ -308,6 +308,20 @@ pub unsafe fn motion_read(ptr: *mut u8) -> i32 {
     }
 }
 
+pub unsafe fn key_press(code: i32, shift: i32) -> i32 {
+    let arg = (code as u8 as usize) | if shift != 0 { 0x100 } else { 0 };
+    match blocking(service::KEY_PRESS, arg) {
+        Some(xous::Result::Scalar1(status)) => status as u32 as i32,
+        _ => FAILED,
+    }
+}
+pub unsafe fn motion_range(g: i32) -> i32 {
+    match blocking(service::MOTION_RANGE, g.clamp(0, 16) as usize) {
+        Some(xous::Result::Scalar1(got)) => got as u32 as i32,
+        _ => FAILED,
+    }
+}
+
 /// The app returned: maki ends its process. (Called by the program `maki build` wraps a native
 /// app in, which links it as a library.)
 #[doc(hidden)]

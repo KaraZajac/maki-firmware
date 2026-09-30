@@ -19,6 +19,8 @@ struct Record {
     asks: Vec<Ask>,
     answers: VecDeque<Answer>,
     typed: Vec<String>,
+    /// keys beyond text pressed, and whether with Shift
+    pressed: Vec<(u8, bool)>,
     /// maki is locked: no secrets, and nothing typed
     locked: bool,
     /// messages from the computer, each delivered with an Event::Message
@@ -30,6 +32,8 @@ struct Record {
     qr: Option<String>,
     scans: usize,
     motion: Option<[i16; 3]>,
+    /// the accelerometer's range, if the app set one
+    range: u8,
     /// maki's clock, in millis (5 s after boot, unless a test moves it)
     now: u64,
     /// what wallet apps put on maki's review screen
@@ -114,6 +118,15 @@ impl Platform for Script {
         true
     }
 
+    fn press_key(&mut self, code: u8, shift: bool) -> bool {
+        let mut r = self.0.borrow_mut();
+        if r.locked {
+            return false;
+        }
+        r.pressed.push((code, shift));
+        true
+    }
+
     fn scan_qr(&mut self) -> Option<String> {
         let mut r = self.0.borrow_mut();
         r.scans += 1;
@@ -121,6 +134,11 @@ impl Platform for Script {
     }
 
     fn motion(&mut self) -> Option<[i16; 3]> { self.0.borrow().motion }
+
+    fn motion_range(&mut self, g: u8) -> Option<u8> {
+        self.0.borrow_mut().range = g;
+        Some(g)
+    }
 
     fn wallet(&mut self, op: u8, path: &[u32], digest: &[u8]) -> Result<Vec<u8>, i32> {
         let mut r = self.0.borrow_mut();
@@ -699,10 +717,12 @@ fn gated_functions_need_their_permission() {
         ("key_x25519_public", "(param i32 i32 i32) (result i32)"),
         ("key_x25519_agree", "(param i32 i32 i32 i32) (result i32)"),
         ("type_text", "(param i32 i32) (result i32)"),
+        ("key_press", "(param i32 i32) (result i32)"),
         ("link_read", "(param i32 i32) (result i32)"),
         ("link_reply", "(param i32 i32) (result i32)"),
         ("camera_scan_qr", "(param i32 i32) (result i32)"),
         ("motion_read", "(param i32) (result i32)"),
+        ("motion_range", "(param i32) (result i32)"),
         ("wallet_fingerprint", "(param i32) (result i32)"),
         ("wallet_public", "(param i32 i32 i32 i32 i32) (result i32)"),
         ("wallet_review", "(param i32 i32 i32 i32) (result i32)"),
@@ -868,6 +888,47 @@ fn typing_takes_plain_text_only() {
         with(&[Permission::Keyboard]),
     );
     assert_eq!(result_of(&r), FAILED);
+}
+
+#[test]
+fn keys_beyond_text_are_pressed_and_shortcuts_are_not() {
+    use maki_bundle::Permission;
+    let imports = r#"(import "maki" "key_press" (func $press (param i32 i32) (result i32)))"#;
+    let press = |code: i32, shift: i32| format!("(call $press (i32.const {code}) (i32.const {shift}))");
+    // Page Down, and Shift+F5
+    for (code, shift) in [(0x4e, 0), (0x3e, 1)] {
+        let (_, r) =
+            call_with(imports, "", &press(code, shift), Record::default(), with(&[Permission::Keyboard]));
+        assert_eq!((result_of(&r), r.pressed.clone()), (0, vec![(code as u8, shift != 0)]));
+    }
+    // letters are type_text's; Caps Lock, Print Screen, the keypad, Power, and Ctrl, Alt and
+    // Command (0xe0 on) are no app's to press
+    for code in [0x04, 0x39, 0x46, 0x53, 0x66, 0xe0, 0xe3, 0x14e, -1] {
+        let (_, r) =
+            call_with(imports, "", &press(code, 0), Record::default(), with(&[Permission::Keyboard]));
+        assert_eq!(result_of(&r), INVALID, "{code:#x}");
+        assert!(r.pressed.is_empty());
+    }
+    // maki couldn't press it (not plugged in, or not in front)
+    let (_, r) = call_with(
+        imports,
+        "",
+        &press(0x4e, 0),
+        Record { locked: true, ..Default::default() },
+        with(&[Permission::Keyboard]),
+    );
+    assert_eq!(result_of(&r), FAILED);
+}
+
+#[test]
+fn the_accelerometers_range_is_one_it_has() {
+    use maki_bundle::Permission;
+    let imports = r#"(import "maki" "motion_range" (func $range (param i32) (result i32)))"#;
+    for (asked, got) in [(0, 2), (2, 2), (3, 4), (6, 8), (16, 16), (100, 16), (-5, 2)] {
+        let call = format!("(call $range (i32.const {asked}))");
+        let (_, r) = call_with(imports, "", &call, Record::default(), with(&[Permission::Motion]));
+        assert_eq!((result_of(&r), r.range), (got, got as u8), "{asked}");
+    }
 }
 
 #[test]

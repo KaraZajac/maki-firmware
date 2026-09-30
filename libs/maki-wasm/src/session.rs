@@ -462,6 +462,23 @@ impl Session {
         if self.platform.type_text(text) { 0 } else { FAILED }
     }
 
+    /// The keyboard permission, host API 8: a key beyond text (`pressable`), Shift held or not.
+    pub fn press_key(&mut self, code: i32, shift: bool) -> i32 {
+        if let Err(e) = self.needs(Permission::Keyboard) {
+            return e;
+        }
+        match u8::try_from(code) {
+            Ok(code) if crate::pressable(code) => {
+                if self.platform.press_key(code, shift) {
+                    0
+                } else {
+                    FAILED
+                }
+            }
+            _ => INVALID,
+        }
+    }
+
     /// The link permission: the message the last Message event brought.
     pub fn link_read(&mut self) -> Result<Vec<u8>, i32> {
         self.needs(Permission::Link)?;
@@ -489,6 +506,19 @@ impl Session {
     pub fn motion(&mut self) -> Result<[i16; 3], i32> {
         self.needs(Permission::Motion)?;
         self.platform.motion().ok_or(FAILED)
+    }
+
+    /// The motion permission, host API 8: the accelerometer's range, ±`g` rounded up to one it
+    /// has (2, 4, 8 or 16); the range it has now.
+    pub fn motion_range(&mut self, g: i32) -> Result<u8, i32> {
+        self.needs(Permission::Motion)?;
+        let g = match g {
+            ..=2 => 2,
+            3..=4 => 4,
+            5..=8 => 8,
+            _ => 16,
+        };
+        self.platform.motion_range(g).ok_or(FAILED)
     }
 }
 

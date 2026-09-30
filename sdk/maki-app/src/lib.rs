@@ -84,10 +84,12 @@ mod sys {
         pub fn key_x25519_public(lptr: *const u8, llen: usize, out: *mut u8) -> i32;
         pub fn key_x25519_agree(lptr: *const u8, llen: usize, pptr: *const u8, out: *mut u8) -> i32;
         pub fn type_text(ptr: *const u8, len: usize) -> i32;
+        pub fn key_press(code: i32, shift: i32) -> i32;
         pub fn link_read(ptr: *mut u8, cap: usize) -> i32;
         pub fn link_reply(ptr: *const u8, len: usize) -> i32;
         pub fn camera_scan_qr(ptr: *mut u8, cap: usize) -> i32;
         pub fn motion_read(ptr: *mut u8) -> i32;
+        pub fn motion_range(g: i32) -> i32;
         #[cfg(feature = "wallet")]
         pub fn wallet_fingerprint(out: *mut u8) -> i32;
         #[cfg(feature = "wallet")]
@@ -574,6 +576,51 @@ pub mod keyboard {
     pub fn type_text(text: &str) -> Result<(), Error> {
         result(unsafe { sys::type_text(text.as_ptr(), text.len()) }).map(|_| ())
     }
+
+    /// The keys beyond text an app can press (host API 8), as their USB HID usage IDs. There's
+    /// no Ctrl, Alt or Command: shortcuts are the owner's to press, not an app's.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    #[repr(u8)]
+    pub enum Key {
+        Enter = 0x28,
+        Escape = 0x29,
+        Backspace = 0x2a,
+        Tab = 0x2b,
+        Space = 0x2c,
+        F1 = 0x3a,
+        F2 = 0x3b,
+        F3 = 0x3c,
+        F4 = 0x3d,
+        F5 = 0x3e,
+        F6 = 0x3f,
+        F7 = 0x40,
+        F8 = 0x41,
+        F9 = 0x42,
+        F10 = 0x43,
+        F11 = 0x44,
+        F12 = 0x45,
+        Insert = 0x49,
+        Home = 0x4a,
+        PageUp = 0x4b,
+        Delete = 0x4c,
+        End = 0x4d,
+        PageDown = 0x4e,
+        Right = 0x4f,
+        Left = 0x50,
+        Down = 0x51,
+        Up = 0x52,
+    }
+
+    /// Presses `key` and lets it go (host API 8), as `type_text` types: only while the app is
+    /// in front, and `Error::Failed` if maki isn't plugged into a computer.
+    pub fn press(key: Key) -> Result<(), Error> {
+        result(unsafe { sys::key_press(key as i32, 0) }).map(|_| ())
+    }
+
+    /// The same with Shift held: Shift+F5, say.
+    pub fn press_shifted(key: Key) -> Result<(), Error> {
+        result(unsafe { sys::key_press(key as i32, 1) }).map(|_| ())
+    }
 }
 
 /// Messages with software on the computer, through maki desktop (the `link` permission): the
@@ -622,6 +669,13 @@ pub mod motion {
         result(unsafe { sys::motion_read(b.as_mut_ptr()) }).ok()?;
         let at = |i: usize| i16::from_le_bytes([b[i], b[i + 1]]);
         Some((at(0), at(2), at(4)))
+    }
+
+    /// The accelerometer's range, ±`g` rounded up to one it has: 2 (maki's own, and the finest),
+    /// 4, 8 or 16, for a ride that pulls more (host API 8). It lasts until the app stops. The
+    /// range it has now, or None if there's no accelerometer.
+    pub fn range(g: u32) -> Option<u32> {
+        result(unsafe { sys::motion_range(g.min(16) as i32) }).ok().map(|g| g as u32)
     }
 }
 

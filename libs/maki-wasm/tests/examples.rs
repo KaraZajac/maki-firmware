@@ -19,6 +19,8 @@ struct Record {
     answers: VecDeque<Answer>,
     asks: Vec<Ask>,
     typed: Vec<String>,
+    /// keys beyond text pressed, and whether with Shift
+    pressed: Vec<(u8, bool)>,
     inbox: VecDeque<Vec<u8>>,
     current: Option<Vec<u8>>,
     replies: Vec<Vec<u8>>,
@@ -28,6 +30,8 @@ struct Record {
     motion: Option<[i16; 3]>,
     /// readings the accelerometer gives before `motion`, one a read
     motions: VecDeque<[i16; 3]>,
+    /// the accelerometer's range, if the app set one
+    range: u8,
     /// maki is locked: no wallet keys
     locked: bool,
     /// what wallet apps put on maki's review screen
@@ -101,6 +105,11 @@ impl Platform for Script {
         true
     }
 
+    fn press_key(&mut self, code: u8, shift: bool) -> bool {
+        self.0.borrow_mut().pressed.push((code, shift));
+        true
+    }
+
     fn message(&mut self) -> Option<Vec<u8>> { self.0.borrow().current.clone() }
 
     fn scan_qr(&mut self) -> Option<String> {
@@ -111,6 +120,11 @@ impl Platform for Script {
     fn motion(&mut self) -> Option<[i16; 3]> {
         let mut r = self.0.borrow_mut();
         r.motions.pop_front().or(r.motion)
+    }
+
+    fn motion_range(&mut self, g: u8) -> Option<u8> {
+        self.0.borrow_mut().range = g;
+        Some(g)
     }
 
     fn reply(&mut self, reply: &[u8]) -> bool {

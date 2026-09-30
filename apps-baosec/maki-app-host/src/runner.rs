@@ -3,7 +3,7 @@
 //! frames below maki's bar, keeps its storage in the PDDB, and shows App info and "stopped"
 //! screens itself.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, VecDeque};
 use std::rc::Rc;
 use std::sync::mpsc::{Receiver, RecvTimeoutError};
@@ -119,9 +119,11 @@ pub(crate) struct Ctx {
     /// for typing (the keyboard permission)
     usb: usb_bao1x::UsbHid,
     /// the accelerometer (the motion permission), set up the first time an app reads it: None
-    /// until then, Some(None) if there's none
+    /// until then, Some(None) if there's none; and whether the app running changed its range
     #[cfg(feature = "board-baosec")]
     accel: RefCell<Option<Option<(bao1x_hal::i2c::I2c, bao1x_hal::lis2dh12::Lis2dh12)>>>,
+    #[cfg(feature = "board-baosec")]
+    accel_ranged: Cell<bool>,
     time_conn: xous::CID,
     pub(crate) shared: Arc<Mutex<Shared>>,
     rx: Receiver<ToRunner>,
@@ -135,11 +137,51 @@ impl Ctx {
     /// x, y and z in milli-g.
     #[cfg(feature = "board-baosec")]
     fn motion(&self) -> Option<[i16; 3]> {
+        let (x, y, z) = self.accel(|i2c, driver| driver.read_accel_mg(i2c).ok())?;
+        let fit = |v: i32| v.clamp(i16::MIN as i32, i16::MAX as i32) as i16;
+        Some([fit(x), fit(y), fit(z)])
+    }
+
+    /// The accelerometer's range, ±`g` (2, 4, 8 or 16), until the app stops.
+    #[cfg(feature = "board-baosec")]
+    fn motion_range(&self, g: u8) -> Option<u8> {
+        use bao1x_hal::lis2dh12::FullScale;
+        let scale = match g {
+            2 => FullScale::G2,
+            4 => FullScale::G4,
+            8 => FullScale::G8,
+            _ => FullScale::G16,
+        };
+        self.accel(|i2c, driver| driver.set_full_scale(i2c, scale).ok())?;
+        self.accel_ranged.set(scale != FullScale::G2);
+        Some(g)
+    }
+
+    /// Back to ±2 g for the next app, if the last changed it.
+    #[cfg(feature = "board-baosec")]
+    fn motion_reset(&self) {
+        if self.accel_ranged.replace(false) {
+            self.motion_range(2);
+        }
+    }
+
+    /// The accelerometer, set up the first time it's wanted: ±2 g, 12 bits.
+    #[cfg(feature = "board-baosec")]
+    fn accel<T>(
+        &self,
+        f: impl FnOnce(&mut bao1x_hal::i2c::I2c, &mut bao1x_hal::lis2dh12::Lis2dh12) -> Option<T>,
+    ) -> Option<T> {
+        use bao1x_hal::lis2dh12::{Lis2dh12, OperatingMode};
         let mut accel = self.accel.borrow_mut();
         if accel.is_none() {
             let mut i2c = bao1x_hal::i2c::I2c::new();
-            *accel = Some(match bao1x_hal::lis2dh12::Lis2dh12::new(&mut i2c) {
-                Ok(driver) => Some((i2c, driver)),
+            *accel = Some(match Lis2dh12::new(&mut i2c) {
+                Ok(mut driver) => {
+                    if let Err(e) = driver.set_operating_mode(&mut i2c, OperatingMode::HighResolution) {
+                        log::warn!("the accelerometer stays at 10 bits: {e:?}");
+                    }
+                    Some((i2c, driver))
+                }
                 Err(e) => {
                     log::warn!("no accelerometer to read: {e:?}");
                     None
@@ -147,13 +189,17 @@ impl Ctx {
             });
         }
         let (i2c, driver) = accel.as_mut()?.as_mut()?;
-        let (x, y, z) = driver.read_accel_mg(i2c).ok()?;
-        let fit = |v: i32| v.clamp(i16::MIN as i32, i16::MAX as i32) as i16;
-        Some([fit(x), fit(y), fit(z)])
+        f(i2c, driver)
     }
 
     #[cfg(not(feature = "board-baosec"))]
     fn motion(&self) -> Option<[i16; 3]> { None }
+
+    #[cfg(not(feature = "board-baosec"))]
+    fn motion_range(&self, _g: u8) -> Option<u8> { None }
+
+    #[cfg(not(feature = "board-baosec"))]
+    fn motion_reset(&self) {}
 
     fn keep(&self, id: String, version: u32, app: Arc<maki_wasm::Loaded>) {
         let mut loaded = self.loaded.borrow_mut();
@@ -851,6 +897,9 @@ impl Platform for Device {
         self.ctx.motion()
     }
 
+    /// For the app running, in front or not: it's the one reading it.
+    fn motion_range(&mut self, g: u8) -> Option<u8> { self.ctx.motion_range(g) }
+
     /// Only for the app in front, with "typing" in maki's bar while it does.
     fn type_text(&mut self, text: &str) -> bool {
         if !self.state.borrow().front || !self.ctx.unlocked() {
@@ -868,6 +917,29 @@ impl Platform for Device {
         self.state.borrow_mut().typing = false;
         self.draw_frame();
         typed
+    }
+
+    fn press_key(&mut self, code: u8, shift: bool) -> bool {
+        use usb_bao1x::UsbKeyCode;
+        if !self.state.borrow().front || !self.ctx.unlocked() {
+            return false;
+        }
+        let mut codes = vec![UsbKeyCode::from(code)];
+        if shift {
+            codes.push(UsbKeyCode::LeftShift);
+        }
+        self.state.borrow_mut().typing = true;
+        self.draw_frame();
+        let pressed = self.ctx.usb.send_keycode(codes, true).is_ok();
+        log::info!(
+            "{}: pressed key {code:#04x}{}: {}",
+            self.id,
+            if shift { " with Shift" } else { "" },
+            if pressed { "done" } else { "not plugged in" }
+        );
+        self.state.borrow_mut().typing = false;
+        self.draw_frame();
+        pressed
     }
 }
 
@@ -1058,6 +1130,7 @@ fn run(ctx: &Rc<Ctx>, slot: usize, message: Option<(xous::MessageEnvelope, Vec<u
         Code::Wasm(app) => app.run(Box::new(device)),
         Code::Native(elf, limits) => crate::native::run(ctx, device, elf, limits),
     };
+    ctx.motion_reset();
     {
         let mut shared = ctx.shared.lock().unwrap();
         shared.running = None;
@@ -1132,6 +1205,8 @@ pub fn runner(rx: Receiver<ToRunner>, shared: Arc<Mutex<Shared>>) {
         usb: usb_bao1x::UsbHid::new(),
         #[cfg(feature = "board-baosec")]
         accel: RefCell::new(None),
+        #[cfg(feature = "board-baosec")]
+        accel_ranged: Cell::new(false),
         time_conn: crate::time_conn(),
         shared,
         rx,

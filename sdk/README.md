@@ -212,7 +212,10 @@ function whose permission it didn't ask for):
   that.
 - **`keyboard`**: `keyboard::type_text(text)` types printable ASCII, newlines and tabs (1024
   bytes at a time) into the computer as a USB keyboard, while the app is in front, with "typing"
-  in maki's bar. The owner is warned at install: it could type commands.
+  in maki's bar. The owner is warned at install: it could type commands. Host API 8 adds keys
+  beyond text, `keyboard::press(Key::PageDown)`: Enter, Escape, Backspace, Tab, Space, F1 to F12,
+  Insert, Delete, Home, End, Page Up, Page Down and the arrows, and `press_shifted` with Shift
+  held. There's no Ctrl, Alt or Command: shortcuts are the owner's to press.
 - **`link`**: messages with software on the computer, through maki desktop. The software sends
   one (maki desktop's local socket takes `{"id":1,"type":"appMessage","app":"your.app.id",
   "data":"<base64>"}`), the app gets `Event::Message`, `link::read`s it and `link::reply`s once
@@ -225,7 +228,8 @@ function whose permission it didn't ask for):
   (the press doesn't reach the app).
 - **`motion`**: `motion::read()` gives the accelerometer's x, y and z in thousandths of a g (face
   up and still: about 0, 0, 1000), while the app is in front. Warned at install: it could pick up
-  typing nearby.
+  typing nearby. It reads ±2 g, finest; host API 8's `motion::range(g)` widens that to 4, 8 or
+  16 g until the app stops, for what pulls more than 2 g (a ride, a jump).
 - **`wallet`** (host API 3): keys from maki's recovery phrase at the standard BIP32 paths, as
   other wallets derive them, for the accounts the manifest names and no others:
 

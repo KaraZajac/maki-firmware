@@ -490,30 +490,17 @@ pub(crate) fn main_hw() -> ! {
             Opcode::SendKeyCode => {
                 if let Some(scalar) = msg.body.scalar_message_mut() {
                     if cu.device.state() != usb_device::device::UsbDeviceState::Configured {
+                        // maki: say so, rather than leave it to the codes coming back
+                        scalar.arg1 = 1;
                         continue;
                     }
-
-                    let code0 = scalar.arg1;
-                    let code1 = scalar.arg2;
-                    let code2 = scalar.arg3;
+                    // maki: the codes are USB HID usage IDs (the keyboard page), as the API says,
+                    // pressed together (a key and LeftShift, say); they were taken as characters
                     let autoup = scalar.arg4;
-                    if code0 != 0 {
-                        cu.kbd_tx_queue.borrow_mut().push_back(match key_map {
-                            KeyMap::Dvorak => mappings::char_to_hid_code_dvorak(code0 as u8 as char)[0],
-                            _ => mappings::char_to_hid_code_us101(code0 as u8 as char)[0],
-                        });
-                    }
-                    if code1 != 0 {
-                        cu.kbd_tx_queue.borrow_mut().push_back(match key_map {
-                            KeyMap::Dvorak => mappings::char_to_hid_code_dvorak(code1 as u8 as char)[0],
-                            _ => mappings::char_to_hid_code_us101(code1 as u8 as char)[0],
-                        });
-                    }
-                    if code2 != 0 {
-                        cu.kbd_tx_queue.borrow_mut().push_back(match key_map {
-                            KeyMap::Dvorak => mappings::char_to_hid_code_dvorak(code2 as u8 as char)[0],
-                            _ => mappings::char_to_hid_code_us101(code2 as u8 as char)[0],
-                        });
+                    for code in [scalar.arg1, scalar.arg2, scalar.arg3] {
+                        if code != 0 {
+                            cu.kbd_tx_queue.borrow_mut().push_back(Keyboard::from(code as u8));
+                        }
                     }
                     let auto_up = if autoup == 1 { true } else { false };
                     // kbd_tx_queue borrow_mut() should be out of scope before the IRQ is fired

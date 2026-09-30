@@ -190,9 +190,37 @@ struct Shared {
     message: Option<Vec<u8>>,
     /// what the camera sees at the next scan
     qr: Option<String>,
+    /// the accelerometer's range, ±g: what it reads is cut there, as on maki
+    range: u8,
 }
 
 pub struct Sim(Rc<RefCell<Shared>>);
+
+/// A key an app pressed (`maki_wasm::pressable`), by name.
+fn key_name(code: u8) -> String {
+    let names = [
+        (0x28, "Enter"),
+        (0x29, "Escape"),
+        (0x2a, "Backspace"),
+        (0x2b, "Tab"),
+        (0x2c, "Space"),
+        (0x49, "Insert"),
+        (0x4a, "Home"),
+        (0x4b, "Page Up"),
+        (0x4c, "Delete"),
+        (0x4d, "End"),
+        (0x4e, "Page Down"),
+        (0x4f, "Right"),
+        (0x50, "Left"),
+        (0x51, "Down"),
+        (0x52, "Up"),
+    ];
+    match names.iter().find(|(c, _)| *c == code) {
+        Some((_, name)) => name.to_string(),
+        None if (0x3a..=0x45).contains(&code) => format!("F{}", code - 0x39),
+        None => format!("{code:#04x}"),
+    }
+}
 
 fn load_storage(path: &std::path::Path) -> BTreeMap<String, Vec<u8>> {
     let unhex = |h: &str| {
@@ -271,6 +299,7 @@ impl Sim {
             seed: None,
             message: None,
             qr: None,
+            range: 2,
         })))
     }
 
@@ -766,7 +795,16 @@ impl Platform for Sim {
         scanned
     }
 
-    fn motion(&mut self) -> Option<[i16; 3]> { Some(self.0.borrow().options.motion) }
+    fn motion(&mut self) -> Option<[i16; 3]> {
+        let s = self.0.borrow();
+        let most = s.range as i16 * 1000;
+        Some(s.options.motion.map(|v| v.clamp(-most, most)))
+    }
+
+    fn motion_range(&mut self, g: u8) -> Option<u8> {
+        self.0.borrow_mut().range = g;
+        Some(g)
+    }
 
     fn message(&mut self) -> Option<Vec<u8>> { self.0.borrow().message.clone() }
 
@@ -790,6 +828,16 @@ impl Platform for Sim {
     fn type_text(&mut self, text: &str) -> bool {
         let mut s = self.0.borrow_mut();
         let line = format!("typed: {text:?}");
+        if !s.interactive {
+            eprintln!("{line}");
+        }
+        s.logs.push(line);
+        true
+    }
+
+    fn press_key(&mut self, code: u8, shift: bool) -> bool {
+        let mut s = self.0.borrow_mut();
+        let line = format!("pressed: {}{}", if shift { "Shift+" } else { "" }, key_name(code));
         if !s.interactive {
             eprintln!("{line}");
         }

@@ -26,7 +26,8 @@ use wasmi::{
 pub const API_VERSION: u16 = 8;
 
 /// Host API 8: the jog dial on maki's side, up and down (`Event::Up`, `Event::Down`). Only an app
-/// that says this API or later gets them: an older one would read them as a timeout.
+/// that says this API or later gets them: an older one would read them as a timeout. The API also
+/// brings keys beyond text (`key_press`) and the accelerometer's range (`motion_range`).
 pub const API_JOG: u16 = 8;
 
 /// Whether maki gives an app the jog dial: a WebAssembly app of host API 8 or later, or a native
@@ -55,7 +56,15 @@ pub const SINCE: &[(&str, u16)] = &[
     ("wallet_monero_sign", 5),
     ("wallet_sign_ed25519", 6),
     ("ask_review", 7),
+    ("key_press", 8),
+    ("motion_range", 8),
 ];
+
+/// Keys an app may press beyond text (`key_press`, the keyboard permission), as USB HID usage IDs:
+/// Enter, Escape, Backspace, Tab and Space (0x28 to 0x2c), F1 to F12 (0x3a to 0x45), and Insert,
+/// Home, Page Up, Delete, End, Page Down and the arrows (0x49 to 0x52). Shift is the one modifier
+/// an app may hold: no shortcut is an app's to press.
+pub fn pressable(code: u8) -> bool { matches!(code, 0x28..=0x2c | 0x3a..=0x45 | 0x49..=0x52) }
 
 /// What maki's functions return for failures they report (rather than stopping the app).
 pub const NOT_FOUND: i32 = -1;
@@ -147,10 +156,12 @@ pub const GATED: &[(&str, Permission)] = &[
     ("key_x25519_public", Permission::Keys),
     ("key_x25519_agree", Permission::Keys),
     ("type_text", Permission::Keyboard),
+    ("key_press", Permission::Keyboard),
     ("link_read", Permission::Link),
     ("link_reply", Permission::Link),
     ("camera_scan_qr", Permission::Camera),
     ("motion_read", Permission::Motion),
+    ("motion_range", Permission::Motion),
     ("wallet_fingerprint", Permission::Wallet),
     ("wallet_public", Permission::Wallet),
     ("wallet_review", Permission::Wallet),
@@ -294,6 +305,10 @@ pub trait Platform {
     /// (the keyboard permission). Whether it did: maki types only for the app in front, and
     /// only when plugged into a computer.
     fn type_text(&mut self, _text: &str) -> bool { false }
+    /// Presses a key beyond text (`pressable`, a USB HID usage ID) and lets it go, Shift held if
+    /// `shift` (the keyboard permission): as `type_text`, only for the app in front and only when
+    /// plugged into a computer. Whether it did.
+    fn press_key(&mut self, _code: u8, _shift: bool) -> bool { false }
     /// The message the last `Event::Message` brought (the link permission), until it's
     /// answered.
     fn message(&mut self) -> Option<Vec<u8>> { None }
@@ -305,6 +320,9 @@ pub trait Platform {
     /// The accelerometer (the motion permission), while the app is in front: x, y and z in
     /// thousandths of a g. `None` if there's none to read.
     fn motion(&mut self) -> Option<[i16; 3]> { None }
+    /// The accelerometer's range (the motion permission): ±`g`, one of 2, 4, 8 and 16, for as long
+    /// as the app runs. The range it has now, or `None` if there's no accelerometer.
+    fn motion_range(&mut self, _g: u8) -> Option<u8> { None }
     /// A wallet app's key work (the wallet permission), done by maki, which keeps the seed: the
     /// master key's fingerprint (`op` 0, no path), a public key at `path` (`WALLET_PUBLIC`..), or
     /// a signature over `digest` (`WALLET_SIGN_*`). The session has held the path to the app's
@@ -1140,6 +1158,18 @@ fn link(linker: &mut Linker<State>) -> Result<(), Error> {
             bytes[i * 2..i * 2 + 2].copy_from_slice(&v.to_le_bytes());
         }
         write(&mut c, ptr, &bytes, "motion_read").map(|_| 0)
+    })?;
+    linker.func_wrap(
+        M,
+        "key_press",
+        |mut c: Caller<'_, State>, code: i32, shift: i32| -> Result<i32, Error> {
+            permitted(&c, Permission::Keyboard, "key_press")?;
+            Ok(c.data_mut().session.press_key(code, shift != 0))
+        },
+    )?;
+    linker.func_wrap(M, "motion_range", |mut c: Caller<'_, State>, g: i32| -> Result<i32, Error> {
+        permitted(&c, Permission::Motion, "motion_range")?;
+        Ok(c.data_mut().session.motion_range(g).map_or_else(|code| code, i32::from))
     })?;
     Ok(())
 }
