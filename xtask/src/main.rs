@@ -956,6 +956,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             builder.add_loader_feature("oem-baosec-lite");
         }
 
+        // maki's release build. Identical to `baosec-lite`, but turns on the keystore's
+        // `collateral-keys` feature so the storage master key is bound to the chip's collateral
+        // secret slots. That binding requires maki's own boot1 (which provisions the collateral and
+        // is what makes Baochip's boot0 preserve it); without it the keystore fails closed. Day-to-day
+        // app development still uses `baosec-lite`, which leaves the feature off so the emulator's
+        // loader-start boot works without the full boot0/boot1 chain. See scratch/collateral-plan.md.
+        Some("maki-lite") => {
+            baosec_common(&mut builder)?;
+            builder.add_feature("oem-baosec-lite");
+            builder.add_loader_feature("oem-baosec-lite");
+            builder.add_feature("keystore/collateral-keys");
+        }
+
         Some("baosec-improper-keystore") => {
             let board = "board-baosec";
             let sigblock_size = bao1x_api::signatures::SIGBLOCK_LEN;
