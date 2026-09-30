@@ -924,7 +924,8 @@ impl Platform for Device {
             st.dark = false;
         }
         self.draw_frame();
-        let typed = self.ctx.usb.send_str(text).is_ok();
+        // unplugged, the service says it sent nothing rather than failing
+        let typed = matches!(self.ctx.usb.send_str(text), Ok(n) if n == text.chars().count());
         log::info!(
             "{}: typed {} characters: {}",
             self.id,
