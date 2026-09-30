@@ -9,12 +9,14 @@ use crate::address::Network;
 use crate::wallet::Review;
 
 /// A screen's worth of review: a heading at the top, the thing to check in bold (an amount), and
-/// fixed-width text under it, across as many lines as it takes (an address).
+/// fixed-width text under it, across as many lines as it takes (an address), or small words,
+/// wrapped (what it means).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Page {
     pub heading: String,
     pub value: String,
     pub mono: String,
+    pub prose: String,
 }
 
 /// The unit amounts are shown in: test coins are marked as such.
@@ -63,19 +65,21 @@ impl Review {
         let mut pages = Vec::new();
         for (i, o) in payments.iter().enumerate() {
             let heading = if payments.len() > 1 { format!("Send {}/{}", i + 1, payments.len()) } else { String::from("Send") };
-            pages.push(Page { heading, value: amount(o.amount, self.network), mono: o.address.clone() });
+            pages.push(Page { heading, value: amount(o.amount, self.network), mono: o.address.clone(), prose: String::new() });
         }
         for o in self.outputs.iter().filter(|o| o.change) {
-            let back = match &self.wallet {
-                Some(wallet) => format!("back to {wallet}"),
-                None => String::from("back to you"),
+            // a multisig wallet's name is words, which the fixed-width type would break mid-word
+            let (mono, prose) = match &self.wallet {
+                Some(wallet) => (String::new(), format!("back to {wallet}")),
+                None => (String::from("back to you"), String::new()),
             };
-            pages.push(Page { heading: String::from("Change"), value: amount(o.amount, self.network), mono: back });
+            pages.push(Page { heading: String::from("Change"), value: amount(o.amount, self.network), mono, prose });
         }
         pages.push(Page {
             heading: String::from(if self.fee_is_high() { "High fee!" } else { "Fee" }),
             value: amount(self.fee, self.network),
             mono: format!("{} sat/vB", self.fee_rate()),
+            prose: String::new(),
         });
         pages
     }
@@ -90,5 +94,6 @@ pub fn address_page(address: &str, change: bool, index: u32, network: Network) -
         heading: format!("{} #{}", if change { "Change" } else { "Receive" }, index),
         value: String::from(network_name(network)),
         mono: String::from(address),
+        prose: String::new(),
     }
 }

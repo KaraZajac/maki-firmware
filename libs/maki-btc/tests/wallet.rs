@@ -473,7 +473,7 @@ fn the_review_shows_each_payment_then_change_then_the_fee() {
     let f = Fixture::new();
     let r = f.review().unwrap();
     let payee = Address::from_script(&f.payee, bitcoin::Network::Bitcoin).unwrap().to_string();
-    let page = |h: &str, v: &str, m: &str| Page { heading: h.into(), value: v.into(), mono: m.into() };
+    let page = |h: &str, v: &str, m: &str| Page { heading: h.into(), value: v.into(), mono: m.into(), prose: String::new() };
     assert_eq!(
         r.pages(),
         vec![

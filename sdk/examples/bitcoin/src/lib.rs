@@ -295,11 +295,11 @@ fn register(net: Network, name: &str, text: &str) -> Result<([u8; 4], String), A
         return Ok((id, wallet.name.clone()));
     }
     let n = wallet.keys.len();
-    let what = format!("{} of {} keys sign\nnative SegWit (P2WSH), {}", wallet.threshold, n, display::network_name(net));
+    let what = format!("{} of its {} keys sign; native SegWit (P2WSH), {}", wallet.threshold, n, display::network_name(net));
     let mut asked = Review::new("Add this multisig?")
         .detail(&format!("{}, {} of {}", wallet.name, wallet.threshold, n))
         .answers("add", "don't")
-        .page(Page::new("Wallet").value(&wallet.name).mono(&what))
+        .page(Page::new("Wallet").value(&wallet.name).prose(&what))
         .signatures(0)
         .timeout(300);
     for (i, k) in wallet.keys.iter().enumerate() {
@@ -425,7 +425,7 @@ fn sign(net: Network, bytes: &[u8]) -> Result<Vec<u8>, Answer> {
     if multisig::is_multisig(&psbt) {
         let (signer, review) = multisig_review(net, &psbt)?;
         let w = &signer.wallet;
-        let from = Page::new("From").value(&w.name).mono(&format!("{} of {} multisig; maki signs as one", w.threshold, w.keys.len()));
+        let from = Page::new("From").value(&w.name).prose(&format!("a {} of {} multisig wallet; maki signs as one of its keys", w.threshold, w.keys.len()));
         ask_to_sign(&review, Some(from))?;
         signer.sign(&mut psbt).map_err(|e| Answer::new(REFUSED).text(&e.to_string()))?;
         return Ok(psbt.serialize());
@@ -459,7 +459,7 @@ fn ask_to_sign(review: &btc::Review, from: Option<Page>) -> Result<(), Answer> {
         asked = asked.page(from);
     }
     for p in review.pages() {
-        asked = asked.page(Page::new(&p.heading).value(&p.value).mono(&p.mono));
+        asked = asked.page(Page::new(&p.heading).value(&p.value).mono(&p.mono).prose(&p.prose));
     }
     // one signature for each input, all of them this wallet's
     match asked.signatures(review.inputs as u32).show().map(owner) {

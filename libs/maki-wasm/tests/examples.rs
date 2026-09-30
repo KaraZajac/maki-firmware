@@ -1707,6 +1707,7 @@ fn bitcoin_adds_a_multisig_wallet_its_owner_went_through_and_signs_for_it() {
     assert_eq!((added.question.as_str(), added.detail.as_str()), ("Add this multisig?", "vault, 2 of 3"));
     let headings: Vec<&str> = added.pages.iter().map(|p| p.heading.as_str()).collect();
     assert_eq!(headings, ["Wallet", "Key 1/3", "Key 2/3", "Key 3/3"]);
+    assert_eq!(added.pages[0].prose, "2 of its 3 keys sign; native SegWit (P2WSH), testnet");
     assert_eq!(added.pages[1].value, "73C5DA0A (maki)");
     assert_eq!(added.pages[2].value, "0EBCE71A");
     assert!(added.pages[3].mono.starts_with("tpubDEBbc4DHf8iY"), "{}", added.pages[3].mono);
@@ -1725,7 +1726,8 @@ fn bitcoin_adds_a_multisig_wallet_its_owner_went_through_and_signs_for_it() {
     assert_eq!(fetched(&r.replies[4 + pieces..]), signed);
     let review = &r.reviews[3];
     assert_eq!((review.pages[0].heading.as_str(), review.pages[0].value.as_str()), ("From", "vault"));
-    assert!(review.pages.iter().any(|p| p.heading == "Change" && p.mono == "back to vault (2 of 3)"), "{:?}", review.pages);
+    assert!(review.pages.iter().any(|p| p.heading == "Change" && p.prose == "back to vault (2 of 3)"), "{:?}", review.pages);
+    assert_eq!(review.pages[0].prose, "a 2 of 3 multisig wallet; maki signs as one of its keys");
 
     // the same wallet from Coldcard's file (Sparrow's export), named by it; asked about once
     let r = run_wallet("bitcoin", vec![register(&coldcard), register(&descriptor)], vec![Answer::Yes], false);

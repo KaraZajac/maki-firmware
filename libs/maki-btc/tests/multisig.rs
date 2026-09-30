@@ -221,7 +221,7 @@ fn maki_signs_what_spends_from_the_wallet_and_with_another_key_it_spends() {
     assert_eq!((review.outputs[0].address.as_str(), review.outputs[0].amount, review.outputs[0].change), (payee.to_string().as_str(), 70_000, false));
     assert!(review.outputs[1].change);
     let pages = review.pages();
-    assert_eq!((pages[1].heading.as_str(), pages[1].mono.as_str()), ("Change", "back to Family vault (2 of 3)"));
+    assert_eq!((pages[1].heading.as_str(), pages[1].prose.as_str()), ("Change", "back to Family vault (2 of 3)"));
     // two inputs of 2-of-3 P2WSH, a P2WPKH payment and P2WSH change: about 290 vbytes signed
     assert!((280..300).contains(&review.vbytes), "{}", review.vbytes);
     assert_eq!(signer.sign(&mut mine).unwrap(), 2);
