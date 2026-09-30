@@ -1,0 +1,9 @@
+id = "com.leviathan.maki.initiative"
+name = "Initiative"
+version = 1
+label = "1.0"
+api = 8
+storage = 1
+memory = 64
+backup = true
+description = "Initiative and hit points for a tabletop fight, beside Dice: who's up, round by round, with the centre passing the turn, and the jog dial on maki's side taking damage off whoever's picked or healing them. Keeps the table."

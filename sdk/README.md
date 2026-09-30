@@ -6,11 +6,14 @@ you can install"). Anyone can build one and sideload it through maki desktop; ma
 owner what it is, where it's from and what it may do before installing it, and a sideloaded
 app carries a mark in maki's top bar for as long as it's installed.
 
-This directory has the Rust crate apps are written with (`maki-app`), twenty-seven examples, and the
-`maki` tool that packs, signs, checks and simulates them. The examples:
+This directory has the Rust crate apps are written with (`maki-app`), twenty-eight examples, and
+the `maki` tool that packs, signs, checks and simulates them. The examples:
 
 - **Hello**, **Dice** and **Tally**: a screen, the buttons, storage and randomness. Dice takes the
   die from the jog dial on maki's side (host API 8): 3d6, 1d20, as players say them.
+- **Initiative**, beside Dice at the table: a fight's turn order and hit points, the centre
+  passing the turn and the jog dial taking damage off whoever's picked or healing them; someone
+  new is added on a form of digit wheels, and the table is kept.
 - **Signer** and **Sensors**, which use permissions: asking the owner, keys of their own, the
   camera and the accelerometer.
 - **SSH**: maki's SSH key, which answers maki desktop's SSH agent (the link permission), and
@@ -40,7 +43,8 @@ This directory has the Rust crate apps are written with (`maki-app`), twenty-sev
   first) or a QR code, typed into a field on request; the computer sees their titles alone.
 - **Scanner**: reads a QR code and shows what it says, a page at a time, and types it into the
   computer (camera and keyboard); text that would press Enter or Tab waits for the centre first.
-- **Snake**: the game, with three buttons, timed with `wait`.
+- **Snake**: the game, steered the way it's to go with the jog dial and left and right, timed
+  with `wait`.
 - **Marble**: a maze, new every time, and a marble that rolls the way maki is tilted (the motion
   permission), into the hole at the far corner.
 - **Breakout**: the bricks and the ball, off a paddle that follows maki's tilt, or left and right
@@ -81,7 +85,8 @@ This directory has the Rust crate apps are written with (`maki-app`), twenty-sev
   recipient as their own address when the transaction proves the token account is theirs, the most
   the fee can be, and anything else flagged, with whether it's given the account's signature.
 - **Hello Native**, Hello built as a native app, and **Pomodoro**, a native focus timer whose
-  pie empties like a clock while you work and fills back up while you rest.
+  pie empties like a clock while you work and fills back up while you rest; the jog dial sets its
+  minutes.
 
 ## Quick start
 

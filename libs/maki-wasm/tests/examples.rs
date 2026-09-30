@@ -220,6 +220,104 @@ fn dice_takes_the_die_from_the_dial_and_how_many_from_left_and_right() {
     assert_eq!(r.storage["die"], 0u32.to_le_bytes()); // d2
 }
 
+/// Initiative's table as it keeps it: the round, whose turn, whether a turn has passed, and each
+/// combatant (name, which of that name, hit points, their most, initiative), in order.
+type Fight = (u16, u8, bool, Vec<(u8, u8, u16, u16, u8)>);
+
+fn fight(storage: &BTreeMap<String, Vec<u8>>) -> Fight {
+    let b = &storage["table"];
+    let all = b[5..]
+        .chunks_exact(7)
+        .map(|c| (c[0], c[1], u16::from_le_bytes([c[2], c[3]]), u16::from_le_bytes([c[4], c[5]]), c[6]))
+        .collect::<Vec<_>>();
+    assert_eq!(all.len(), b[4] as usize);
+    (u16::from_le_bytes([b[0], b[1]]), b[2], b[3] != 0, all)
+}
+
+fn keep_fight(f: &Fight) -> BTreeMap<String, Vec<u8>> {
+    let mut b = f.0.to_le_bytes().to_vec();
+    b.extend([f.1, f.2 as u8, f.3.len() as u8]);
+    for &(name, n, hp, max, init) in &f.3 {
+        b.extend([name, n]);
+        b.extend(hp.to_le_bytes());
+        b.extend(max.to_le_bytes());
+        b.push(init);
+    }
+    BTreeMap::from([("table".to_string(), b)])
+}
+
+const FIGHTER: u8 = 0;
+const GOBLIN: u8 = 12;
+const ORC: u8 = 14;
+
+#[test]
+fn initiative_adds_people_in_order_and_rolls_for_them() {
+    use Event::*;
+    // a Fighter (the form's first name, 10 hit points, a d20 rolled: the counting random's 6);
+    // then a Goblin, the dial on from the Fighter, its hit points 7 on the wheels; then another,
+    // which the form starts on
+    let mut events = vec![Menu(0), Centre, Menu(0)];
+    events.extend([Up; 12]);
+    events.extend([Right, Right, Down, Right, Down, Down, Down, Centre, Menu(0), Centre]);
+    let (stop, r) = run_fixture("initiative", &events, BTreeMap::new());
+    assert_eq!(stop, Stop::Finished);
+    let (round, turn, passed, all) = fight(&r.storage);
+    assert_eq!((round, turn, passed), (1, 0, false));
+    // equal initiative: who came first goes first
+    assert_eq!(all, [(FIGHTER, 1, 10, 10, 6), (GOBLIN, 1, 7, 7, 6), (GOBLIN, 2, 7, 7, 6)]);
+    // the Goblin 2 goes to the top with initiative 16; until a turn has passed, the turn is the top's
+    let (_, r) = run_fixture(
+        "initiative",
+        &[Right, Right, Menu(1), Right, Right, Right, Right, Up, Centre],
+        r.storage,
+    );
+    let (_, turn, _, all) = fight(&r.storage);
+    assert_eq!(turn, 0);
+    assert_eq!(all[0], (GOBLIN, 2, 7, 7, 16));
+    // a Goblin made an Orc is Orc (1); cancel leaves the form with nothing added
+    let (_, r) = run_fixture("initiative", &[Right, Right, Menu(1), Up, Up, Centre], r.storage);
+    assert_eq!(fight(&r.storage).3[2], (ORC, 1, 7, 7, 6));
+    let mut cancel = vec![Menu(0)];
+    cancel.extend([Right; 6]);
+    cancel.push(Centre);
+    let (_, again) = run_fixture("initiative", &cancel, r.storage.clone());
+    assert_eq!(fight(&again.storage).3.len(), 3);
+    // rolling gives everyone a d20, in order, from the top of round 1
+    let (_, r) = run_fixture("initiative", &[Centre, Menu(3)], r.storage);
+    let (round, turn, passed, all) = fight(&r.storage);
+    assert_eq!((round, turn, passed), (1, 0, false));
+    assert!(all.iter().all(|c| c.4 == 6));
+}
+
+#[test]
+fn initiative_passes_the_turn_and_the_dial_hurts_and_heals() {
+    use Event::*;
+    let table = (1, 0, false, vec![(FIGHTER, 1, 10, 10, 15), (GOBLIN, 1, 7, 7, 12), (GOBLIN, 2, 7, 7, 8)]);
+    // the Fighter (whose turn it is, picked) takes 3 and heals 1; the Goblin takes 9, which is 7
+    let mut events = vec![Down, Down, Down, Up, Right];
+    events.extend([Down; 9]);
+    events.push(Timeout);
+    let (stop, r) = run_fixture("initiative", &events, keep_fight(&table));
+    assert_eq!(stop, Stop::Finished);
+    let (_, _, _, all) = fight(&r.storage);
+    assert_eq!((all[0].2, all[1].2, all[2].2), (8, 0, 7));
+    // the turn: past the dead Goblin to Goblin 2, then round 2 from the top
+    let (_, r) = run_fixture("initiative", &[Centre], r.storage);
+    let (round, turn, passed, _) = fight(&r.storage);
+    assert_eq!((round, turn, passed), (1, 2, true));
+    let (_, r) = run_fixture("initiative", &[Centre], r.storage);
+    let (round, turn, passed, _) = fight(&r.storage);
+    assert_eq!((round, turn, passed), (2, 0, true));
+    // a new fight: the monsters go, the Fighter stays as they are; a long rest heals them
+    let (_, r) = run_fixture("initiative", &[Menu(4)], r.storage);
+    assert_eq!(fight(&r.storage), (1, 0, false, vec![(FIGHTER, 1, 8, 10, 15)]));
+    let (_, r) = run_fixture("initiative", &[Menu(5)], r.storage);
+    assert_eq!(fight(&r.storage).3, [(FIGHTER, 1, 10, 10, 15)]);
+    // removing whoever's picked
+    let (_, r) = run_fixture("initiative", &[Menu(2)], r.storage);
+    assert!(fight(&r.storage).3.is_empty());
+}
+
 #[test]
 fn tally_counts_and_keeps_the_count() {
     let (stop, r) =
