@@ -1,0 +1,9 @@
+id = "com.leviathan.maki.life"
+name = "Life"
+version = 1
+label = "1.0"
+api = 8
+storage = 1
+memory = 64
+backup = true
+description = "A life counter for Magic and other games, 2 to 6 players: the jog dial on maki's side counts life, the player across the table reads theirs the right way up, and poison and commander damage are kept too."

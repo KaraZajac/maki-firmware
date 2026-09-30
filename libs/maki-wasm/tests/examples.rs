@@ -398,6 +398,87 @@ fn presenter_counts_the_talk_down_and_lights_up_for_its_end() {
     assert_eq!(r.storage["length"], 15u32.to_le_bytes());
 }
 
+/// Life's game as it keeps it: players and starting life, then each player's life, poison and
+/// commander damage (`damage[to][from]`), who has the crown (0xff: no one), and the changes.
+struct LifeGame {
+    players: u8,
+    start: u8,
+    life: [i16; 6],
+    poison: [u8; 6],
+    damage: [[u8; 6]; 6],
+    monarch: u8,
+    changes: Vec<(u8, u8, i16)>,
+}
+
+fn life_game(storage: &BTreeMap<String, Vec<u8>>) -> LifeGame {
+    let b = &storage["game"];
+    let mut g = LifeGame {
+        players: b[0],
+        start: b[1],
+        life: [0; 6],
+        poison: [0; 6],
+        damage: [[0; 6]; 6],
+        monarch: 0,
+        changes: vec![],
+    };
+    let mut at = 4;
+    for p in 0..6 {
+        g.life[p] = i16::from_le_bytes([b[at], b[at + 1]]);
+        at += 2;
+    }
+    g.poison.copy_from_slice(&b[at..at + 6]);
+    at += 6;
+    for row in g.damage.iter_mut() {
+        row.copy_from_slice(&b[at..at + 6]);
+        at += 6;
+    }
+    g.monarch = b[at];
+    let n = b[at + 1] as usize;
+    at += 2;
+    for i in 0..n {
+        let c = &b[at + i * 4..at + i * 4 + 4];
+        g.changes.push((c[0], c[1], i16::from_le_bytes([c[2], c[3]])));
+    }
+    g
+}
+
+#[test]
+fn life_counts_on_the_dial_and_keeps_each_burst_as_one_change() {
+    use Event::*;
+    // three clicks down on player 1, the dial rests, two up on player 2
+    let events = [Down, Down, Down, Timeout, Right, Up, Up, Timeout];
+    let record = Record { events: events.into(), clock: true, ..Default::default() };
+    let (stop, r) = run_record("life", record);
+    assert_eq!(stop, Stop::Finished);
+    let g = life_game(&r.storage);
+    assert_eq!((g.players, g.start, g.life[0], g.life[1]), (2, 20, 17, 22));
+    // one change a burst: life is kind 0
+    assert_eq!(g.changes, [(0, 0, -3), (1, 0, 2)]);
+    // undone, newest first
+    let (_, r) = run_fixture("life", &[Menu(4)], r.storage);
+    let g = life_game(&r.storage);
+    assert_eq!((g.life[1], g.changes.len()), (20, 1));
+}
+
+#[test]
+fn life_keeps_poison_and_commander_damage_which_takes_life() {
+    use Event::*;
+    // player 2's counters: poison up 2, then 5 damage from player 1's commander
+    let events = [Right, Centre, Up, Up, Right, Up, Up, Up, Up, Up, Centre];
+    let (_, r) = run_fixture("life", &events, BTreeMap::new());
+    let g = life_game(&r.storage);
+    assert_eq!((g.poison[1], g.damage[1][0], g.life[1]), (2, 5, 15));
+    // poison is kind 1, commander damage from player 1 kind 2 + 0
+    assert_eq!(g.changes, [(1, 1, 2), (1, 2, 5)]);
+    // the crown goes to whoever's picked; a new game of four at 40 life starts over
+    let (_, r) = run_fixture("life", &[Right, Menu(2)], r.storage);
+    assert_eq!(life_game(&r.storage).monarch, 1);
+    let (_, r) = run_fixture("life", &[Menu(0), Up, Up, Right, Up, Up, Up, Centre], r.storage);
+    let g = life_game(&r.storage);
+    assert_eq!((g.players, g.start, g.life[3], g.poison[1], g.monarch), (4, 40, 40, 0, 0xff));
+    assert!(g.changes.is_empty());
+}
+
 #[test]
 fn tally_counts_and_keeps_the_count() {
     let (stop, r) =
