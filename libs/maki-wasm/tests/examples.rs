@@ -313,9 +313,11 @@ fn initiative_passes_the_turn_and_the_dial_hurts_and_heals() {
     assert_eq!(fight(&r.storage), (1, 0, false, vec![(FIGHTER, 1, 8, 10, 15)]));
     let (_, r) = run_fixture("initiative", &[Menu(5)], r.storage);
     assert_eq!(fight(&r.storage).3, [(FIGHTER, 1, 10, 10, 15)]);
-    // removing whoever's picked
+    // removing whoever's picked; with no one there, the menu's others wait for someone to be added
     let (_, r) = run_fixture("initiative", &[Menu(2)], r.storage);
     assert!(fight(&r.storage).3.is_empty());
+    let (_, r) = run_fixture("initiative", &[Menu(3), Menu(4), Menu(5)], r.storage);
+    assert_eq!(fight(&r.storage), (1, 0, false, vec![]));
 }
 
 #[test]

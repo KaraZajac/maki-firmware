@@ -333,7 +333,7 @@ impl App {
                 let init = 1 + random_below(20) as u8;
                 self.form = Some(Form { editing: None, name, hp: hp.clamp(1, 999), init, stop: 0 });
             }
-            Event::Menu(1..=2) if count == 0 => self.say("add someone first"),
+            Event::Menu(1..) if count == 0 => self.say("add someone first"),
             Event::Menu(1) => {
                 let c = self.table.all[self.picked];
                 self.form =
