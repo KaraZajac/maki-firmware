@@ -1,3 +1,4 @@
+// Changed for maki (a fork of Xous: github.com/KaraZajac/maki-firmware) in 2026; its git history says what.
 // Maintainer's note: more character sets are added to baosec targets by modifying
 // the character map resolution macro in libs/blitstr2/src/style_macro.rs/english_rules
 // Including a resolver to a given character map also pulls the font data into the
@@ -72,6 +73,10 @@ pub const IMAGE_WIDTH: usize = 256;
 pub const IMAGE_HEIGHT: usize = 240;
 
 const MAX_RETRIES: u32 = 5;
+/// maki: the most finder-like patterns in a frame that still has it decoded (see where it's used).
+/// A dense code's own data shows a few more than its three: an export of codes from Google
+/// Authenticator, drawn as maki's camera sees it, 4 to 9 for most of its masks.
+const MAX_FINDER_CANDIDATES: usize = 12;
 
 #[derive(PartialEq, Eq, Clone, Copy)]
 enum DisplayOrientation {
@@ -697,7 +702,11 @@ pub fn wrapped_main(main_thread_token: MainThreadToken) -> ! {
                         qr::find_finders(&mut candidates, &frame, bw_thresh, IMAGE_WIDTH) as isize;
                     // blit raw camera fb to display
                     blit_to_display(&mut display, &frame, true, &mut bw_thresh);
-                    if candidates.len() == 3 {
+                    // maki: three or more. rqrr finds the code's own finders itself; this only
+                    // says when a frame is worth its time. Exactly three let a code whose data
+                    // looks like more finders (most dense ones) never decode while held still;
+                    // a few more still try, and a scene full of them (a busy pattern) doesn't.
+                    if (3..=MAX_FINDER_CANDIDATES).contains(&candidates.len()) {
                         gfx::msg(
                             &mut display,
                             "Decoding...",
