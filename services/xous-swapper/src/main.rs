@@ -50,6 +50,7 @@
 //! of allocations to pick the pages it wants to remove.
 mod debug;
 mod platform;
+mod swapmap;
 use core::fmt::Write;
 use std::collections::BinaryHeap;
 use std::fmt::Debug;
@@ -99,15 +100,6 @@ pub enum KernelOp {
     BulkErase = 5,
 }
 
-pub struct PtPage {
-    pub entries: [u32; 1024],
-}
-
-/// An array of pointers to the root page tables of all the processes.
-pub struct SwapPageTables {
-    pub roots: &'static mut [PtPage],
-}
-
 pub struct RuntimePageTracker {
     pub allocs: &'static mut [Option<PID>],
 }
@@ -130,9 +122,12 @@ const HARD_OOM_RESERVED_PAGES: usize = 3;
 /// This structure contains shared state accessible between the userspace code and the blocking swap call
 /// handler.
 pub struct SwapperSharedState {
-    /// Mapping of (PID, virtual address) -> (physical offset in swap), organized as a table of page tables
-    /// indexed by PID
-    pub pts: SwapPageTables,
+    /// maki: (PID, virtual address) -> (offset in swap), for every page out in swap: see
+    /// `swapmap`. It took over from the swap page tables the loader made, as the swapper started.
+    pub map: swapmap::SwapMap,
+    /// maki: those tables (start and length), for the main thread to give back to the kernel:
+    /// they're mapped in the handler's context, where unmapping isn't possible. 0 once given.
+    pub loader_tables: (usize, usize),
     /// Contains all the structures specific to the HAL for accessing swap memory
     pub hal: SwapHal,
     /// This is a table of `u32` per page of swap memory, which tracks the count of how many times
@@ -156,51 +151,13 @@ pub struct SwapperSharedState {
     /// number of pages to free in the OOM routine. Note that this value is imprecise: it can
     /// be mutated by the userspace soft-OOM handler at any time.
     pub pages_to_free: usize,
-    /// maki: the roots of the swap page tables of processes created after boot (native apps),
-    /// indexed by PID - 1, 0 where there's none yet. See `SwapperSharedState::root`.
-    pub extra_roots: [usize; 64],
 }
 impl SwapperSharedState {
-    /// maki: the root of `pid`'s swap page tables. The loader makes them for the processes in
-    /// the image. For a process created later (a native app), `map_swap` makes one the first
-    /// time one of its pages is evicted, kept for the next process given the PID; when a process
-    /// ends, what it had in swap is freed (`forget_ended`).
-    pub fn root(&mut self, pid: u8) -> Option<*mut PtPage> {
-        let i = (pid as usize).checked_sub(1)?;
-        if i < self.pts.roots.len() {
-            Some(self.pts.roots.as_mut_ptr().wrapping_add(i))
-        } else {
-            self.extra_roots.get(i).filter(|&&root| root != 0).map(|&root| root as *mut PtPage)
-        }
-    }
-
+    /// Where `pid`'s page at `va` is in swap, if it's there (with `va`'s offset in the page), and
+    /// with `mark_free`, forgets it: it's coming back into RAM.
     pub fn pt_walk(&mut self, pid: u8, va: usize, mark_free: bool) -> Option<usize> {
-        // safety: a page of this process's, read here alone
-        let l1_pt = unsafe { &*self.root(pid)? };
-        // mask out bottom 10 bits of flags, shift left by 2 to create the address of L0 table
-        let l1_entry = l1_pt.entries[va >> 22];
-        let l0_address = (l1_entry & 0xFFFF_FC00) << 2;
-
-        // 0xF means this also checks that RWX is 0, as well as FLG_VALID is true
-        if (l1_entry & 0xF) == loader::FLG_VALID as u32 {
-            // this is safe because all possible values can be represented as `u32`, the pointer
-            // is valid, aligned, and the bounds are known.
-            let l0_pt = unsafe { core::slice::from_raw_parts_mut(l0_address as *mut u32, 1024) };
-            let l0_entry = l0_pt[(va & 0x003F_F000) >> 12];
-            if (l0_entry & loader::FLG_VALID as u32) != 0 {
-                if mark_free {
-                    l0_pt[(va & 0x003F_F000) >> 12] = 0;
-                }
-                Some(((l0_entry as usize & 0xFFFF_FC00) << 2) | va & 0xFFF)
-            } else {
-                // writeln!(DebugUart {}, "pt_walk L0 entry invalid: {:x}", l0_entry).ok();
-                None
-            }
-        } else {
-            assert!((l1_entry & 0xE) == 0, "RWX was not zero on L1 PTE, unsupported mode of operation!");
-            // writeln!(DebugUart {}, "pt_walk L1 entry invalid: {:x}", l1_entry).ok();
-            None
-        }
+        let offset = if mark_free { self.map.remove(pid, va) } else { self.map.get(pid, va) }?;
+        Some(offset as usize | va & 0xFFF)
     }
 }
 struct SharedStateStorage {
@@ -229,54 +186,17 @@ fn map_swap(ss: &mut SwapperSharedState, swap_phys: usize, virt: usize, owner: u
     assert!(virt & 0xFFF == 0, "VA is not page aligned");
     #[cfg(feature = "debug-verbose")]
     writeln!(DebugUart {}, "    swap pa {:x} -> va {:x}", swap_phys, virt).ok();
-    let ppn = (swap_phys & 0xFFFF_F000) >> 2;
-
-    let vpn1 = (virt >> 22) & ((1 << 10) - 1);
-    let vpn0 = (virt >> 12) & ((1 << 10) - 1);
     assert!(owner != 0);
-    // maki: a process created after boot gets a root the first time (see `root`). Made here,
-    // after the page was stolen, as the L0 tables below are: an eviction that fails costs no
-    // memory, and one that succeeds frees a page.
-    if ss.root(owner).is_none() && (owner as usize) <= ss.extra_roots.len() {
-        let mut page = xous::map_memory(None, None, PAGE_SIZE, MemoryFlags::R | MemoryFlags::W)
-            .expect("couldn't allocate a swap page table root");
-        // safety: a fresh page, and `u32` is fully representable
-        unsafe { page.as_slice_mut::<u32>() }.fill(0);
-        ss.extra_roots[owner as usize - 1] = page.as_ptr() as usize;
-    }
-    let root = ss.root(owner).expect("no swap page tables for the page's process");
-    // safety: a page of this process's, and nothing else refers to it right now
-    let l1_pt = unsafe { &mut (*root).entries };
-
-    // Allocate a new level 1 pagetable entry if one doesn't exist.
-    if l1_pt[vpn1] as usize & loader::FLG_VALID == 0 {
-        let na = xous::map_memory(None, None, PAGE_SIZE, MemoryFlags::R | MemoryFlags::W)
-            .expect("couldn't allocate a swap page table page")
-            .as_ptr() as usize;
-        writeln!(
-            DebugUart {},
-            "Swap Level 1 page table is invalid ({:08x}) @ {:08x} -- allocating a new one @ {:08x}",
-            unsafe { l1_pt.as_ptr().add(vpn1) } as usize,
-            l1_pt[vpn1],
-            na
-        )
-        .ok();
-        // Mark this entry as a leaf node (WRX as 0), and indicate
-        // it is a valid page by setting "V".
-        l1_pt[vpn1] = (((na & 0xFFFF_F000) >> 2) | loader::FLG_VALID) as u32;
-    }
-
-    let l0_pt_idx = unsafe { &mut (*(((l1_pt[vpn1] << 2) & !((1 << 12) - 1)) as *mut PtPage)) };
-    let l0_pt = &mut l0_pt_idx.entries;
-
-    // Check if the entry was already mapped.
-    if ((l0_pt[vpn0] as usize) & loader::FLG_VALID) != 0 && ((l0_pt[vpn0] as usize & 0xffff_fc00) << 2) != ppn
-    {
+    // maki: one entry in the swap map, which was made at the start for as many pages as swap
+    // has: nothing is allocated here, while memory is short
+    if let Some(stale) = ss.map.insert(owner, virt, swap_phys as u32) {
+        if stale as usize == swap_phys {
+            return;
+        }
         // maki: whatever was swapped out at this address before is gone (the page being swapped
         // out now is there): its swap page is free, for the case the kernel's list of unmapped
-        // pages (`forget_freed`) overflowed. The slot is the entry's PPN, as `pt_walk` reads it.
-        let stale = ((l0_pt[vpn0] as usize & 0xFFFF_FC00) << 2) / PAGE_SIZE;
-        if let Some(count) = ss.sct.counts.get_mut(stale) {
+        // pages (`forget_freed`) overflowed.
+        if let Some(count) = ss.sct.counts.get_mut(stale as usize / PAGE_SIZE) {
             *count &= !loader::FLG_SWAP_USED;
         }
         // Print a warning, because this can be indicative of either an error in the algorithm, OR
@@ -288,27 +208,51 @@ fn map_swap(ss: &mut SwapperSharedState, swap_phys: usize, virt: usize, owner: u
         // mappings are never re-used, but for lent pages the addresses tend to be re-used rapidly.
         writeln!(
             DebugUart {},
-            "{}.{:08x} already mapped to PA {:08x} (raw entry {:08x}). Remapping to PA {:08x}! (possibly leak of swap due silent unmap of lent pages)",
-            owner,
-            virt,
-            (l0_pt[vpn0] & 0xFFFF_FC00) << 2,
-            l0_pt[vpn0],
-            swap_phys,
+            "{}.{:08x} already mapped to PA {:08x}. Remapping to PA {:08x}! (possibly leak of swap due silent unmap of lent pages)",
+            owner, virt, stale, swap_phys,
         )
         .ok();
     }
-    l0_pt[vpn0] = (ppn | loader::FLG_VALID) as u32;
-    #[cfg(feature = "debug-verbose")]
-    writeln!(
-        DebugUart {},
-        "map_swap {}.{:x}->{:x}: l0_pt[vpn0] {:x}, l0_pt {:x}",
-        owner,
-        virt,
-        swap_phys,
-        l0_pt[vpn0],
-        l0_pt.as_ptr() as usize
-    )
-    .ok();
+}
+
+/// maki: the swap map, made as the swapper starts (in the handler's context, on the kernel's first
+/// call), holding the pages the loader put in swap, from the swap page tables it made for them:
+/// a root per process at SWAP_PT_VADDR, then the tables under them, all in a row. Says where those
+/// are (start, length), for the main thread to give back.
+fn swap_map_from_loader(slots: usize, roots: usize) -> (swapmap::SwapMap, (usize, usize)) {
+    let places = swapmap::SwapMap::places_for(slots);
+    let bytes = (places * 2 * core::mem::size_of::<u32>()).next_multiple_of(PAGE_SIZE);
+    let mem = xous::map_memory(None, None, bytes, MemoryFlags::R | MemoryFlags::W)
+        .expect("couldn't allocate the swap map");
+    // safety: fresh pages, and `u32` is fully representable
+    let words: &'static mut [u32] =
+        unsafe { core::slice::from_raw_parts_mut(mem.as_mut_ptr() as *mut u32, places * 2) };
+    words.fill(0);
+    let (keys, offsets) = words.split_at_mut(places);
+    let mut map = swapmap::SwapMap::new(keys, offsets);
+    let mut end = SWAP_PT_VADDR + roots * PAGE_SIZE;
+    for p in 0..roots {
+        // safety: the loader mapped each root here, and the tables they point to, at the addresses
+        // they point to (it patched them so), all made by it and fully initialized
+        let l1 = unsafe { core::slice::from_raw_parts((SWAP_PT_VADDR + p * PAGE_SIZE) as *const u32, 1024) };
+        for (vpn1, &l1_entry) in l1.iter().enumerate() {
+            // valid, with RWX 0: points to an L0 table
+            if (l1_entry & 0xF) != loader::FLG_VALID as u32 {
+                continue;
+            }
+            let l0_address = (l1_entry as usize & 0xFFFF_FC00) << 2;
+            assert!(l0_address >= SWAP_PT_VADDR + roots * PAGE_SIZE, "a loader swap table out of place");
+            end = end.max(l0_address + PAGE_SIZE);
+            let l0 = unsafe { core::slice::from_raw_parts(l0_address as *const u32, 1024) };
+            for (vpn0, &entry) in l0.iter().enumerate() {
+                if entry as usize & loader::FLG_VALID != 0 {
+                    let offset = ((entry as usize & 0xFFFF_FC00) << 2) as u32;
+                    map.insert(p as u8 + 1, vpn1 << 22 | vpn0 << 12, offset);
+                }
+            }
+        }
+    }
+    (map, (SWAP_PT_VADDR, end - SWAP_PT_VADDR))
 }
 
 /// Convenience wrapper for GetFreePages syscall
@@ -328,8 +272,8 @@ fn free_pages_quietly() -> usize {
     }
 }
 
-/// maki: frees what processes that ended had in swap (the kernel says which), and empties their
-/// swap page tables, which are kept for the next process given the PID. Done before anything is
+/// maki: frees what processes that ended had in swap (the kernel says which), and forgets it in
+/// the swap map, so the next process given the PID starts with nothing there. Done before anything is
 /// evicted, so before any such process has anything in swap. Without it, every process that
 /// ended with pages in swap would leak them, and a native app is a process that ends.
 fn forget_ended(ss: &mut SwapperSharedState) {
@@ -337,35 +281,23 @@ fn forget_ended(ss: &mut SwapperSharedState) {
         Ok(Result::Scalar5(lo, hi, _, _, _)) => lo as u64 | (hi as u64) << 32,
         _ => return,
     };
-    for bit in 0..64 {
-        if ended & (1u64 << bit) == 0 {
-            continue;
-        }
-        let Some(root) = ss.root(bit as u8 + 1) else { continue };
-        // safety: a page of this process's, and nothing else refers to it right now
-        let l1_pt = unsafe { &(*root).entries };
-        for &l1_entry in l1_pt.iter() {
-            // valid, with RWX 0: points to an L0 table
-            if (l1_entry & 0xF) != loader::FLG_VALID as u32 {
-                continue;
-            }
-            let l0_address = (l1_entry as usize & 0xFFFF_FC00) << 2;
-            // safety: made by `map_swap` or the loader, a page of this process's
-            let l0_pt = unsafe { core::slice::from_raw_parts_mut(l0_address as *mut u32, 1024) };
-            for entry in l0_pt.iter_mut() {
-                if *entry as usize & loader::FLG_VALID != 0 {
-                    let slot = ((*entry as usize & 0xFFFF_FC00) << 2) / PAGE_SIZE;
-                    // free, keeping the count (nonces never repeat)
-                    if let Some(count) = ss.sct.counts.get_mut(slot) {
-                        *count &= !loader::FLG_SWAP_USED;
-                    }
-                    *entry = 0;
-                }
-            }
-        }
+    if ended == 0 {
+        return;
     }
+    let counts = &mut ss.sct.counts;
+    ss.map.forget(
+        |key| {
+            let pid = swapmap::pid_of(key) as u32;
+            pid >= 1 && pid <= 64 && ended & (1u64 << (pid - 1)) != 0
+        },
+        // free, keeping the count (nonces never repeat)
+        |offset| {
+            if let Some(count) = counts.get_mut(offset as usize / PAGE_SIZE) {
+                *count &= !loader::FLG_SWAP_USED;
+            }
+        },
+    );
 }
-
 /// maki: frees the swap pages of pages unmapped while they were out in swap (the kernel says
 /// which: unmapping one, a process gives up a page it doesn't have in RAM, and only the swapper
 /// knows which swap page holds it). Done before anything is evicted, as `forget_ended` is, so no
@@ -540,6 +472,10 @@ fn swap_handler(
         let reserved_slice: &mut [u32] = unsafe { reserved.as_slice_mut() }; // this is safe because `u32` is fully representable
         reserved_slice.fill(0);
 
+        // maki: the swap map, for as many pages as swap has, with the pages the loader put there
+        let slots = loader::swap::derive_usable_swap(swap_spec.swap_len as usize) / PAGE_SIZE;
+        let (map, loader_tables) = swap_map_from_loader(slots, swap_spec.pid_count as usize);
+
         // swapper is not allowed to use `log` for debugging under most circumstances, because
         // the swapper can't send messages when handling a swap call. Instead, we use a local
         // debug UART to handle this. This needs to be enabled with the "debug-print-swapper" feature
@@ -550,14 +486,8 @@ fn swap_handler(
             //   - the loader puts the swap root page table pages starting at SWAP_PT_VADDR
             //   - all the page table entries are fully initialized and contains only representable data
             //   - the length of the region is guaranteed by the loader
-            pts: SwapPageTables {
-                roots: unsafe {
-                    core::slice::from_raw_parts_mut(
-                        SWAP_PT_VADDR as *mut PtPage,
-                        swap_spec.pid_count as usize,
-                    )
-                },
-            },
+            map,
+            loader_tables,
             hal: SwapHal::new(swap_spec),
             // safety: this is safe because the loader has allocated this region and zeroed the contents,
             // and the length is correctly set up by the loader. Note that the length is slightly
@@ -578,7 +508,6 @@ fn swap_handler(
             report_full_rpt: true,
             hard_oom_reserved_page: Some(reserved),
             pages_to_free: HARD_OOM_PAGE_TARGET + HARD_OOM_RESERVED_PAGES,
-            extra_roots: [0; 64],
         });
     }
     let ss = sss.inner.as_mut().expect("Shared state should be initialized");
@@ -876,6 +805,18 @@ fn main() {
     // advisory), but this check just ensures that happens.
     while sss.inner.is_none() {
         xous::yield_slice();
+    }
+    // maki: the swap page tables the loader made, now in the swap map: back to the kernel, from
+    // here (the handler that made the map can't unmap). The handler never looks at them again.
+    let (tables, len) = core::mem::take(&mut sss.inner.as_mut().unwrap().loader_tables);
+    if len != 0 {
+        // safety: the loader mapped these pages for the swapper alone, and nothing refers to them now
+        match xous::unmap_memory(unsafe { MemoryRange::new(tables, len).unwrap() }) {
+            Ok(()) => {
+                writeln!(DebugUart {}, "gave back {} pages of loader swap tables", len / PAGE_SIZE).ok()
+            }
+            Err(e) => writeln!(DebugUart {}, "couldn't give back the loader's swap tables: {:?}", e).ok(),
+        };
     }
     // measure memory at boot
     get_free_pages();
