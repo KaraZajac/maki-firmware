@@ -9,6 +9,9 @@ use crate::udma::{Bank, Udma};
 const TIMEOUT_ITERS: usize = 1_000_000;
 #[cfg(feature = "hdl-test")]
 const TIMEOUT_ITERS: usize = 5000;
+/// maki: how long `await_propagation` looks for a transfer to start, a few milliseconds; one
+/// starts within microseconds, and one that's finished already never shows as started.
+const PROPAGATION_ITERS: usize = 200_000;
 
 // MPW had this register:
 //        pub const REG_SETUP: crate::Register = crate::Register::new(13, 0x1);
@@ -373,6 +376,25 @@ impl<'a> I2cDriver<'a> {
         self.pending.take();
     }
 
+    /// Waits for the commands just queued to reach the I2C block: until it's busy with them and
+    /// has none left to fetch. maki: but not forever. A transfer that finished while this thread
+    /// was preempted leaves the block idle with nothing left to fetch, which looks the same as
+    /// not started yet, and the wait spun on it for good: it hung the I2C service, and with it
+    /// whatever was reading the accelerometer (an app, so the app host) until a power cycle.
+    /// `i2c_await` finds such a transfer done.
+    fn await_propagation(&self) {
+        for _ in 0..PROPAGATION_ITERS {
+            let busy = self.csr.rf(utra::udma_i2c_0::REG_STATUS_R_BUSY) != 0;
+            #[cfg(not(feature = "mpw"))]
+            let fetched = self.csr.rf(utra::udma_i2c_0::REG_CMD_SIZE_R_CMD_SIZE) == 0;
+            #[cfg(feature = "mpw")]
+            let fetched = true;
+            if busy && fetched {
+                return;
+            }
+        }
+    }
+
     fn busy(&self) -> bool {
         self.csr.rf(utra::udma_i2c_0::REG_STATUS_R_BUSY) != 0
             || self.udma_busy(Bank::Custom)
@@ -430,12 +452,7 @@ impl<'a> I2cDriver<'a> {
             self.udma_enqueue(Bank::Custom, &self.cmd_buf_phys[..self.seq_len], CFG_EN);
         }
         // wait for the commands to propagate before returning
-        #[cfg(not(feature = "mpw"))]
-        while self.csr.rf(utra::udma_i2c_0::REG_STATUS_R_BUSY) == 0
-            || self.csr.rf(utra::udma_i2c_0::REG_CMD_SIZE_R_CMD_SIZE) != 0
-        {}
-        #[cfg(feature = "mpw")]
-        while self.csr.rf(utra::udma_i2c_0::REG_STATUS_R_BUSY) == 0 {}
+        self.await_propagation();
         self.pending = I2cPending::Write(data.len());
         Ok(data.len())
     }
@@ -495,12 +512,7 @@ impl<'a> I2cDriver<'a> {
             self.udma_enqueue(Bank::Custom, &self.cmd_buf_phys[..self.seq_len], CFG_EN);
         }
         // wait for the commands to propagate before returning
-        #[cfg(not(feature = "mpw"))]
-        while self.csr.rf(utra::udma_i2c_0::REG_STATUS_R_BUSY) == 0
-            || self.csr.rf(utra::udma_i2c_0::REG_CMD_SIZE_R_CMD_SIZE) != 0
-        {}
-        #[cfg(feature = "mpw")]
-        while self.csr.rf(utra::udma_i2c_0::REG_STATUS_R_BUSY) == 0 {}
+        self.await_propagation();
         self.pending = I2cPending::Read(len);
         Ok(len)
     }
