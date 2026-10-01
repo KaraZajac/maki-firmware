@@ -186,19 +186,17 @@ pub struct Store<S: Storage> {
     entries: Option<Vec::<String>>,
 }
 /// maki: the store's keys, as the PDDB lists them: Some(empty) for a dictionary that isn't there
-/// yet, None if they couldn't be listed. The PDDB lists one dictionary at a time for the whole
-/// system and turns a second listing away (the vault asking which sites have passkeys, say), so a
-/// listing is tried again a few times before it's given up.
+/// yet, None if they couldn't be listed (the PDDB client waits a while for another listing to
+/// finish first: it runs one at a time for the whole system).
 fn list_keys_retrying(pddb: &pddb::Pddb) -> Option<Vec<String>> {
-    for i in 0..20u64 {
-        match pddb.list_keys(crate::store::OPENSK2_DICT, None) {
-            Ok(keys) => return Some(keys),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Some(Vec::new()),
-            Err(_) => std::thread::sleep(std::time::Duration::from_millis(5 + 5 * i)),
+    match pddb.list_keys(crate::store::OPENSK2_DICT, None) {
+        Ok(keys) => Some(keys),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Some(Vec::new()),
+        Err(e) => {
+            log::warn!("couldn't list the passkey store's keys: {:?}", e);
+            None
         }
     }
-    log::warn!("couldn't list the passkey store's keys");
-    None
 }
 
 impl<S: Storage + Clone> Clone for Store<S> {

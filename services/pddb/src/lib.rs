@@ -851,24 +851,35 @@ impl Pddb {
         ];
         #[cfg(any(feature = "gen2", feature = "doc-deps"))]
         let token = xous::create_server_id().unwrap().to_array();
-        let request = PddbDictRequest {
-            basis_specified: basis_name.is_some(),
-            basis: String::from(&bname),
-            dict: String::from(dict_name),
-            key: String::new(),
-            index: 0,
-            code: PddbRequestCode::Uninit,
-            token,
-            bulk_limit: None,
-            key_count: 0,
-            found_key_count: 0,
+        // maki: the PDDB runs one key listing at a time for the whole system and turns away a
+        // second while one is under way: try again for about a second, rather than have callers
+        // take "busy" for "no keys" (an app's data, the passkeys, the vault's logins)
+        let mut tries = 0u64;
+        let response = loop {
+            let request = PddbDictRequest {
+                basis_specified: basis_name.is_some(),
+                basis: String::from(&bname),
+                dict: String::from(dict_name),
+                key: String::new(),
+                index: 0,
+                code: PddbRequestCode::Uninit,
+                token,
+                bulk_limit: None,
+                key_count: 0,
+                found_key_count: 0,
+            };
+            let mut buf =
+                Buffer::into_buf(request).or(Err(Error::new(ErrorKind::Other, "Xous internal error")))?;
+            buf.lend_mut(self.conn, Opcode::KeyCountInDict.to_u32().unwrap())
+                .or(Err(Error::new(ErrorKind::Other, "Xous internal error")))?;
+            let response = buf.to_original::<PddbDictRequest, _>().unwrap();
+            if matches!(response.code, PddbRequestCode::AccessDenied) && tries < 20 {
+                std::thread::sleep(std::time::Duration::from_millis(5 + 5 * tries));
+                tries += 1;
+                continue;
+            }
+            break response;
         };
-        let mut buf =
-            Buffer::into_buf(request).or(Err(Error::new(ErrorKind::Other, "Xous internal error")))?;
-        buf.lend_mut(self.conn, Opcode::KeyCountInDict.to_u32().unwrap())
-            .or(Err(Error::new(ErrorKind::Other, "Xous internal error")))?;
-
-        let response = buf.to_original::<PddbDictRequest, _>().unwrap();
         match response.code {
             PddbRequestCode::NoErr => (),
             PddbRequestCode::NotFound => return Err(Error::new(ErrorKind::NotFound, "dictionary not found")),
@@ -967,24 +978,33 @@ impl Pddb {
         ];
         #[cfg(any(feature = "gen2", feature = "doc-deps"))]
         let token = xous::create_server_id().unwrap().to_array();
-        let request = PddbDictRequest {
-            basis_specified: basis_name.is_some(),
-            basis: String::from(&bname),
-            dict: String::new(),
-            key: String::new(),
-            index: 0,
-            code: PddbRequestCode::Uninit,
-            token,
-            bulk_limit: None,
-            key_count: 0,
-            found_key_count: 0,
+        // maki: one dictionary listing at a time, as with keys (list_keys)
+        let mut tries = 0u64;
+        let response = loop {
+            let request = PddbDictRequest {
+                basis_specified: basis_name.is_some(),
+                basis: String::from(&bname),
+                dict: String::new(),
+                key: String::new(),
+                index: 0,
+                code: PddbRequestCode::Uninit,
+                token,
+                bulk_limit: None,
+                key_count: 0,
+                found_key_count: 0,
+            };
+            let mut buf =
+                Buffer::into_buf(request).or(Err(Error::new(ErrorKind::Other, "Xous internal error")))?;
+            buf.lend_mut(self.conn, Opcode::DictCountInBasis.to_u32().unwrap())
+                .or(Err(Error::new(ErrorKind::Other, "Xous internal error")))?;
+            let response = buf.to_original::<PddbDictRequest, _>().unwrap();
+            if matches!(response.code, PddbRequestCode::AccessDenied) && tries < 20 {
+                std::thread::sleep(std::time::Duration::from_millis(5 + 5 * tries));
+                tries += 1;
+                continue;
+            }
+            break response;
         };
-        let mut buf =
-            Buffer::into_buf(request).or(Err(Error::new(ErrorKind::Other, "Xous internal error")))?;
-        buf.lend_mut(self.conn, Opcode::DictCountInBasis.to_u32().unwrap())
-            .or(Err(Error::new(ErrorKind::Other, "Xous internal error")))?;
-
-        let response = buf.to_original::<PddbDictRequest, _>().unwrap();
         let count = match response.code {
             PddbRequestCode::NoErr => response.index,
             _ => return Err(Error::new(ErrorKind::Other, "Internal error")),
