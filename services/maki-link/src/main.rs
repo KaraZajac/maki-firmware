@@ -49,6 +49,7 @@ fn refused(ask: &Ask, why: Approval) -> (u8, Vec<u8>) {
         Ask::Login { .. } => reply::login(why, "", ""),
         Ask::Totp { .. } => reply::totp(why, "", 0),
         Ask::SaveLogin { .. } => reply::save(why),
+        Ask::UpdateMode { .. } => reply::update_mode(why),
     }
 }
 
@@ -219,6 +220,8 @@ fn vault_worker(work: mpsc::Receiver<Work>, waiting: Arc<AtomicU32>, send_lock: 
             Ask::SaveLogin { site, username, password } => {
                 reply::save(vault.save_login(site, username, password))
             }
+            // maki-keys asks the owner, and restarts maki once this answer has gone
+            Ask::UpdateMode { label } => reply::update_mode(approval(keys.update_mode(label))),
         };
         waiting.fetch_sub(1, Ordering::SeqCst);
         send(&usb, &send_lock, &frame::encode(kind, id, &body));
@@ -349,7 +352,12 @@ fn main() -> ! {
     // mounted: the first time, it picks one)
     let name = maki_keys::Keys::new(&xns).map(|k| k.device_name()).unwrap_or_else(|_| "maki".into());
     log::info!("this maki is {name}");
-    let mut device = Device::new(badge, name, env!("CARGO_PKG_VERSION").into());
+    // the firmware's build, as `git describe` named it when it was built (xtask): maki desktop
+    // tells from it whether there's newer firmware
+    let build = badge.tt.get_version().lines().next().unwrap_or_default().trim().to_string();
+    let version = if build.is_empty() { env!("CARGO_PKG_VERSION").to_string() } else { build };
+    log::info!("this firmware is {version}");
+    let mut device = Device::new(badge, name, version);
 
     // "linked" means a valid frame arrived recently. The main loop raises it on contact; the
     // watcher lowers it when the host goes quiet, so both ends agree without extra messages.
@@ -429,6 +437,22 @@ fn main() -> ! {
             waiting.fetch_add(1, Ordering::SeqCst);
             to_vault.send(Work::Ask(0xd000 + i as u16, ask)).ok();
         }
+    }
+
+    // Update mode, in the emulator: built with MAKI_DEMO_UPDATE, once maki is unlocked, maki-link
+    // asks maki-keys to restart into update mode as if maki desktop had, so the question can be
+    // seen and answered there, and the restart (and the flag cleared at the next start) logged.
+    if option_env!("MAKI_DEMO_UPDATE").is_some() {
+        let to_vault = to_vault.clone();
+        let waiting = waiting.clone();
+        std::thread::spawn(move || {
+            let xns = xous_names::XousNames::new().unwrap();
+            let keys = maki_keys::Keys::new(&xns).expect("maki-keys");
+            keys.wait_unlocked();
+            log::warn!("demo update: asking to restart into update mode");
+            waiting.fetch_add(1, Ordering::SeqCst);
+            to_vault.send(Work::Ask(0xd100, Ask::UpdateMode { label: "preview-2026-10-01".into() })).ok();
+        });
     }
 
     // The emulator again: built with MAKI_DEMO_BACKUP, once maki is set up (PIN and phrase),

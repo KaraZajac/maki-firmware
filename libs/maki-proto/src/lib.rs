@@ -17,6 +17,9 @@ pub mod kind {
     pub const TIME_CHALLENGE: u8 = 0x03;
     pub const TIME_PROOF: u8 = 0x04;
     pub const TIME_UNVERIFIED: u8 = 0x05;
+    /// Restart maki into its boot stage's update mode, where maki desktop puts new firmware on
+    /// it; answered once the owner decides, and on a yes, maki restarts.
+    pub const UPDATE_MODE: u8 = 0x06;
     /// Answered only after the owner approves on maki's screen.
     pub const GET_LOGIN: u8 = 0x10;
     pub const GET_TOTP: u8 = 0x11;

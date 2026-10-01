@@ -240,6 +240,11 @@ pub enum Ask {
         username: String,
         password: String,
     },
+    /// Restart into update mode for maki desktop to install `label` (UPDATE_MODE): what the
+    /// host says it will install, for the owner to read.
+    UpdateMode {
+        label: String,
+    },
 }
 
 /// First byte of every approval reply.
@@ -308,6 +313,11 @@ pub mod reply {
 
     pub fn save(approval: Approval) -> (u8, Vec<u8>) {
         (kind::SAVE_LOGIN | kind::REPLY, Writer::new().u8(approval as u8).finish())
+    }
+
+    /// Approved: maki restarts into update mode once this has gone.
+    pub fn update_mode(approval: Approval) -> (u8, Vec<u8>) {
+        (kind::UPDATE_MODE | kind::REPLY, Writer::new().u8(approval as u8).finish())
     }
 
     /// A piece of the backup: `status` is `Approved` with the piece, or why not (`Locked`,
@@ -497,6 +507,7 @@ impl<P: Platform> Device<P> {
             kind::TIME_PROOF => self.time_proof(body),
             kind::TIME_UNVERIFIED => self.time_unverified(body),
             kind::GET_LOGIN | kind::GET_TOTP | kind::SAVE_LOGIN => return self.ask(packet.kind, body),
+            kind::UPDATE_MODE => return Self::update_mode(body),
             kind::BACKUP_GET | kind::BACKUP_PUT => return Self::backup(packet.kind, body),
             kind::APP_LIST
             | kind::APP_INSTALL
@@ -508,6 +519,27 @@ impl<P: Platform> Device<P> {
         };
         let (kind, body) = result.unwrap_or_else(malformed);
         Handled::Reply(kind, body)
+    }
+
+    fn update_mode(body: &[u8]) -> Handled {
+        let parsed = (|| {
+            let mut r = Reader::new(body);
+            let label = r.str8()?.to_string();
+            r.end()?;
+            Ok::<_, Truncated>(label)
+        })();
+        match parsed {
+            Err(t) => {
+                let (k, b) = malformed(t);
+                Handled::Reply(k, b)
+            }
+            // it's shown on screen: nothing in it may move the cursor
+            Ok(label) if label.chars().any(char::is_control) => {
+                let (k, b) = error(ErrorCode::BadArgument, "control characters in the label");
+                Handled::Reply(k, b)
+            }
+            Ok(label) => Handled::Ask(Ask::UpdateMode { label }),
+        }
     }
 
     fn ask(&self, kind: u8, body: &[u8]) -> Handled {

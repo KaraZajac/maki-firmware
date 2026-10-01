@@ -54,6 +54,7 @@ bytes. Bodies must be consumed exactly: trailing bytes are an error.
 | `0x03` TIME_CHALLENGE | — | `count:u8`, then `count` × (`id:u8` `host:str8` `port:u16` `request:bytes16`) |
 | `0x04` TIME_PROOF | `tz_offset_s:i32` `count:u8`, then `count` × (`id:u8` `response:bytes16`) | `status:u8` `verified:u8` `utc_ms:u64`, then `count:u8` × (`id:u8` `answer:u8`) |
 | `0x05` TIME_UNVERIFIED | `utc_ms:u64` `tz_offset_s:i32` | `refused:u8` (0 set, 1 refused) |
+| `0x06` UPDATE_MODE | `label:str8` | `approval:u8` |
 | `0x10` GET_LOGIN | `site:str8` [`flags:u8`] | `approval:u8` `username:str8` `password:str8` |
 | `0x11` GET_TOTP | `site:str8` | `approval:u8` `code:str8` `valid_for_s:u8` |
 | `0x12` SAVE_LOGIN | `site:str8` `username:str8` `password:str8` | `approval:u8` |
@@ -147,6 +148,24 @@ logins for a site), left and right go through them, then "cancel", and the centr
   software on the computer can't quietly empty the vault. Once approved, a password or code is on
   the computer, and maki can't prove the site is the one the request claims. Passkeys, which never
   leave maki and are bound to the site by the browser, are the stronger choice where offered.
+
+## Updating maki's firmware
+
+HELLO's `version` is the firmware's build, as `git describe --long --tags` names it when it's
+built: `preview-2026-10-01-0-g86a1f5ba4` is the release `preview-2026-10-01` itself (0 commits
+on), `preview-2026-10-01-3-g1f2e3d4c5` three commits after it. Older firmware said only
+maki-link's crate version (`0.1.0`).
+
+UPDATE_MODE asks maki to restart into its boot stage's update mode, where boot1 shows a USB
+drive (`BAOCHIP`, USB `1d50:6196`) that takes `.uf2` files, beside a serial console. maki asks
+the owner first, showing `label`, what the host says it will install: maki can't see the files,
+so it's the host's word, for the owner to recognize. Answered `0` (approved), maki syncs its
+storage and restarts a moment later, once the reply is out; `1` denied, `3` timed out, `6`
+locked (maki asks nothing until its PIN is in). maki restarts by setting boot1's bootwait flag (a
+one-way counter: each change wears it by one of ten thousand), so boot1 waits in update mode for
+one start. The host puts `loader.uf2`, `xous.uf2` and `swap.uf2` on the drive, `sync`ing after
+each, then sends `bootwait disable` and `boot` to boot1's console (each ended with `\r`): the
+new firmware starts. maki turns bootwait off too when it starts, in case the host didn't.
 
 ## Backups
 

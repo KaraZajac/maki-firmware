@@ -79,6 +79,14 @@ pub enum KeysOp {
     /// each app to the paths its manifest names and signs only after the owner's yes; here, every
     /// path must start with a hardened purpose and coin type. Once unlocked with a phrase.
     Wallet = 27,
+    /// Memory message (mutable lend) with an `UpdateModeRequest`, from maki-link for maki
+    /// desktop: once unlocked, maki asks its owner on screen whether to restart into update mode,
+    /// where boot1 takes new firmware on its USB drive. On a yes, it answers, then restarts there.
+    UpdateMode = 28,
+    /// Scalar from maki-keys itself, once its owner said yes to `UpdateMode`: boot1 is to wait
+    /// for new firmware at the next start (its bootwait flag), and maki restarts. Whoever installs
+    /// the firmware turns the flag off on boot1's console, and maki-keys does when it starts.
+    EnterUpdateMode = 29,
 }
 
 /// `FidoKeys`' answer: `keys` is 128 bytes (encryption, authentication, CredRandom).
@@ -92,6 +100,14 @@ pub struct FidoSecret {
 pub const CHUNK: usize = 4096;
 /// Bigger than any vault maki could hold, and a bound on what a restore will take in.
 pub const MAX_BACKUP: usize = 512 * 1024;
+
+/// `UpdateMode`'s request: what maki desktop will install, for the owner to read (the desktop's
+/// word for it: maki can't see the files), and on the way back, `result` (`RESULT_*`).
+#[derive(Debug, Default, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
+pub struct UpdateModeRequest {
+    pub label: String,
+    pub result: u32,
+}
 
 /// A piece of a backup, either way. On the way back: `result` (`RESULT_*`), `total`, and for a
 /// finished restore, what it added.
@@ -337,6 +353,18 @@ impl Keys {
             return failed;
         }
         buf.to_original::<Chunk, _>().unwrap_or(failed)
+    }
+
+    /// Restart into update mode for maki desktop to install `label`, if the owner says yes on
+    /// screen: blocks while they decide. `RESULT_OK` (maki restarts in a moment), `RESULT_DENIED`,
+    /// `RESULT_TIMED_OUT`, or `RESULT_NOT_NOW` while maki is locked.
+    pub fn update_mode(&self, label: &str) -> u32 {
+        let request = UpdateModeRequest { label: label.into(), result: RESULT_FAILED };
+        let Ok(mut buf) = Buffer::into_buf(request) else { return RESULT_FAILED };
+        if buf.lend_mut(self.conn, KeysOp::UpdateMode.to_u32().unwrap()).is_err() {
+            return RESULT_FAILED;
+        }
+        buf.to_original::<UpdateModeRequest, _>().map(|r| r.result).unwrap_or(RESULT_FAILED)
     }
 
     /// A piece of the backup, starting at `offset`; 0 seals a fresh one.

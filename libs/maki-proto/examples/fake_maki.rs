@@ -710,6 +710,14 @@ fn answer(ask: Ask, store: &Mutex<Store>, policy: Policy) -> (u8, Vec<u8>) {
             }
             reply::save(a)
         }
+        // a fake has no update mode to restart into: it says what maki would do
+        Ask::UpdateMode { label } => {
+            let a = approve(policy, &format!("restart into update mode for {label}?"));
+            if a == Approval::Approved {
+                println!("maki would restart into update mode now, for maki desktop to install {label}");
+            }
+            reply::update_mode(a)
+        }
     }
 }
 

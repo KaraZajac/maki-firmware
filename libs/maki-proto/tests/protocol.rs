@@ -286,6 +286,24 @@ fn verified_device() -> Device<Replay> {
 }
 
 #[test]
+fn update_mode_is_asked_of_the_owner_with_what_the_host_will_install() {
+    let mut d = device();
+    assert_eq!(
+        handled(&mut d, kind::UPDATE_MODE, Writer::new().str8("preview-2026-10-01").finish()),
+        Handled::Ask(Ask::UpdateMode { label: "preview-2026-10-01".into() })
+    );
+    assert!(matches!(
+        handled(&mut d, kind::UPDATE_MODE, Writer::new().str8("new\nfirmware").finish()),
+        Handled::Reply(..)
+    ));
+    assert!(matches!(handled(&mut d, kind::UPDATE_MODE, vec![]), Handled::Reply(..)));
+    assert_eq!(
+        reply::update_mode(Approval::Approved),
+        (kind::UPDATE_MODE | kind::REPLY, vec![Approval::Approved as u8])
+    );
+}
+
+#[test]
 fn login_and_totp_requests_become_asks() {
     let mut d = verified_device();
     assert_eq!(

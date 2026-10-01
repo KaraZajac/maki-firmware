@@ -20,7 +20,7 @@ use std::sync::atomic::Ordering;
 use aes_gcm_siv::aead::{Aead, KeyInit, Payload};
 use aes_gcm_siv::{Aes256GcmSiv, Nonce};
 use maki_keys_api::*;
-use num_traits::FromPrimitive;
+use num_traits::{FromPrimitive, ToPrimitive};
 use pddb::{BasisRetentionPolicy, PDDB_DEFAULT_SYSTEM_BASIS, Pddb};
 use xous_ipc::Buffer;
 use zeroize::Zeroize;
@@ -53,6 +53,8 @@ const APP_DATA: u8 = 4;
 use maki_app_host_api::RESTORED;
 const BACKUP_MAGIC: &[u8; 8] = b"MAKIBAK1";
 const RESTORE_TIMEOUT_S: u32 = maki_launcher::ask_timeout(60);
+/// How long the owner has to say yes to update mode.
+const UPDATE_TIMEOUT_S: u32 = maki_launcher::ask_timeout(60);
 const BACKUP_HEADER: &[u8] = b"maki backup 1\n";
 
 /// A backup's plaintext: each record with the dictionary it came from.
@@ -727,6 +729,14 @@ fn main() -> ! {
     // connections, all made by maki's services as they start, before any app could make one:
     // this is one of them
     let chip = keystore::Keystore::new(&xns);
+    // boot1 waits for new firmware for one start at a time, when maki restarts into update mode
+    // (`UpdateMode`): maki desktop turns that off on boot1's console when it's done, and so does
+    // this, in case it didn't. Nothing changes (or wears the flag's counter) if it's off already.
+    match chip.bootwait(Some(false)) {
+        Ok(true) => log::info!("boot1 was still waiting for new firmware at each start: not any more"),
+        Ok(false) => {}
+        Err(e) => log::error!("couldn't check boot1's bootwait flag: {:?}", e),
+    }
     // the release build binds the storage key to the chip's collateral; without that (maki's boot
     // updater isn't there, or other firmware erased it) the storage can't be opened, and waiting
     // for the PDDB would be waiting for good
@@ -778,6 +788,91 @@ fn main() -> ! {
             tries_known = None;
         }
         match op {
+            Some(KeysOp::UpdateMode) => {
+                let Some(mem) = msg.body.memory_message_mut() else { continue };
+                let mut buffer = unsafe { Buffer::from_memory_message_mut(mem) };
+                let Ok(mut req) = buffer.to_original::<UpdateModeRequest, _>() else { continue };
+                if state != State::Unlocked {
+                    req.result = RESULT_NOT_NOW;
+                    buffer.replace(req).ok();
+                    continue;
+                }
+                drop(buffer);
+                // the owner decides on a thread, so status keeps being answered
+                let label: String = req.label.chars().filter(|c| !c.is_control()).take(64).collect();
+                std::thread::spawn(move || {
+                    let mut msg = msg;
+                    let xns = xous_names::XousNames::new().unwrap();
+                    let page = maki_launcher::Page {
+                        heading: "Update".into(),
+                        value: if label.is_empty() { "from maki desktop".into() } else { label },
+                        mono: String::new(),
+                        prose: "maki restarts so maki desktop can put it on. Your PIN, phrase, apps \
+                                and data stay."
+                            .into(),
+                    };
+                    let result = match maki_launcher::Launcher::new(&xns).map(|l| {
+                        l.review(
+                            "maki desktop",
+                            "Update maki?",
+                            "it restarts to take it",
+                            vec![page],
+                            "restart",
+                            "cancel",
+                            UPDATE_TIMEOUT_S,
+                        )
+                    }) {
+                        Ok(Ok(maki_launcher::Answer::Allowed(_))) => RESULT_OK,
+                        Ok(Ok(maki_launcher::Answer::Denied)) => RESULT_DENIED,
+                        Ok(Ok(maki_launcher::Answer::TimedOut)) => RESULT_TIMED_OUT,
+                        _ => RESULT_FAILED,
+                    };
+                    log::info!("update mode: {}", result);
+                    if let Some(mem) = msg.body.memory_message_mut() {
+                        let mut buffer = unsafe { Buffer::from_memory_message_mut(mem) };
+                        if let Ok(mut req) = buffer.to_original::<UpdateModeRequest, _>() {
+                            req.result = result;
+                            buffer.replace(req).ok();
+                        }
+                    }
+                    // the answer goes back to maki-link first, then the restart
+                    drop(msg);
+                    if result == RESULT_OK {
+                        if let Ok(me) = xous::connect(sid) {
+                            xous::send_message(
+                                me,
+                                xous::Message::new_scalar(
+                                    KeysOp::EnterUpdateMode.to_usize().unwrap(),
+                                    0,
+                                    0,
+                                    0,
+                                    0,
+                                ),
+                            )
+                            .ok();
+                        }
+                    }
+                });
+            }
+            // only from this process, once the owner said yes to `UpdateMode`
+            Some(KeysOp::EnterUpdateMode) if msg.sender.pid() == xous::current_pid().ok() => {
+                if let Err(e) = chip.bootwait(Some(true)) {
+                    log::error!("couldn't set boot1's bootwait flag, so no update mode: {:?}", e);
+                    continue;
+                }
+                store.pddb.sync().ok();
+                // a moment for maki-link's answer to leave over USB
+                std::thread::sleep(std::time::Duration::from_millis(500));
+                log::info!("restarting into update mode, for maki desktop");
+                match susres::Susres::new_without_hook(&xns) {
+                    Ok(s) => {
+                        if let Err(e) = s.reboot(true) {
+                            log::error!("couldn't restart: {:?}", e);
+                        }
+                    }
+                    Err(e) => log::error!("couldn't reach susres to restart: {:?}", e),
+                }
+            }
             Some(KeysOp::DeviceName) => {
                 let name = name_known.get_or_insert_with(|| store.name());
                 let bytes = &name.as_bytes()[..name.len().min(maki_proto::names::MAX_NAME)];
