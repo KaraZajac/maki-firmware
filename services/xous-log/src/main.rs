@@ -84,14 +84,17 @@ fn reader_thread(arg: usize) {
                         } else {
                             "UNKNOWN"
                         };
+                        // maki: a malformed record is dropped; `return` ended the logger for
+                        // good, and a native app (untrusted, but connected to the log) could
+                        // send one
                         if lr.file_length as usize > lr.file.len() {
-                            return;
+                            continue;
                         }
                         if lr.args_length as usize > lr.args.len() {
-                            return;
+                            continue;
                         }
                         if lr.module_length as usize > lr.module.len() {
-                            return;
+                            continue;
                         }
 
                         let file_slice = &lr.file[0..lr.file_length as usize];
@@ -219,7 +222,9 @@ fn reader_thread(arg: usize) {
                         for (dest, src) in output_iter.zip(input_iter) {
                             *dest = *src;
                         }
-                        let total_chars = scalar.id - 1100;
+                        // maki: no more than the four arguments carried (an id up to 1132 asked
+                        // for 32 of their 16 bytes, and slicing past them panicked the logger)
+                        let total_chars = (scalar.id - 1100).min(output_bfr.len());
                         for (idx, c) in output_bfr.iter().enumerate() {
                             if idx >= total_chars {
                                 break;
