@@ -872,7 +872,12 @@ pub(crate) fn main_hw() -> ! {
                 // the logger API is "best effort" only. Because retries and response codes can cause problems
                 // in the logger API, if anything goes wrong, we prefer to discard characters rather than get
                 // the whole subsystem stuck in some awful recursive error handling hell.
-                if let Some(mem_msg) = msg.body.memory_message() {
+                // maki: the serial port is maki-link's. The log goes onto it only while this service
+                // hooked the console itself (SerialHookConsole, which maki's own services never ask
+                // for): a native app keeps a connection to the log server, and could otherwise have
+                // it mirror maki's log into the link
+                let hooked_here = matches!(serial_listen_mode, SerialListenMode::ConsoleListener);
+                if let (true, Some(mem_msg)) = (hooked_here, msg.body.memory_message()) {
                     let buffer = unsafe { Buffer::from_memory_message(mem_msg) };
                     match buffer.to_original::<api::UsbString, _>() {
                         Ok(usb_send) => {
