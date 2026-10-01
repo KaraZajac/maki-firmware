@@ -525,6 +525,10 @@ fn main() -> ! {
     log_server::init_wait().unwrap();
     log::set_max_level(log::LevelFilter::Info);
     log::info!("maki app host PID is {}", xous::process::id());
+    // built with MAKI_TRACE_WASM: how long each step of checking and starting an app takes
+    if option_env!("MAKI_TRACE_WASM").is_some() {
+        maki_wasm::CLOCK.set(|| tt().elapsed_ms()).ok();
+    }
     // Xous starts a process with 512 KiB of heap at most. Apps' memory is the app host's heap:
     // an app's (up to MAX_MEMORY_KIB), one being checked to install beside it, and their
     // compiled code don't fit in that. The swapper pages it like any other, and it's only taken

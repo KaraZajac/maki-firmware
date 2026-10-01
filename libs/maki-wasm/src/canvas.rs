@@ -10,7 +10,7 @@ pub const HEIGHT: usize = 110;
 pub const TOP: usize = 18;
 const WORDS: usize = WIDTH / 32;
 /// Coordinates are clamped to this far off the canvas, which bounds a line's length.
-const REACH: i32 = 1024;
+pub(crate) const REACH: i32 = 1024;
 /// Most characters one `text` call draws.
 const MAX_CHARS: usize = 256;
 /// Largest bitmap `blit` takes, each way.

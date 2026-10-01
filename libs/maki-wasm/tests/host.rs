@@ -513,6 +513,30 @@ fn storage_keeps_values_within_the_quota() {
 }
 
 #[test]
+fn an_app_keeps_as_many_keys_as_its_storage_allows() {
+    // 1 KiB: the 16 keys at least. Each set is a new key, then one already there
+    let wat = format!(
+        r#"(module {STORAGE}
+          (data (i32.const 0) "k")
+          (func (export "maki_main") (local $i i32)
+            (loop $more
+              (i32.store8 (i32.const 1) (i32.add (i32.const 97) (local.get $i)))
+              (call $say (call $set (i32.const 0) (i32.const 2) (i32.const 0) (i32.const 1)))
+              (local.set $i (i32.add (local.get $i) (i32.const 1)))
+              (br_if $more (i32.lt_u (local.get $i) (i32.const 17))))
+            (i32.store8 (i32.const 1) (i32.const 97))
+            (call $say (call $set (i32.const 0) (i32.const 2) (i32.const 0) (i32.const 2)))))"#
+    );
+    let (stop, r) = run_with(&wat, &[], LIMITS);
+    assert_eq!(stop, Stop::Finished);
+    let mut expected = vec![code(0); 16];
+    expected.push(code(FULL)); // the 17th key
+    expected.push(code(0)); // a key it has
+    assert_eq!(r.logs, expected);
+    assert_eq!(r.storage.len(), 16);
+}
+
+#[test]
 fn the_quota_counts_what_was_stored_before() {
     let wat = format!(
         r#"(module {STORAGE}
@@ -539,11 +563,13 @@ fn menus_are_checked() {
       (data (i32.const 200) "one\n\nthree")
       (func (export "maki_main")
         (if (i32.eqz (call $menu (i32.const 0) (i32.const 16))) (then (call $log (i32.const 100) (i32.const 4))))
-        (if (i32.eq (call $menu (i32.const 200) (i32.const 10)) (i32.const -3)) (then (call $log (i32.const 104) (i32.const 3))))))
+        (if (i32.eq (call $menu (i32.const 200) (i32.const 10)) (i32.const -3)) (then (call $log (i32.const 104) (i32.const 3))))
+        ;; more than six items of 24 bytes could take: too big, not a trap
+        (if (i32.eq (call $menu (i32.const 0) (i32.const 1000)) (i32.const -4)) (then (call $log (i32.const 100) (i32.const 4))))))
     "#;
     let (stop, r) = run_with(wat, &[], LIMITS);
     assert_eq!(stop, Stop::Finished);
-    assert_eq!(r.logs, ["fine", "bad"]);
+    assert_eq!(r.logs, ["fine", "bad", "fine"]);
     assert_eq!(r.menu, ["Roll again", "Reset"]);
 }
 
@@ -607,6 +633,28 @@ fn text_width_matches_what_text_draws() {
     }
     // unknown characters draw as the replacement character, not nothing
     assert!(Canvas::text_width("\u{e000}", Style::Regular) > 0);
+}
+
+#[test]
+fn long_text_is_drawn_as_far_as_it_goes() {
+    // 4 KiB of text: the first KiB drawn (far past the screen's edge), and the app goes on
+    let wat = r#"
+    (module
+      (import "maki" "text" (func $text (param i32 i32 i32 i32 i32 i32) (result i32)))
+      (import "maki" "text_width" (func $width (param i32 i32 i32) (result i32)))
+      (import "maki" "log" (func $log (param i32 i32)))
+      (memory (export "memory") 1)
+      (data (i32.const 8192) "drawn")
+      (func (export "maki_main")
+        (memory.fill (i32.const 0) (i32.const 65) (i32.const 4096))
+        (if (i32.and
+              (i32.gt_s (call $text (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 4096) (i32.const 0) (i32.const 1)) (i32.const 128))
+              (i32.gt_s (call $width (i32.const 0) (i32.const 4096) (i32.const 0)) (i32.const 128)))
+          (then (call $log (i32.const 8192) (i32.const 5))))))
+    "#;
+    let (stop, r) = run_with(wat, &[], LIMITS);
+    assert_eq!(stop, Stop::Finished);
+    assert_eq!(r.logs, ["drawn"]);
 }
 
 #[test]
@@ -1636,4 +1684,63 @@ fn ed25519_wallets_came_with_host_api_6() {
         "{err}"
     );
     admit(&manifest(6), &code).unwrap();
+}
+
+#[test]
+fn an_app_drawing_qr_codes_without_waiting_is_stopped() {
+    // each QR code costs it as much fuel as maki's time on it: two at most, on this fuel
+    let wat = r#"
+    (module
+      (import "maki" "qr" (func $qr (param i32 i32 i32 i32 i32) (result i32)))
+      (import "maki" "log" (func $log (param i32 i32)))
+      (memory (export "memory") 1)
+      (data (i32.const 0) "drawn")
+      (func (export "maki_main")
+        (loop $again
+          (drop (call $qr (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 100) (i32.const 100)))
+          (call $log (i32.const 0) (i32.const 5))
+          (br $again))))
+    "#;
+    let (stop, r) = run_with(wat, &[], LIMITS);
+    assert_eq!(stop, Stop::NotResponding);
+    assert!(r.logs.len() <= 2, "{} drawn", r.logs.len());
+}
+
+/// What maki's work on an app's behalf costs, against wasmi's time for a unit of fuel: the rates
+/// `charge` uses in the host functions should cover these.
+#[test]
+#[ignore]
+fn host_work_costs() {
+    use std::time::Instant;
+    let fuel = 200_000_000u64;
+    let wat = r#"(module (memory (export "memory") 1)
+      (func (export "maki_main") (local $i i32)
+        (loop $l (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $l))))"#;
+    let t = Instant::now();
+    let (stop, _) = run_with(wat, &[], Limits { fuel, ..LIMITS });
+    assert_eq!(stop, Stop::NotResponding);
+    let per_fuel = t.elapsed().as_nanos() as f64 / fuel as f64;
+    println!("{per_fuel:.3} ns per unit of fuel");
+    let mut c = Canvas::default();
+    let mut cost = |name: &str, n: u32, f: &mut dyn FnMut(&mut Canvas)| {
+        let t = Instant::now();
+        for _ in 0..n {
+            f(&mut c);
+        }
+        println!("{name}: {:.0} fuel", t.elapsed().as_nanos() as f64 / n as f64 / per_fuel);
+    };
+    cost("qr, 1 byte", 200, &mut |c| drop(c.qr(0, 0, b"x", 100)));
+    cost("qr, 100 bytes", 200, &mut |c| drop(c.qr(0, 0, &[b'x'; 100], 120)));
+    cost("qr, MAX_QR bytes", 50, &mut |c| drop(c.qr(0, 0, &[b'x'; maki_wasm::MAX_QR], 128)));
+    cost("text, 20 characters", 20_000, &mut |c| {
+        drop(c.text(0, 0, "Hello maki, it's me!", Style::Regular, Color::Light))
+    });
+    let long = "A".repeat(1024);
+    cost("text, 1024 characters", 2_000, &mut |c| drop(c.text(0, 0, &long, Style::Bold, Color::Light)));
+    cost("rect, the screen", 20_000, &mut |c| c.rect(0, 0, 128, 128, Color::Light, true));
+    cost("line, longest", 20_000, &mut |c| c.line(-1024, -1024, 1024, 1024, Color::Light));
+    let rows = vec![0x55u8; (maki_wasm::MAX_BLIT as usize + 7) / 8 * maki_wasm::MAX_BLIT as usize];
+    cost("blit, biggest", 2_000, &mut |c| {
+        c.blit(0, 0, maki_wasm::MAX_BLIT, maki_wasm::MAX_BLIT, &rows, Color::Light)
+    });
 }

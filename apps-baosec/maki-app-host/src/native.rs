@@ -287,8 +287,20 @@ fn lent(session: &mut Session, id: usize, request: &[u8], last_log: &mut String)
     };
     match id {
         service::PRESENT => {
+            // the frame's size, as maki-native keeps to, and a few QR codes in it: maki draws it
+            // on its own time, where a WebAssembly app's drawing costs it fuel
+            if request.len() > maki_native::draw::MAX_FRAME {
+                return (maki_wasm::TOO_BIG, vec![]);
+            }
+            let mut qr_codes = 0;
             for op in maki_native::draw::read(request) {
                 let Ok(op) = op else { break };
+                if matches!(op, maki_native::draw::Draw::Qr { .. }) {
+                    qr_codes += 1;
+                    if qr_codes > MAX_QR_CODES {
+                        continue;
+                    }
+                }
                 draw(session, op);
             }
             session.present();
@@ -522,6 +534,10 @@ fn lent(session: &mut Session, id: usize, request: &[u8], last_log: &mut String)
         _ => (maki_wasm::INVALID, vec![]),
     }
 }
+
+/// The most QR codes drawn in a native app's frame: each costs maki milliseconds, and no more
+/// than a few fit the screen.
+const MAX_QR_CODES: usize = 4;
 
 /// One of a frame's operations, on the app's canvas: those that don't make sense are skipped.
 fn draw(session: &mut Session, op: maki_native::draw::Draw) {

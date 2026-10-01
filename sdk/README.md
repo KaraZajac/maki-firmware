@@ -301,7 +301,9 @@ Exit. An app can't draw over maki's bar.
   `Some(0)` now and then in long loops.
 - Memory: what the manifest asks for, 1 MiB at most. The stack lives in it: `maki build`
   gives apps 16 KiB rather than the linker's 1 MiB (building with cargo yourself, pass
-  `-C link-arg=-zstack-size=16384`, as `.cargo/config.toml` here does). Storage: 256 KiB at most.
+  `-C link-arg=-zstack-size=16384`, as `.cargo/config.toml` here does). Storage: 256 KiB at most,
+  counting keys' names and values, in as many keys as one for each 128 bytes of it (16 at least:
+  maki's storage spends more than a hundred bytes on each key besides its value).
 - Only `maki` functions can be imported (no WASI), and there's no start function: the build
   `maki build` makes is what maki takes, and `maki inspect` says whether it would.
 - Updates must be signed with the same developer key and have a higher version. Lose the key

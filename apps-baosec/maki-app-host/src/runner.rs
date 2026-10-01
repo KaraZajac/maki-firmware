@@ -1026,34 +1026,43 @@ fn run(ctx: &Rc<Ctx>, slot: usize, message: Option<(xous::MessageEnvelope, Vec<u
         }
         return None;
     }
-    let (Some(record), Some(bytes)) = (ctx.store.record(&info.id), ctx.store.bundle(&info.id)) else {
+    let gone = |refuse: &mut dyn FnMut(u32)| {
         refuse(maki_app_host_api::RESULT_NO_APP);
         if !headless {
             stopped(ctx, &info.name, true, "it isn't installed any more");
             wait_to_leave(ctx, slot);
         }
+    };
+    let Some(record) = ctx.store.record(&info.id) else {
+        gone(&mut refuse);
         return None;
     };
-    // checked when it was installed: a WebAssembly app compiled once a session and kept for
-    // the next time; a native app's ELF checked again, to be loaded into a process of its own
+    // checked when it was installed: a WebAssembly app compiled once a session (lazily, each
+    // function when it's first called: all of it was validated at install) and kept, with its
+    // manifest, for the next time, which then reads nothing of its bundle; a native app's ELF
+    // checked again, to be loaded into a process of its own
     let started = crate::tt().elapsed_ms();
-    let loaded = maki_bundle::read_stored(&bytes).map_err(|e| e.to_string()).and_then(|b| {
-        if b.manifest.kind == maki_bundle::Kind::Native {
-            let limits = crate::native::admit(&b.manifest, b.code)?;
-            return Ok((b.manifest.clone(), Code::Native(b.code.to_vec(), limits)));
-        }
-        let app = match ctx.kept(&info.id, b.manifest.version) {
-            Some(app) => app,
-            None => {
-                let app = Arc::new(maki_wasm::load(&b.manifest, b.code)?);
+    let kept =
+        ctx.kept(&info.id, record.version).and_then(|app| Some((app.manifest.clone()?, Code::Wasm(app))));
+    let loaded = match kept {
+        Some(kept) => Ok(kept),
+        None => {
+            let Some(bytes) = ctx.store.bundle(&info.id) else {
+                gone(&mut refuse);
+                return None;
+            };
+            maki_bundle::read_stored(&bytes).map_err(|e| e.to_string()).and_then(|b| {
+                if b.manifest.kind == maki_bundle::Kind::Native {
+                    let limits = crate::native::admit(&b.manifest, b.code)?;
+                    return Ok((b.manifest.clone(), Code::Native(b.code.to_vec(), limits)));
+                }
+                let app = Arc::new(maki_wasm::load_installed(&b.manifest, b.code)?);
                 ctx.keep(info.id.clone(), b.manifest.version, app.clone());
-                app
-            }
-        };
-        Ok((b.manifest, Code::Wasm(app)))
-    });
-    // what's needed of the bundle is in `loaded`: the rest isn't kept through the app's run
-    drop(bytes);
+                Ok((b.manifest, Code::Wasm(app)))
+            })
+            // what's needed of the bundle is in `loaded`: the rest isn't kept through the run
+        }
+    };
     let (manifest, code) = match loaded {
         Ok(ok) => ok,
         Err(why) => {

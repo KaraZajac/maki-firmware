@@ -448,6 +448,8 @@ pub mod storage {
         result(n).ok().map(|n| n as usize)
     }
 
+    /// `Error::Full` past the app's storage: its names and values together, in as many keys
+    /// as one for each 128 bytes of it (16 at least).
     pub fn set(key: &str, value: &[u8]) -> Result<(), Error> {
         result(unsafe { sys::storage_set(key.as_ptr(), key.len(), value.as_ptr(), value.len()) }).map(|_| ())
     }

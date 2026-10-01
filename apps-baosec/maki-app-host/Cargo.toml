@@ -26,7 +26,8 @@ maki-hd = { path = "../../libs/maki-hd" }
 zeroize = { version = "1.8.1", features = ["alloc"] }
 maki-bundle = { path = "../../libs/maki-bundle" }
 maki-store = { path = "../../libs/maki-store" }
-maki-wasm = { path = "../../libs/maki-wasm" }
+# its steps timed in the log, if built with MAKI_TRACE_WASM
+maki-wasm = { path = "../../libs/maki-wasm", features = ["trace"] }
 # native apps: their ELF checked, the loader's stub, the app service's protocol
 maki-native = { path = "../../libs/maki-native" }
 maki-app-host-api = { path = "../../libs/maki-app-host-api" }

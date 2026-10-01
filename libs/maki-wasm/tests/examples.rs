@@ -201,7 +201,10 @@ fn run_answering(
         answers: answers.iter().copied().collect(),
         ..Default::default()
     }));
-    let stop = run(bundle.code, Box::new(Script(record.clone())), limits);
+    // as maki opens an installed app: lazily, each function compiled when it's first called
+    let mut loaded = load_installed(&bundle.manifest, bundle.code).unwrap();
+    loaded.limits = limits;
+    let stop = loaded.run(Box::new(Script(record.clone())));
     (stop, Rc::try_unwrap(record).ok().unwrap().into_inner())
 }
 
@@ -211,7 +214,10 @@ fn run_record(name: &str, record: Record) -> (Stop, Record) {
     let bundle = maki_bundle::read(&bytes).unwrap();
     let limits = admit(&bundle.manifest, bundle.code).unwrap();
     let record = Rc::new(RefCell::new(record));
-    let stop = run(bundle.code, Box::new(Script(record.clone())), limits);
+    // as maki opens an installed app: lazily, each function compiled when it's first called
+    let mut loaded = load_installed(&bundle.manifest, bundle.code).unwrap();
+    loaded.limits = limits;
+    let stop = loaded.run(Box::new(Script(record.clone())));
     (stop, Rc::try_unwrap(record).ok().unwrap().into_inner())
 }
 

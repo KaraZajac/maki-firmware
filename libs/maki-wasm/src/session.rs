@@ -117,6 +117,9 @@ impl Session {
         if used - old + key.len() + value.len() > quota {
             return FULL;
         }
+        if !sizes.contains_key(key) && sizes.len() >= (quota / crate::BYTES_PER_KEY).max(crate::MIN_KEYS) {
+            return FULL;
+        }
         if self.platform.storage_set(key, value).is_err() {
             return FAILED;
         }

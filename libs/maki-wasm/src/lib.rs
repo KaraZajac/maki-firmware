@@ -19,8 +19,13 @@ pub use canvas::{Canvas, Color, HEIGHT, MAX_BLIT, Style, TOP, WIDTH};
 use maki_bundle::{Kind, Manifest, Permission};
 pub use session::{REFUSED, Session};
 use wasmi::{
-    Caller, Config, Engine, Error, Extern, Linker, Memory, Module, Store, StoreLimits, StoreLimitsBuilder,
+    Caller, CompilationMode, Config, Engine, Error, Extern, Linker, Memory, Module, Store, StoreLimits,
+    StoreLimitsBuilder,
 };
+
+/// The most elements an app's table may have: a Rust app's table of functions called through
+/// pointers holds a few hundred.
+const MAX_TABLE_ELEMENTS: usize = 10_000;
 
 /// The functions this host offers apps.
 pub const API_VERSION: u16 = 8;
@@ -81,6 +86,11 @@ pub const LOCKED: i32 = -7;
 pub const MAX_KEY: usize = 48;
 /// Largest stored value.
 pub const MAX_VALUE: usize = 16 * 1024;
+/// The most keys an app may keep: one for each this many bytes of its storage, and
+/// `MIN_KEYS` at least. maki's storage spends 127 bytes on each key besides its value, which
+/// the quota doesn't count, so without a cap an app could fill maki's storage with empty keys.
+pub const BYTES_PER_KEY: usize = 128;
+pub const MIN_KEYS: usize = 16;
 /// An app's own menu items, before App info and Exit.
 pub const MAX_MENU_ITEMS: usize = 6;
 pub const MAX_MENU_ITEM: usize = 24;
@@ -456,13 +466,34 @@ fn limits(manifest: &Manifest) -> Result<Limits, String> {
 pub struct Loaded {
     engine: Engine,
     module: Module,
+    /// maki's functions, linked once for each time the app runs
+    linker: std::sync::Arc<Linker<State>>,
+    /// Its manifest, when it was loaded from one (`load`, `load_installed`): kept with the code,
+    /// so opening it again needs nothing more from its bundle.
+    pub manifest: Option<Manifest>,
     pub limits: Limits,
     /// The wallet permission's paths, from the manifest.
     pub wallet: Option<maki_bundle::Wallet>,
 }
 
-/// What `admit` checks, keeping the compiled code to run.
+/// What `admit` checks, keeping the compiled code to run: all of it validated, and the app
+/// started once (on nothing) to see that it starts.
 pub fn load(manifest: &Manifest, code: &[u8]) -> Result<Loaded, String> {
+    let loaded = prepare(manifest, code, CompilationMode::LazyTranslation)?;
+    instantiate(&loaded, Box::new(Nothing))?;
+    Ok(loaded)
+}
+
+/// An app `load` took when it was installed, to open now: the same checks of what it calls, but
+/// each function validated and compiled only when it's first called, and no trial start. maki
+/// keeps the bundle in its encrypted storage, so this is the code `load` checked; and a function
+/// that didn't validate would stop the app when called rather than run. On maki this takes a
+/// cold start from seconds to a fraction of one.
+pub fn load_installed(manifest: &Manifest, code: &[u8]) -> Result<Loaded, String> {
+    prepare(manifest, code, CompilationMode::Lazy)
+}
+
+fn prepare(manifest: &Manifest, code: &[u8], mode: CompilationMode) -> Result<Loaded, String> {
     if manifest.kind != Kind::Wasm {
         return Err("it's a native app: maki runs those in a process of their own".into());
     }
@@ -473,7 +504,7 @@ pub fn load(manifest: &Manifest, code: &[u8]) -> Result<Loaded, String> {
         ));
     }
     let limits = limits(manifest)?;
-    let loaded = compile(code, limits)?;
+    let loaded = compile(code, limits, mode)?;
     // what it calls: nothing newer than the API its manifest says, so an older maki can say why
     for import in loaded.module.imports() {
         if let Some((name, since)) = SINCE.iter().find(|(n, _)| *n == import.name()) {
@@ -485,8 +516,7 @@ pub fn load(manifest: &Manifest, code: &[u8]) -> Result<Loaded, String> {
             }
         }
     }
-    instantiate(&loaded, Box::new(Nothing))?;
-    Ok(Loaded { wallet: manifest.wallet.clone(), ..loaded })
+    Ok(Loaded { wallet: manifest.wallet.clone(), manifest: Some(manifest.clone()), ..loaded })
 }
 
 impl Loaded {
@@ -524,17 +554,57 @@ struct State {
     aborted: Option<String>,
 }
 
-fn engine() -> Engine {
+fn engine(mode: CompilationMode) -> Engine {
     let mut config = Config::default();
     config
+        .compilation_mode(mode)
         .consume_fuel(true)
         .allow_start_fn(false)
         .set_max_recursion_depth(512)
-        .set_max_stack_height(256 * 1024);
+        .set_max_stack_height(256 * 1024)
+        // wasmi's limits for modules from anyone: compiling a module is done before its owner
+        // is asked, and with none, a bundle of a hundred thousand tiny functions had wasmi
+        // allocate more than the app host's heap holds, which aborted it. Compiled Rust apps
+        // stay far inside these (their functions average hundreds of bytes)
+        .enforced_limits(wasmi::EnforcedLimits::strict());
     Engine::new(&config)
 }
 
 fn trap(what: impl core::fmt::Display) -> Error { Error::new(format!("{what}")) }
+
+/// Charges the app fuel for maki's work on its behalf, as if it had done that work itself. A call
+/// costs the app a few units of fuel, while a QR code costs maki as much time as millions: an app
+/// calling it in a loop, never waiting, would keep maki busy for hours (Exit included, which an
+/// app hears only when it waits) before it was stopped as not responding. The rates are measured
+/// (`cargo test --release -- --ignored host_work_costs`): wasmi spends about a nanosecond on a
+/// unit of fuel, and the host's work is charged at the same rate.
+fn charge(c: &mut Caller<'_, State>, fuel: u64) -> Result<(), Error> {
+    let left = c.get_fuel()?;
+    c.set_fuel(left.saturating_sub(fuel))
+}
+
+/// Fuel for a line, by its longest side as the canvas draws it (clamped to its reach).
+fn line_fuel(x0: i32, y0: i32, x1: i32, y1: i32) -> u64 {
+    let r = |v: i32| v.clamp(-canvas::REACH, canvas::REACH) as i64;
+    3 * (r(x1) - r(x0)).abs().max((r(y1) - r(y0)).abs()) as u64
+}
+
+/// Fuel for a rectangle: the pixels of it on the screen.
+fn rect_fuel(x: i32, y: i32, w: i32, h: i32) -> u64 {
+    let on = |a: i32, n: i32, max: usize| (a.saturating_add(n).min(max as i32) - a.max(0)).max(0) as u64;
+    on(x, w, WIDTH) * on(y, h, HEIGHT)
+}
+
+/// Fuel for text, by its characters.
+const TEXT_FUEL: u64 = 300;
+/// Fuel for a bitmap, by its pixels.
+const BLIT_FUEL: u64 = 10;
+/// Fuel for a QR code, and by each byte of its data.
+const QR_FUEL: u64 = 300_000;
+const QR_BYTE_FUEL: u64 = 7_000;
+/// Fuel for showing a frame: maki's screen takes milliseconds over it. An app that shows frames
+/// in a loop without waiting (`loop { draw(); present(); }`) is stopped after a thousand or so.
+const PRESENT_FUEL: u64 = 100_000;
 
 fn memory(caller: &Caller<'_, State>) -> Result<Memory, Error> {
     caller.data().memory.ok_or_else(|| trap("no memory"))
@@ -635,6 +705,7 @@ fn link(linker: &mut Linker<State>) -> Result<(), Error> {
         "line",
         |mut c: Caller<'_, State>, x0: i32, y0: i32, x1: i32, y1: i32, col: i32| -> Result<(), Error> {
             let col = color(col)?;
+            charge(&mut c, line_fuel(x0, y0, x1, y1))?;
             c.data_mut().session.canvas.line(x0, y0, x1, y1, col);
             Ok(())
         },
@@ -651,6 +722,7 @@ fn link(linker: &mut Linker<State>) -> Result<(), Error> {
          filled: i32|
          -> Result<(), Error> {
             let col = color(col)?;
+            charge(&mut c, rect_fuel(x, y, w, h))?;
             c.data_mut().session.canvas.rect(x, y, w, h, col, filled != 0);
             Ok(())
         },
@@ -667,7 +739,9 @@ fn link(linker: &mut Linker<State>) -> Result<(), Error> {
          col: i32|
          -> Result<i32, Error> {
             let (sty, col) = (style(sty)?, color(col)?);
-            let s = read_str(&c, ptr, len, MAX_TEXT, "text")?;
+            // the first MAX_TEXT bytes: more is far past the screen's edge
+            let s = read_str(&c, ptr, len.min(MAX_TEXT as i32), MAX_TEXT, "text")?;
+            charge(&mut c, TEXT_FUEL * s.chars().count() as u64)?;
             Ok(c.data_mut().session.canvas.text(x, y, &s, sty, col))
         },
     )?;
@@ -676,7 +750,7 @@ fn link(linker: &mut Linker<State>) -> Result<(), Error> {
         "text_width",
         |c: Caller<'_, State>, ptr: i32, len: i32, sty: i32| -> Result<i32, Error> {
             let sty = style(sty)?;
-            let s = read_str(&c, ptr, len, MAX_TEXT, "text_width")?;
+            let s = read_str(&c, ptr, len.min(MAX_TEXT as i32), MAX_TEXT, "text_width")?;
             Ok(Canvas::text_width(&s, sty))
         },
     )?;
@@ -692,6 +766,7 @@ fn link(linker: &mut Linker<State>) -> Result<(), Error> {
                 return Err(trap(format_args!("blit: {w}x{h} is bigger than {MAX_BLIT}x{MAX_BLIT}")));
             }
             let rows = read(&c, ptr, (w + 7) / 8 * h, usize::MAX, "blit")?;
+            charge(&mut c, BLIT_FUEL * (w * h) as u64)?;
             c.data_mut().session.canvas.blit(x, y, w, h, &rows, col);
             Ok(())
         },
@@ -701,10 +776,15 @@ fn link(linker: &mut Linker<State>) -> Result<(), Error> {
         "qr",
         |mut c: Caller<'_, State>, x: i32, y: i32, ptr: i32, len: i32, size: i32| -> Result<i32, Error> {
             let data = read(&c, ptr, len, MAX_QR, "qr")?;
+            charge(&mut c, QR_FUEL + QR_BYTE_FUEL * data.len() as u64)?;
             Ok(c.data_mut().session.canvas.qr(x, y, &data, size).unwrap_or(TOO_BIG))
         },
     )?;
-    linker.func_wrap(M, "present", |mut c: Caller<'_, State>| c.data_mut().session.present())?;
+    linker.func_wrap(M, "present", |mut c: Caller<'_, State>| -> Result<(), Error> {
+        charge(&mut c, PRESENT_FUEL)?;
+        c.data_mut().session.present();
+        Ok(())
+    })?;
     linker.func_wrap(M, "wait", |mut c: Caller<'_, State>, timeout_ms: i32| -> Result<i32, Error> {
         let st = c.data_mut();
         let Some(event) = st.session.wait(timeout_ms) else {
@@ -716,6 +796,9 @@ fn link(linker: &mut Linker<State>) -> Result<(), Error> {
         Ok(event)
     })?;
     linker.func_wrap(M, "menu", |mut c: Caller<'_, State>, ptr: i32, len: i32| -> Result<i32, Error> {
+        if len as u32 as usize > MENU_TEXT {
+            return Ok(TOO_BIG);
+        }
         let s = read_str(&c, ptr, len, MENU_TEXT, "menu")?;
         Ok(c.data_mut().session.menu(&s))
     })?;
@@ -795,6 +878,9 @@ fn link(linker: &mut Linker<State>) -> Result<(), Error> {
         "ask",
         |mut c: Caller<'_, State>, ptr: i32, len: i32, timeout_s: i32| -> Result<i32, Error> {
             permitted(&c, Permission::Ask, "ask")?;
+            if len as u32 as usize > ASK_TEXT {
+                return Ok(TOO_BIG);
+            }
             let text = read_str(&c, ptr, len, ASK_TEXT, "ask")?;
             let answer = c.data_mut().session.ask(&text, timeout_s);
             // the owner's time isn't the app's work
@@ -1210,7 +1296,8 @@ impl Platform for Nothing {
     fn storage_keys(&mut self) -> Vec<String> { vec![] }
 }
 
-/// With the `trace` feature, a clock (milliseconds) to time each step of loading an app with.
+/// With the `trace` feature, a clock (milliseconds) to time each step of loading an app with:
+/// once it's set, each step's time is logged.
 #[cfg(feature = "trace")]
 pub static CLOCK: std::sync::OnceLock<fn() -> u64> = std::sync::OnceLock::new();
 
@@ -1233,10 +1320,10 @@ fn now() -> u64 {
     0
 }
 
-/// Validates and compiles `code`, which may import only from `maki`.
-fn compile(code: &[u8], limits: Limits) -> Result<Loaded, String> {
+/// Validates and compiles `code`, which may import only from `maki`, and links maki's functions.
+fn compile(code: &[u8], limits: Limits, mode: CompilationMode) -> Result<Loaded, String> {
     let mut t = now();
-    let engine = engine();
+    let engine = engine(mode);
     step("engine", &mut t);
     let module = Module::new(&engine, code).map_err(|e| format!("not WebAssembly maki can run: {e}"))?;
     step("module", &mut t);
@@ -1253,7 +1340,10 @@ fn compile(code: &[u8], limits: Limits) -> Result<Loaded, String> {
             }
         }
     }
-    Ok(Loaded { engine, module, limits, wallet: None })
+    let mut linker = Linker::new(&engine);
+    link(&mut linker).map_err(|e| e.to_string())?;
+    step("link", &mut t);
+    Ok(Loaded { engine, module, linker: std::sync::Arc::new(linker), manifest: None, limits, wallet: None })
 }
 
 /// A fresh instance of a compiled app, linked to maki's functions on `platform`.
@@ -1261,7 +1351,7 @@ fn instantiate(
     loaded: &Loaded,
     platform: Box<dyn Platform>,
 ) -> Result<(Store<State>, wasmi::TypedFunc<(), ()>), String> {
-    let Loaded { engine, module, limits, wallet } = loaded;
+    let Loaded { engine, module, linker, limits, wallet, .. } = loaded;
     let limits = *limits;
     let mut t = now();
     let mut session = Session::new(platform, limits);
@@ -1271,6 +1361,8 @@ fn instantiate(
         memory: None,
         limiter: StoreLimitsBuilder::new()
             .memory_size(limits.memory)
+            // a table's elements aren't the app's memory, so they'd escape its memory's limit
+            .table_elements(MAX_TABLE_ELEMENTS)
             .instances(1)
             .memories(1)
             .tables(4)
@@ -1282,9 +1374,6 @@ fn instantiate(
     store.limiter(|st| &mut st.limiter);
     store.set_fuel(limits.fuel).map_err(|e| e.to_string())?;
     step("store", &mut t);
-    let mut linker = Linker::new(engine);
-    link(&mut linker).map_err(|e| e.to_string())?;
-    step("link", &mut t);
     let instance = linker.instantiate_and_start(&mut store, module).map_err(|e| {
         // the limiter refuses memory beyond the limit
         format!("can't start: {e}")
@@ -1304,13 +1393,13 @@ fn instantiate(
 /// maki's functions with the right types, has no start function, starts within its memory and
 /// exports `memory` and `maki_main`. What's wrong if not, for the owner or developer to read.
 pub fn check(code: &[u8], limits: Limits) -> Result<(), String> {
-    instantiate(&compile(code, limits)?, Box::new(Nothing)).map(|_| ())
+    instantiate(&compile(code, limits, CompilationMode::LazyTranslation)?, Box::new(Nothing)).map(|_| ())
 }
 
 /// Checks, compiles and runs `code` until it stops, and says why it did. (maki itself loads an
 /// app once with `load` and runs the `Loaded` each time it's opened.)
 pub fn run(code: &[u8], platform: Box<dyn Platform>, limits: Limits) -> Stop {
-    match compile(code, limits) {
+    match compile(code, limits, CompilationMode::LazyTranslation) {
         Ok(loaded) => loaded.run(platform),
         Err(e) => Stop::Crashed(e),
     }
