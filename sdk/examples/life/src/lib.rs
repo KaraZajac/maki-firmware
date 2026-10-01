@@ -116,8 +116,9 @@ impl Game {
     fn apply(&mut self, p: usize, kind: Kind, delta: i16) -> i16 {
         match kind {
             Kind::Life => {
-                self.life[p] = (self.life[p] + delta).clamp(-999, 999);
-                delta
+                let was = self.life[p];
+                self.life[p] = (was + delta).clamp(-999, 999);
+                self.life[p] - was
             }
             Kind::Poison => {
                 let was = self.poison[p] as i16;
@@ -651,9 +652,15 @@ fn main() {
                         None if now >= since + IDLE_MS => app.view = View::Table,
                         _ => {}
                     },
-                    Event::Centre | Event::Menu(_) => {
+                    Event::Centre => {
                         app.commit();
                         app.view = View::Table;
+                    }
+                    // an item of the menu, from here too: the table, then the item
+                    Event::Menu(i) => {
+                        app.commit();
+                        app.view = View::Table;
+                        menu_item(&mut app, i, now);
                     }
                     _ => {}
                 }
@@ -663,7 +670,11 @@ fn main() {
                     app.view = View::History { top: (top + 1).min(app.game.changes.saturating_sub(6)) }
                 }
                 Event::Up => app.view = View::History { top: top.saturating_sub(1) },
-                Event::Centre | Event::Left | Event::Right | Event::Menu(_) => app.view = View::Table,
+                Event::Centre | Event::Left | Event::Right => app.view = View::Table,
+                Event::Menu(i) => {
+                    app.view = View::Table;
+                    menu_item(&mut app, i, now);
+                }
                 _ => {}
             },
             View::NewGame { mut set, row } => match event {
@@ -697,7 +708,10 @@ fn main() {
                     app.game.save();
                     app.view = View::Table;
                 }
-                Event::Menu(_) => app.view = View::Table,
+                Event::Menu(i) => {
+                    app.view = View::Table;
+                    menu_item(&mut app, i, now);
+                }
                 _ => {}
             },
             View::Spin { at, steps, next } => match event {

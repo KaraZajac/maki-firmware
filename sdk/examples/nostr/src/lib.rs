@@ -261,7 +261,16 @@ fn answer(msg: &[u8], out: &mut [u8; 97]) -> usize {
                 }
             }
             let mut detail = Buf::<128>::new();
-            let _ = write!(detail, "{site}: ");
+            // the site's end says whose it is: no more of it than leaves what's signed room
+            // (a long name took the whole line, and the owner saw nothing of the note)
+            match site.char_indices().map(|(i, _)| i).find(|&i| site.len() - i <= 45) {
+                Some(cut) if cut > 0 => {
+                    let _ = write!(detail, "...{}: ", &site[cut..]);
+                }
+                _ => {
+                    let _ = write!(detail, "{site}: ");
+                }
+            }
             let room = 120 - detail.len().min(120);
             if content.is_empty() {
                 let _ = detail.write_str("(nothing written)");

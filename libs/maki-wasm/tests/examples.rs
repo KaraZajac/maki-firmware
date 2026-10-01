@@ -471,6 +471,23 @@ fn life_counts_on_the_dial_and_keeps_each_burst_as_one_change() {
 }
 
 #[test]
+fn life_undoes_what_a_change_did_and_its_menu_works_from_any_page() {
+    use Event::*;
+    // a thousand up stops at 999: undone, it's 20 again, not 999 less a thousand
+    let mut events = vec![Up; 1000];
+    events.extend([Timeout, Menu(4)]);
+    let record = Record { events: events.into(), clock: true, ..Default::default() };
+    let (_, r) = run_record("life", record);
+    assert_eq!(life_game(&r.storage).life[0], 20);
+    // undo picked from the history page undoes, as from the table
+    let events = [Down, Down, Down, Down, Down, Timeout, Menu(3), Menu(4)];
+    let record = Record { events: events.into(), clock: true, ..Default::default() };
+    let (_, r) = run_record("life", record);
+    let g = life_game(&r.storage);
+    assert_eq!((g.life[0], g.changes.len()), (20, 0));
+}
+
+#[test]
 fn life_keeps_poison_and_commander_damage_which_takes_life() {
     use Event::*;
     // player 2's counters: poison up 2, then 5 damage from player 1's commander
@@ -528,6 +545,19 @@ fn the_chess_clock_counts_moves_from_when_they_were_made() {
     assert_eq!((sides[1].0, sides[1].1), (300_000 - 4840 + 3000, 1));
     // left's clock ran from the press as made; leaving paused it
     assert_eq!((paused, flag), (Some((0, 160)), None));
+}
+
+#[test]
+fn the_chess_clock_carries_a_turn_on_where_it_was_when_the_app_was_closed() {
+    use Event::*;
+    // right's clock runs 5 s, and the app's closed: paused at 5 s
+    let r = clock_run(BTreeMap::new(), &[(Left, 100)]);
+    assert_eq!(clock_game(&r.storage).1, Some((1, 5000)));
+    // opened again (its clock starts at 0), the turn goes on from 5 s: 5 s more and right moves,
+    // 9.84 s used in all (the press made 160 ms before maki heard it), 3 back
+    let r = clock_run(r.storage, &[(Centre, 100), (Right, 0)]);
+    let (sides, _, _) = clock_game(&r.storage);
+    assert_eq!((sides[1].0, sides[1].1), (300_000 - 9840 + 3000, 1));
 }
 
 #[test]
@@ -681,6 +711,17 @@ fn tamper_log(storage: &BTreeMap<String, Vec<u8>>) -> (bool, Vec<(u8, bool, u32,
     (b[0] != 0, events)
 }
 
+/// Each press entry's count of presses (kind 2), in order, and whether it's yours.
+fn tamper_presses(storage: &BTreeMap<String, Vec<u8>>) -> Vec<(u16, bool)> {
+    let b = &storage["log"];
+    let at = 3 + b[2] as usize + 8 + 1 + 4 + 4 + 4 + 12;
+    b[at + 1..]
+        .chunks_exact(16)
+        .filter(|e| e[0] == 2)
+        .map(|e| (u16::from_le_bytes([e[10], e[11]]), e[1] != 0))
+        .collect()
+}
+
 const TAMPER_CODE: [Event; 5] = [Event::Up, Event::Down, Event::Left, Event::Right, Event::Centre];
 
 /// Arming, as the owner does: the centre, the code twice, 30 s to put it down and 2 still.
@@ -740,10 +781,47 @@ fn the_tamper_log_logs_the_menu_wrong_codes_and_the_app_closed() {
     let (armed, events) = tamper_log(&r.storage);
     assert!(armed, "still armed: the code was locked");
     let kinds: Vec<u8> = events.iter().map(|e| e.0).collect();
-    // the menu (3); presses (2) and wrong (5) three times, the third locking (6); the code's
-    // presses; closed (4)
-    assert_eq!(kinds, [3, 2, 5, 2, 5, 2, 5, 6, 2, 4]);
+    // the menu (3); a wrong try (5) as it's made, its presses (2) once a pause ends them, three
+    // times, the third locking (6); the code's presses, not tried; closed (4)
+    assert_eq!(kinds, [3, 5, 2, 5, 2, 5, 6, 2, 2, 4]);
     assert!(r.dark);
+}
+
+#[test]
+fn the_tamper_log_counts_tries_without_a_pause_too() {
+    use Event::*;
+    // pressing on without ever pausing: each press from the fifth is a try, three lock the code,
+    // and the code pressed straight after isn't taken
+    let mut events = tamper_arming();
+    events.extend([Up; 7]);
+    events.extend(TAMPER_CODE);
+    events.extend([Timeout; 150]);
+    let record =
+        Record { events: events.into(), motion: Some([0, 0, 1000]), clock: true, ..Default::default() };
+    let (_, r) = run_record("tamper", record);
+    let (armed, events) = tamper_log(&r.storage);
+    assert!(armed, "still armed: the code was locked out");
+    let kinds: Vec<u8> = events.iter().map(|e| e.0).collect();
+    assert_eq!(kinds, [5, 5, 5, 6, 2, 4]);
+    assert_eq!(tamper_presses(&r.storage), [(12, false)]);
+}
+
+#[test]
+fn the_tamper_log_takes_the_code_after_a_slip_and_marks_only_it_yours() {
+    use Event::*;
+    // one press too many first, by feel on the dark screen: a wrong try, then the code
+    let mut events = tamper_arming();
+    events.push(Left);
+    events.extend(TAMPER_CODE);
+    let record =
+        Record { events: events.into(), motion: Some([0, 0, 1000]), clock: true, ..Default::default() };
+    let (stop, r) = run_record("tamper", record);
+    assert_eq!(stop, Stop::Finished);
+    let (armed, events) = tamper_log(&r.storage);
+    assert!(!armed, "disarmed");
+    assert_eq!(events.iter().filter(|e| e.0 == 5).count(), 1);
+    // the slip apart from the code (both within the minute before disarming: probably yours)
+    assert_eq!(tamper_presses(&r.storage), [(1, true), (5, true)]);
 }
 
 #[test]

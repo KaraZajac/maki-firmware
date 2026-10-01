@@ -1,7 +1,7 @@
 id = "com.leviathan.maki.tamper"
 name = "Tamper Log"
-version = 1
-label = "1.0"
+version = 2
+label = "1.1"
 api = 8
 storage = 4
 memory = 256

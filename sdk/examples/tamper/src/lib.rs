@@ -7,17 +7,21 @@
 //! Arming: a code of five presses (the dial, left, right, the centre), then 30 seconds to put maki
 //! down, and it arms once it's been still two seconds. A bump (a jolt that's over in under a
 //! second, maki as it was) is only counted; a move is a second or more of it, or a tilt of 3
-//! degrees, and goes on till maki's been still 15 seconds. Three wrong codes lock the code out for
-//! ten minutes. What happened in the minute before you disarmed is marked as probably you. The log
-//! keeps its first 128 events and the last; clearing it, or arming again over it, takes the code.
-//! Moves and presses are timed from arming, and by the clock too when maki knows the time.
+//! degrees, and goes on till maki's been still 15 seconds. From the fifth press on, each press is a
+//! try of the last five, so pressing on without a pause tries no more codes than pausing does:
+//! three wrong tries lock the code out for ten minutes. What happened in the minute before you
+//! disarmed is marked as probably you, and the code's own five presses as yours. The log keeps its
+//! first 128 events and the last; clearing it, or arming again over it, takes the code. Moves and
+//! presses are timed from arming: maki gives apps the time in UTC, which beside maki's own clock
+//! (local) would say the wrong hour.
 
 use std::fmt::Write;
 
 use maki_app::*;
 
-/// The code's length; a gap this long ends a try (pressed by feel on a dark screen: time to find
-/// the next key); tries before the lockout, and how long.
+/// The code's length; a gap this long ends a burst of presses, which the log keeps as one
+/// (pressed by feel on a dark screen: time to find the next key); tries before the lockout, and
+/// how long.
 const CODE_LEN: usize = 5;
 const TRY_GAP_MS: u64 = 5000;
 const TRIES: u32 = 3;
@@ -258,7 +262,8 @@ struct App {
     /// the way down where maki last settled: bumps and moves are from there
     rest: [f32; 3],
     moving: Option<Moving>,
-    burst: Vec<u8>,
+    /// this burst's presses, and when each was
+    burst: Vec<(u8, u64)>,
     burst_start: u64,
     burst_last: u64,
     wrong: u32,
@@ -407,39 +412,61 @@ impl App {
         }
     }
 
-    /// A press, armed: logged, and checked against the code as a try.
+    /// A press, armed: logged, and from the code's length on, a try of the last five presses,
+    /// right or wrong. Locked out, it's only logged.
     fn press(&mut self, key: u8, now: u64) {
         if !self.burst.is_empty() && now.saturating_sub(self.burst_last) > TRY_GAP_MS {
-            self.end_burst(now);
+            self.end_burst();
         }
         if self.burst.is_empty() {
             self.burst_start = now;
         }
-        self.burst.push(key);
+        self.burst.push((key, now));
         self.burst_last = now;
-        let unlocked = now >= self.locked_until;
-        if unlocked
-            && self.burst.len() >= CODE_LEN
-            && self.burst[self.burst.len() - CODE_LEN..] == self.log.code
-        {
-            let (start, n) = (self.burst_start, self.burst.len());
+        if self.burst.len() < CODE_LEN || now < self.locked_until {
+            return;
+        }
+        let tried = &self.burst[self.burst.len() - CODE_LEN..];
+        if tried.iter().map(|&(k, _)| k).eq(self.log.code.iter().copied()) {
+            // the code's presses are yours; any before them in the burst aren't
+            let code_start = tried[0].1;
+            let before = self.burst.len() - CODE_LEN;
+            if before > 0 {
+                self.log.push(Entry {
+                    kind: Kind::Pressed,
+                    yours: false,
+                    at: self.since_arming(self.burst_start),
+                    length: code_start.saturating_sub(self.burst_start) as u32,
+                    peak: before as u16,
+                    tilt: 0,
+                    left: 0,
+                });
+            }
             self.burst.clear();
             self.log.push(Entry {
                 kind: Kind::Pressed,
                 yours: true,
-                at: self.since_arming(start),
-                length: now.saturating_sub(start) as u32,
-                peak: n as u16,
+                at: self.since_arming(code_start),
+                length: now.saturating_sub(code_start) as u32,
+                peak: CODE_LEN as u16,
                 tilt: 0,
                 left: 0,
             });
             self.disarm(now);
+            return;
+        }
+        self.wrong += 1;
+        self.record(Kind::Wrong, now, 0, now);
+        if self.wrong >= TRIES {
+            self.wrong = 0;
+            self.locked_until = now + LOCKOUT_MS;
+            self.record(Kind::Locked, now, LOCKOUT_MS, now);
         }
     }
 
-    /// A try's over: its presses go in the log, and if it was a code's length and wrong, it's a
-    /// wrong try (three lock the code out).
-    fn end_burst(&mut self, now: u64) {
+    /// A burst of presses over: they go in the log as one (each try in it was counted as it was
+    /// made).
+    fn end_burst(&mut self) {
         if self.burst.is_empty() {
             return;
         }
@@ -455,17 +482,7 @@ impl App {
             left: 0,
         };
         self.log.push(e);
-        if n >= CODE_LEN && now >= self.locked_until {
-            self.wrong += 1;
-            self.record(Kind::Wrong, start, 0, now);
-            if self.wrong >= TRIES {
-                self.wrong = 0;
-                self.locked_until = now + LOCKOUT_MS;
-                self.record(Kind::Locked, now, LOCKOUT_MS, now);
-            }
-        } else {
-            self.log.save();
-        }
+        self.log.save();
     }
 }
 
@@ -479,20 +496,9 @@ fn after(ms: u32, out: &mut String) {
     };
 }
 
-/// The same by the clock, when maki knew the time at arming.
-fn clock(log: &Log, ms: u32, out: &mut String) {
-    match log.arm_unix {
-        Some(unix) => {
-            let t = (unix + ms as u64 / 1000) % 86_400;
-            let _ = write!(out, "{:02}:{:02}", t / 3600, t / 60 % 60);
-        }
-        None => after(ms, out),
-    }
-}
-
-fn describe(log: &Log, e: &Entry) -> String {
+fn describe(e: &Entry) -> String {
     let mut s = String::new();
-    clock(log, e.at, &mut s);
+    after(e.at, &mut s);
     s.push(' ');
     let _ = match e.kind {
         Kind::Moved if e.left >= 30 => write!(s, "moved {}s, left {}°", e.length.div_ceil(1000), e.left / 10),
@@ -544,7 +550,7 @@ fn draw(app: &App, now: u64) {
                 let mut events: Vec<&Entry> = log.all().collect();
                 events.sort_by_key(|e| e.at);
                 for (row, e) in events.iter().skip(*top).take(4).enumerate() {
-                    screen::text(2, 45 + row as i32 * 12, &describe(log, e), Style::Small, Color::Light);
+                    screen::text(2, 45 + row as i32 * 12, &describe(e), Style::Small, Color::Light);
                 }
                 if log.total as usize > events.len() {
                     let mut s = String::new();
@@ -690,12 +696,12 @@ fn main() {
         match app.view.clone() {
             View::Armed => match event {
                 Event::Hidden => {
-                    app.end_burst(now);
+                    app.end_burst();
                     app.record(Kind::Menu, now, 0, now);
                 }
                 Event::Exit => {
                     app.end_move(now, true);
-                    app.end_burst(now);
+                    app.end_burst();
                     app.record(Kind::Closed, now, 0, now);
                     return;
                 }
@@ -703,7 +709,7 @@ fn main() {
                     if let Some(k) = key_code(e) {
                         app.press(k, now);
                     } else if !app.burst.is_empty() && now.saturating_sub(app.burst_last) > TRY_GAP_MS {
-                        app.end_burst(now);
+                        app.end_burst();
                     }
                 }
             },

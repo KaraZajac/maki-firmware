@@ -1,7 +1,7 @@
 id = "com.leviathan.maki.minisign"
 name = "Minisign"
-version = 1
-label = "1.0"
+version = 2
+label = "1.1"
 api = 1
 storage = 1
 memory = 64

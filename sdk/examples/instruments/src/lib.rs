@@ -90,9 +90,12 @@ enum Calibrating {
     First {
         since: u64,
     },
+    /// `moved`: it has been, since the first reading. Not moved, the second reading would be the
+    /// first again, and the surface's own tilt would become "level"
     Turned {
         since: u64,
         first: [f32; 3],
+        moved: bool,
     },
 }
 
@@ -362,16 +365,17 @@ impl App {
                     self.calibrating = Some(Calibrating::First { since: now });
                 } else if now >= since + 2000 {
                     let first = self.raw_angles();
-                    self.calibrating = Some(Calibrating::Turned { since: now + 3000, first });
+                    self.calibrating = Some(Calibrating::Turned { since: now + 3000, first, moved: false });
                 }
             }
-            Calibrating::Turned { since, first } => {
-                // turned round: once it's been still for 2 s, and turned (read differently)
+            Calibrating::Turned { since, first, moved } => {
+                // turned round: once it's moved, then been still for 2 s
                 if moving || now < since {
                     if moving {
-                        self.calibrating = Some(Calibrating::Turned { since: now.max(since), first });
+                        self.calibrating =
+                            Some(Calibrating::Turned { since: now.max(since), first, moved: true });
                     }
-                } else if now >= since + 2000 {
+                } else if moved && now >= since + 2000 {
                     let second = self.raw_angles();
                     let o = &mut self.kept.offset;
                     if self.flat {

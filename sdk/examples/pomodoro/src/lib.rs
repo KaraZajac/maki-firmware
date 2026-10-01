@@ -219,7 +219,14 @@ impl Timer {
                 Some(unix) if a > unix * 1000 && a - unix * 1000 <= total => {
                     State::Running { phase, ends: now + (a - unix * 1000), total }
                 }
-                Some(_) => State::Over { phase, since: now },
+                Some(_) => {
+                    // a focus that ended while the app was closed counts, as one that ends open
+                    // does (tick): four make the long break
+                    if phase == Phase::Focus {
+                        t.done = (t.done + 1).min(SET);
+                    }
+                    State::Over { phase, since: now }
+                }
                 None => State::Paused { phase, left: total, total },
             },
             2 if a <= total => State::Paused { phase, left: a, total },

@@ -524,39 +524,57 @@ impl App {
         let mut question = Buf::<64>::new();
         let _ =
             question.write_str(if c.host { "Sign a host certificate?" } else { "Sign a user certificate?" });
+        // what limits it and whose key it is come whatever the principals take: the ask holds
+        // 128 bytes, and what didn't fit was dropped unseen ("forever", "restricted", the key)
+        let mut tail = Buf::<104>::new();
+        let _ = tail.write_str(" (");
+        shown(&mut tail, c.id, 20);
+        let _ = tail.write_str("), ");
+        if c.before == u64::MAX {
+            let _ = tail.write_str("forever");
+        } else {
+            let _ = tail.write_str("until ");
+            date(&mut tail, c.before);
+        }
+        if c.after > 0 && c.after != u64::MAX {
+            let _ = tail.write_str(" from ");
+            date(&mut tail, c.after);
+        }
+        if !c.options.is_empty() {
+            let _ = tail.write_str(", restricted");
+        }
+        let _ = tail.write_str(", key ");
+        let _ = tail.write_str(&fingerprint(&c.key).as_str()[..19]);
         let mut detail = Buf::<128>::new();
         if c.principals.is_empty() {
             let _ = detail.write_str(if c.host { "for ANY host" } else { "for EVERY user" });
         } else {
-            let _ = detail.write_str("for ");
+            // as many as fit before the rest, and how many more there are
+            let room = 128 - tail.len() - " +99 more".len();
             let mut r = Reader(c.principals);
-            let mut first = true;
+            let (mut shown_n, mut more) = (0, 0);
+            let _ = detail.write_str("for ");
             while let Some(p) = r.string() {
-                if !first {
-                    let _ = detail.write_char(',');
+                let mut one = Buf::<32>::new();
+                if shown_n > 0 {
+                    let _ = one.write_char(',');
                 }
-                first = false;
-                shown(&mut detail, p, 24);
+                shown(&mut one, p, 24);
+                if more == 0 && detail.len() + one.len() <= room {
+                    let _ = detail.write_str(one.as_str());
+                    shown_n += 1;
+                } else {
+                    more += 1;
+                }
+            }
+            if shown_n == 0 {
+                detail = Buf::new();
+                let _ = write!(detail, "for {more} principals");
+            } else if more > 0 {
+                let _ = write!(detail, " +{more} more");
             }
         }
-        let _ = detail.write_str(" (");
-        shown(&mut detail, c.id, 20);
-        let _ = detail.write_str("), ");
-        if c.before == u64::MAX {
-            let _ = detail.write_str("forever");
-        } else {
-            let _ = detail.write_str("until ");
-            date(&mut detail, c.before);
-        }
-        if c.after > 0 && c.after != u64::MAX {
-            let _ = detail.write_str(" from ");
-            date(&mut detail, c.after);
-        }
-        if !c.options.is_empty() {
-            let _ = detail.write_str(", restricted");
-        }
-        let _ = detail.write_str(", key ");
-        let _ = detail.write_str(&fingerprint(&c.key).as_str()[..19]);
+        let _ = detail.write_str(tail.as_str());
         if !self.asked(question.as_str(), detail.as_str()) {
             return failure();
         }

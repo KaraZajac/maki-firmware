@@ -164,19 +164,41 @@ fn draw(nets: &Networks, at: usize, showing: bool, note: &str) {
             Some(k) => k,
             None => "open",
         };
-        let mut line = Buf::<64>::new();
-        screen::text(2, 2, "Network", Style::Small, Color::Light);
-        screen::text(2, 15, name.as_str(), Style::Bold, Color::Light);
-        let _ = write!(line, "Security: {kind}");
-        screen::text(2, 34, line.as_str(), Style::Small, Color::Light);
-        screen::text(2, 50, "Password", Style::Small, Color::Light);
         let mut pass = Buf::<LONGEST>::new();
         let pass = field(net.as_str(), 'P', &mut pass).unwrap_or("");
         let pass = if pass.is_empty() { "(none)" } else { pass };
-        for (i, start) in (0..pass.len()).step_by(15).take(3).enumerate() {
-            let end = (start + 15).min(pass.len());
-            if let Some(chunk) = pass.get(start..end) {
-                screen::text(2, 63 + i as i32 * 15, chunk, Style::Mono, Color::Light);
+        // in lines of 15 characters (not bytes: a character cut in two drew nothing of its line)
+        let lines = pass.chars().count().div_ceil(15);
+        let chunk = |i: usize, most: usize| {
+            let mut b = Buf::<64>::new();
+            for c in pass.chars().skip(i * 15).take(most) {
+                let _ = b.write_char(c);
+            }
+            b
+        };
+        if lines <= 3 {
+            let mut line = Buf::<64>::new();
+            screen::text(2, 2, "Network", Style::Small, Color::Light);
+            screen::text(2, 15, name.as_str(), Style::Bold, Color::Light);
+            let _ = write!(line, "Security: {kind}");
+            screen::text(2, 34, line.as_str(), Style::Small, Color::Light);
+            screen::text(2, 50, "Password", Style::Small, Color::Light);
+            for i in 0..lines {
+                screen::text(2, 63 + i as i32 * 15, chunk(i, 15).as_str(), Style::Mono, Color::Light);
+            }
+        } else {
+            // a long one has the screen to itself: six lines hold any WPA password (63), and
+            // what doesn't fit says so rather than end where it seems to
+            let mut head = Buf::<64>::new();
+            let _ = write!(head, "{}: password", name.as_str());
+            screen::text(2, 1, head.as_str(), Style::Small, Color::Light);
+            for i in 0..lines.min(6) {
+                let mut l = chunk(i, 15);
+                if i == 5 && lines > 6 {
+                    l = chunk(i, 12);
+                    let _ = l.write_str("...");
+                }
+                screen::text(2, 15 + i as i32 * 15, l.as_str(), Style::Mono, Color::Light);
             }
         }
     } else {

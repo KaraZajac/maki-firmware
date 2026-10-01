@@ -309,7 +309,18 @@ impl App {
                 if !title_ok(title) || text.len() > TEXT {
                     return vec![BAD];
                 }
-                let detail = format!("\"{title}\", {} characters", text.chars().count());
+                // the ask's detail holds 128 bytes, which a long title of other scripts (three
+                // bytes a character) passes: cut it to fit, or the ask fails and nobody's asked
+                let count = format!("\", {} characters", text.chars().count());
+                let mut shown = String::from("\"");
+                for c in title.chars() {
+                    if shown.len() + c.len_utf8() + count.len() + 3 > 128 {
+                        shown.push_str("...");
+                        break;
+                    }
+                    shown.push(c);
+                }
+                let detail = format!("{shown}{count}");
                 match Ask::new("Keep a note from the computer?").detail(&detail).answers("keep", "no").show()
                 {
                     Ok(Answer::Yes) => {}

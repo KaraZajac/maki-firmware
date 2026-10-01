@@ -97,9 +97,10 @@ fn date<const N: usize>(out: &mut Buf<N>, secs: u64) {
     let day = doy - (153 * mp + 2) / 5 + 1;
     let month = if mp < 10 { mp + 3 } else { mp - 9 };
     let year = yoe + era * 400 + if month <= 2 { 1 } else { 0 };
+    // said to be UTC: maki's own clock, on its bar, is local time
     let _ = write!(
         out,
-        "{day} {} {year} {:02}:{:02}",
+        "{day} {} {year} {:02}:{:02} UTC",
         MONTHS[month as usize - 1],
         secs % 86_400 / 3600,
         secs % 3600 / 60

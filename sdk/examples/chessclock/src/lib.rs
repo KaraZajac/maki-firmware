@@ -164,8 +164,9 @@ enum Shows {
 struct Game {
     control: Control,
     sides: [Side; 2],
-    /// whose clock runs, and since when (as made, not as heard)
-    running: Option<(usize, u64)>,
+    /// whose clock runs, and since when (as made, not as heard), in millis: before the app's
+    /// clock began, for a turn carried over from before it was closed
+    running: Option<(usize, i64)>,
     /// paused: whose clock it was, and how long its turn had run
     paused: Option<(usize, i64)>,
     flag: Option<usize>,
@@ -297,7 +298,7 @@ impl Game {
     /// How long side `s`'s turn has run.
     fn used(&self, s: usize, now: u64) -> i64 {
         match (self.running, self.paused) {
-            (Some((r, since)), _) if r == s => now.saturating_sub(since) as i64,
+            (Some((r, since)), _) if r == s => (now as i64 - since).max(0),
             (_, Some((p, used))) if p == s => used,
             _ => 0,
         }
@@ -307,16 +308,16 @@ impl Game {
     fn press(&mut self, s: usize, made: u64) {
         match self.running {
             // the first press starts the other side's clock
-            None if !self.started() && self.flag.is_none() => self.running = Some((1 - s, made)),
+            None if !self.started() && self.flag.is_none() => self.running = Some((1 - s, made as i64)),
             Some((r, since)) if r == s => {
-                let used = made.saturating_sub(since) as i64;
+                let used = (made as i64 - since).max(0);
                 if self.shows(s, used) == Shows::Flag {
                     self.flag = Some(s);
                     self.running = None;
                     return;
                 }
                 self.moved(s, used);
-                self.running = Some((1 - s, made.max(since)));
+                self.running = Some((1 - s, (made as i64).max(since)));
             }
             _ => {}
         }
@@ -325,7 +326,7 @@ impl Game {
     /// The running side's flag, once a press can't still be on its way.
     fn check_flag(&mut self, now: u64) {
         if let Some((r, since)) = self.running {
-            let used = now.saturating_sub(since + LATE_MS) as i64;
+            let used = (now as i64 - since - LATE_MS as i64).max(0);
             if self.shows(r, used) == Shows::Flag {
                 self.flag = Some(r);
                 self.running = None;
@@ -335,17 +336,21 @@ impl Game {
 
     fn pause(&mut self, now: u64) {
         if let Some((r, since)) = self.running.take() {
-            self.paused = Some((r, now.saturating_sub(since) as i64));
+            self.paused = Some((r, (now as i64 - since).max(0)));
         }
     }
 
     fn resume(&mut self, now: u64) {
+        // the turn's time so far carried on: its start is before now by that much, before the
+        // app's clock began if it was opened since (millis start again at each open)
         if let Some((p, used)) = self.paused.take() {
-            self.running = Some((p, now.saturating_sub(used as u64)));
+            self.running = Some((p, now as i64 - used));
         }
     }
 
-    fn save(&self) {
+    /// Kept, as it is at `now`: a clock running comes back paused, with its turn's time so far,
+    /// whether the app was closed or maki lost power.
+    fn save(&self, now: u64) {
         let mut b = [0u8; 80];
         let c = &self.control;
         b[0] = METHODS.iter().position(|&m| m == c.method).unwrap_or(0) as u8;
@@ -362,7 +367,8 @@ impl Game {
             b[at + 17..at + 25].copy_from_slice(&side.period.to_le_bytes());
         }
         // a clock running when saved comes back paused
-        let (whose, used) = self.paused.unwrap_or((0xff, 0));
+        let running = self.running.map(|(r, since)| (r, (now as i64 - since).max(0)));
+        let (whose, used) = self.paused.or(running).unwrap_or((0xff, 0));
         b[67] = whose as u8;
         b[68..76].copy_from_slice(&used.to_le_bytes());
         b[76] = self.flag.map_or(0xff, |f| f as u8);
@@ -600,7 +606,17 @@ fn draw(app: &App, now: u64) {
             screen::text_centred(22, name, Style::Bold, Color::Light);
             let mut words = Buf::<40>::new();
             describe(&app.control(), &mut words);
-            screen::text_centred(42, words.as_str(), Style::Small, Color::Light);
+            let line = words.as_str();
+            if screen::text_width(line, Style::Small) <= WIDTH - 4 {
+                screen::text_centred(42, line, Style::Small, Color::Light);
+            } else {
+                // too long for a line (stages of hours): two, broken after its first comma
+                let (first, rest) = line.split_once(", ").unwrap_or((line, ""));
+                let mut head = Buf::<40>::new();
+                let _ = write!(head, "{first},");
+                screen::text_centred(36, head.as_str(), Style::Small, Color::Light);
+                screen::text_centred(47, rest, Style::Small, Color::Light);
+            }
             screen::text_centred(62, "a player's button starts", Style::Small, Color::Light);
             screen::text_centred(74, "the other's clock", Style::Small, Color::Light);
             screen::line(0, 97, WIDTH - 1, 97, Color::Light);
@@ -710,14 +726,14 @@ fn main() {
             Event::Exit => {
                 app.game.pause(now);
                 if app.game.started() {
-                    app.game.save();
+                    app.game.save(now);
                 }
                 return;
             }
             // whatever takes the screen pauses the clock
             Event::Hidden => {
                 app.game.pause(now);
-                app.game.save();
+                app.game.save(now);
             }
             Event::Menu(0) => {
                 app.game = Game::new(app.control());
@@ -798,7 +814,7 @@ fn main() {
                         app.correcting = Some(s);
                     } else {
                         app.game.press(s, now.saturating_sub(LATE_MS));
-                        app.game.save();
+                        app.game.save(now);
                     }
                 }
                 Event::Up | Event::Down if app.game.paused.is_some() => {
@@ -819,7 +835,7 @@ fn main() {
                 }
                 Event::Centre if app.game.running.is_some() => {
                     app.game.pause(now);
-                    app.game.save();
+                    app.game.save(now);
                 }
                 _ => {}
             },
