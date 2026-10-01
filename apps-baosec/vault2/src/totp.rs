@@ -48,7 +48,9 @@ impl TryFrom<&str> for TotpAlgorithm {
 
     fn try_from(s: &str) -> Result<Self, Self::Error> {
         match s {
-            "SHA1" => Ok(TotpAlgorithm::HmacSha1),
+            // maki: "None" is how a code from a QR code that named no algorithm was saved, before
+            // its default was applied: it's SHA1, as such a code means
+            "SHA1" | "None" => Ok(TotpAlgorithm::HmacSha1),
             "SHA256" => Ok(TotpAlgorithm::HmacSha256),
             "SHA512" => Ok(TotpAlgorithm::HmacSha512),
             _ => Err(xous::Error::InvalidString),
@@ -121,9 +123,8 @@ fn generate_hmac_bytes(unix_timestamp: u64, totp_entry: &TotpEntry) -> Result<Ve
             let hash: &[u8] = &mac.finalize().into_bytes();
             computed_hmac.extend_from_slice(hash);
         }
-        TotpAlgorithm::None => {
-            panic!("cannot generate hmac bytes for None algorithm")
-        }
+        // maki: an error rather than a panic, which would take the vault down with it
+        TotpAlgorithm::None => return Err(xous::Error::InvalidString),
     }
 
     Ok(computed_hmac)

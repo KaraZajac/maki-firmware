@@ -261,8 +261,11 @@ impl Manager {
 
         for key in keylist {
             let mut record = T::default();
-            record.from_vec(self.pddb_get(&settings.dict, &key)?)?;
-            ret.push(record);
+            // maki: a record that can't be read is passed over, not all of them with it
+            match record.from_vec(self.pddb_get(&settings.dict, &key)?) {
+                Ok(()) => ret.push(record),
+                Err(e) => log::warn!("{}: couldn't read {}: {:?}", settings.dict, key, e),
+            }
         }
 
         Ok(ret)
@@ -386,6 +389,10 @@ impl TotpRecord {
                 "SHA512" => TotpAlgorithm::HmacSha512,
                 _ => return Err(format!("Unknown algorithm: {}", algo)),
             };
+        } else {
+            // maki: SHA1 when the code names none, as the key URI format says (most do name none);
+            // left at its `None` default, the code was saved and could never be read back
+            record.algorithm = TotpAlgorithm::HmacSha1;
         }
 
         if let Some(digits) = params.get("digits") {
