@@ -2,6 +2,8 @@
 mod api;
 mod debug;
 #[cfg(target_os = "xous")]
+mod emu;
+#[cfg(target_os = "xous")]
 mod hw;
 #[cfg(not(target_os = "xous"))]
 mod main_hosted;
@@ -148,6 +150,12 @@ pub(crate) fn main_hw() -> ! {
     //    if the interrupt handler has been hooked, and ignores further requests to hook it.
     let mut cu = Box::new(Bao1xUsb::new(usb.clone(), irq_csr.clone(), cid, cw, &usb_alloc, &serial_number));
     cu.init();
+    // maki: an emulator build, in an emulator with the pipe: USB through it (see `emu`)
+    cu.pipe = emu::Pipe::find(usb_mapping.as_ptr() as usize);
+    if cu.pipe.is_some() {
+        log::info!("USB through the emulator's pipe");
+        emu::Pipe::watch(cid);
+    }
 
     // Serial driver variables
     let mut serial_listener: Option<xous::MessageEnvelope> = None;
@@ -415,7 +423,10 @@ pub(crate) fn main_hw() -> ! {
                 }
             }
             Opcode::IrqFidoRx => {
-                if let Some(raw_report) = cu.hid_packet.pop_front() {
+                // maki: everything that's come (the emulator's pipe rings while reports wait)
+                let mut taken = 0;
+                while let Some(raw_report) = cu.fido_rx() {
+                    taken += 1;
                     let u2f_report = HIDReport(raw_report);
                     if let Some(mut listener) = fido_listener.take() {
                         let mut response = unsafe {
@@ -431,7 +442,12 @@ pub(crate) fn main_hw() -> ! {
                         crate::println!("Got U2F packet, but no server to respond...queuing.");
                         fido_rx_queue.push_back(u2f_report.0);
                     }
-                } else {
+                    // the controller rings once a report
+                    if cu.pipe.is_none() {
+                        break;
+                    }
+                }
+                if taken == 0 && cu.pipe.is_none() {
                     // I *think* this is harmless, can remove this later on if protocol is robust
                     log::warn!("got IrqFidoRx but no data");
                 }
@@ -443,7 +459,7 @@ pub(crate) fn main_hw() -> ! {
                 let mut buffer =
                     unsafe { Buffer::from_memory_message_mut(msg.body.memory_message_mut().unwrap()) };
                 let mut u2f_ipc = buffer.to_original::<U2fMsgIpc, _>().unwrap();
-                if cu.device.state() != usb_device::device::UsbDeviceState::Configured {
+                if !cu.configured() {
                     log::warn!("U2fTx: HANGUP");
                     u2f_ipc.code = U2fCode::Hangup;
                     buffer.replace(u2f_ipc).unwrap();
@@ -489,7 +505,7 @@ pub(crate) fn main_hw() -> ! {
             }
             Opcode::SendKeyCode => {
                 if let Some(scalar) = msg.body.scalar_message_mut() {
-                    if cu.device.state() != usb_device::device::UsbDeviceState::Configured {
+                    if !cu.configured() {
                         // maki: say so, rather than leave it to the codes coming back
                         scalar.arg1 = 1;
                         continue;
@@ -522,7 +538,7 @@ pub(crate) fn main_hw() -> ! {
                     unsafe { Buffer::from_memory_message_mut(msg.body.memory_message_mut().unwrap()) };
                 let mut usb_send = buffer.to_original::<api::UsbString, _>().unwrap();
                 let mut sent = 0;
-                if cu.device.state() != usb_device::device::UsbDeviceState::Configured {
+                if !cu.configured() {
                     log::warn!("Aborting send, no USB configured");
                     usb_send.sent = Some(0);
                     buffer.replace(usb_send).unwrap();
@@ -752,7 +768,7 @@ pub(crate) fn main_hw() -> ! {
                 serial_listener.take();
             }
             Opcode::SerialFlush => msg_scalar_unpack!(msg, _, _, _, _, {
-                if cu.device.state() != usb_device::device::UsbDeviceState::Configured {
+                if !cu.configured() {
                     continue;
                 }
                 // The interrupt handler may access the same usbd-serial state through
@@ -800,7 +816,7 @@ pub(crate) fn main_hw() -> ! {
                 }
             }),
             Opcode::SerialSendData => {
-                if cu.device.state() != usb_device::device::UsbDeviceState::Configured {
+                if !cu.configured() {
                     continue;
                 }
                 let buffer = unsafe { Buffer::from_memory_message(msg.body.memory_message().unwrap()) };
@@ -821,7 +837,7 @@ pub(crate) fn main_hw() -> ! {
 
                 let mut request = buffer.to_original::<UsbSerialSend, _>().unwrap();
 
-                if cu.device.state() != usb_device::device::UsbDeviceState::Configured {
+                if !cu.configured() {
                     // The IPC request itself was handled successfully, but no bytes
                     // can be accepted while the USB device is not configured.
                     request.sent = Some(0);
@@ -874,7 +890,11 @@ pub(crate) fn main_hw() -> ! {
                 if let Some(scalar) = msg.body.scalar_message_mut() {
                     // to get the raw device state:
                     // cu.device.bus().core().get_device_state()
-                    scalar.arg1 = cu.device.state() as usize;
+                    scalar.arg1 = if cu.pipe.is_some() {
+                        usb_device::device::UsbDeviceState::Configured as usize
+                    } else {
+                        cu.device.state() as usize
+                    };
                 }
             }
             Opcode::GetLedState => {

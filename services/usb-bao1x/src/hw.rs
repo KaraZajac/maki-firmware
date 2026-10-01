@@ -58,6 +58,8 @@ pub struct Bao1xUsb<'a> {
     pub irq_serviced: AtomicBool,
     /// maki: the endpoint FIDO's reports go out on (0 until the first one has), for U2fTx's pacing
     pub fido_in_ep: AtomicU8,
+    /// maki: in the emulator, USB through its pipe (see `emu`) rather than the controller
+    pub pipe: Option<crate::emu::Pipe>,
 }
 
 impl<'a> Bao1xUsb<'a> {
@@ -126,6 +128,20 @@ impl<'a> Bao1xUsb<'a> {
             led_state: KeyboardLedsReport::default(),
             irq_serviced: AtomicBool::new(false),
             fido_in_ep: AtomicU8::new(0),
+            pipe: None,
+        }
+    }
+
+    /// maki: whether a host is there to take what's sent: USB configured, or the emulator's pipe.
+    pub fn configured(&self) -> bool {
+        self.pipe.is_some() || self.device.state() == usb_device::device::UsbDeviceState::Configured
+    }
+
+    /// maki: the next FIDO report from the host, if one has come.
+    pub fn fido_rx(&mut self) -> Option<[u8; 64]> {
+        match &self.pipe {
+            Some(pipe) => pipe.fido_report(),
+            None => self.hid_packet.pop_front(),
         }
     }
 
@@ -160,6 +176,23 @@ impl<'a> Bao1xUsb<'a> {
     }
 
     pub fn sw_irq(&mut self, request_type: UsbIrqReq) {
+        // maki: in the emulator, what's queued goes straight down the pipe
+        if let Some(pipe) = self.pipe {
+            match request_type {
+                UsbIrqReq::FidoTx => {
+                    while let Some(report) = self.fido_tx_queue.borrow_mut().pop_front() {
+                        pipe.send(crate::emu::FIDO, &report.packet);
+                    }
+                    self.irq_serviced.store(true, Ordering::SeqCst);
+                }
+                UsbIrqReq::KbdTx => {
+                    let codes: Vec<u8> =
+                        self.kbd_tx_queue.borrow_mut().drain(..).map(<u8 as From<Keyboard>>::from).collect();
+                    pipe.send(crate::emu::KEYBOARD, &codes);
+                }
+            }
+            return;
+        }
         self.irq_req = Some(request_type);
         self.irq_csr.wfo(utra::irqarray1::EV_SOFT_TRIGGER, SW_IRQ_MASK);
     }
@@ -211,6 +244,10 @@ impl<'a> Bao1xUsb<'a> {
     /// the interrupt is masked remains pending and is processed after the
     /// previous interrupt-enable state is restored.
     pub fn serial_write_irq_safe(&mut self, data: &[u8]) -> usb_device::Result<usize> {
+        if let Some(pipe) = self.pipe {
+            pipe.send(crate::emu::SERIAL, data);
+            return Ok(data.len());
+        }
         // IRQARRAY1 is currently dedicated to the Corigine USB implementation,
         // so this code assumes there are no concurrent writers to EV_ENABLE.
         // If another IRQARRAY1 user is added, access to EV_ENABLE must be
@@ -234,6 +271,9 @@ impl<'a> Bao1xUsb<'a> {
     /// into `usbd-serial` or the driver meanwhile (maki: see `serial_write_irq_safe`). Reading a
     /// packet re-arms the endpoint for the next.
     pub fn serial_read_irq_safe(&mut self, data: &mut [u8]) -> usb_device::Result<usize> {
+        if let Some(pipe) = self.pipe {
+            return Ok(pipe.recv(crate::emu::SERIAL, data));
+        }
         let previous_enable = self.irq_csr.r(utra::irqarray1::EV_ENABLE);
 
         self.irq_csr.wo(utra::irqarray1::EV_ENABLE, previous_enable & !CORIGINE_IRQ_MASK);
@@ -252,6 +292,9 @@ impl<'a> Bao1xUsb<'a> {
     /// Flushes the USB CDC serial transmit buffer without allowing the USB
     /// interrupt handler to access the same `usbd-serial` state concurrently.
     pub fn serial_flush_irq_safe(&mut self) -> usb_device::Result<()> {
+        if self.pipe.is_some() {
+            return Ok(());
+        }
         let previous_enable = self.irq_csr.r(utra::irqarray1::EV_ENABLE);
 
         self.irq_csr.wo(utra::irqarray1::EV_ENABLE, previous_enable & !CORIGINE_IRQ_MASK);
