@@ -340,6 +340,25 @@ impl Asking {
         }
     }
 
+    /// Take back the ask `tag` from `pid`, waiting or on screen: its asker hears it timed out.
+    /// Returns whether it was on screen, which the caller replaces with the next or gives the
+    /// screen back after. Only the process that asked can take its ask back.
+    pub(crate) fn withdraw(&mut self, pid: Option<xous::PID>, tag: u32) -> bool {
+        if tag == 0 || pid.is_none() {
+            return false;
+        }
+        let theirs =
+            |msg: &xous::MessageEnvelope, req: &AskRequest| req.tag == tag && msg.sender.pid() == pid;
+        // dropping a waiting ask's message returns it as it came: timed out
+        self.queue.retain(|(msg, req)| !theirs(msg, req));
+        if self.current.as_ref().is_some_and(|p| theirs(&p.msg, &p.req)) {
+            log::info!("the ask from {} was taken back", self.current.as_ref().unwrap().req.subject);
+            self.finish(ANSWER_TIMED_OUT);
+            return true;
+        }
+        false
+    }
+
     /// A button while an ask is on screen: returns the answer once there is one.
     pub(crate) fn key(&mut self, key: Key, screen: &Screen, linked: bool) -> Option<u32> {
         let now = self.tt.elapsed_ms();

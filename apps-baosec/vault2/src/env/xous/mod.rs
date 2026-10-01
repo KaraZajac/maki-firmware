@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 use bao1x_hal::board::{BOOKEND_END, BOOKEND_START};
 use ctap_crypto::rng256::XousRng256;
 use locales::t;
-use modals::Modals;
+use maki_launcher::{Answer, Launcher};
 use num_traits::*;
 use persistent_store::Store;
 use xous::try_send_message;
@@ -30,6 +30,14 @@ use crate::{AppInfo, basis_change, deserialize_app_info, serialize_app_info};
 
 pub const U2F_APP_DICT: &'static str = "fido.u2fapps";
 const KEEPALIVE_DELAY: Duration = Duration::from_millis(KEEPALIVE_DELAY_MS);
+
+/// maki: a passkey question's answer, as its thread hears it from the launcher
+const PENDING: u32 = 0;
+const ALLOWED: u32 = 1;
+const DENIED: u32 = 2;
+const TIMED_OUT: u32 = 3;
+/// the tags of passkey questions, so one can be taken back (`Launcher::withdraw`)
+static PRESENCE_TAGS: AtomicU32 = AtomicU32::new(1);
 mod storage;
 
 pub struct XousHidConnection {
@@ -110,7 +118,8 @@ pub struct XousEnv {
     main_connection: XousHidConnection,
     #[cfg(feature = "vendor_hid")]
     vendor_connection: XousHidConnection,
-    modals: Modals,
+    /// maki: a passkey's question goes to the launcher, which shows one ask at a time
+    launcher: Launcher,
     last_user_presence_request: Option<Instant>,
     ctap1_cid: xous::CID,
 }
@@ -619,7 +628,7 @@ impl XousEnv {
             main_connection: XousHidConnection { endpoint: usb_bao1x::UsbHid::new() },
             #[cfg(feature = "vendor_hid")]
             vendor_connection: XousHidConnection { endpoint: UsbEndpoint::VendorHid },
-            modals: modals::Modals::new(&xns).unwrap(),
+            launcher: Launcher::new(&xns).expect("couldn't connect to the launcher"),
             last_user_presence_request: None,
             ctap1_cid,
         }
@@ -693,6 +702,12 @@ impl UserPresence for XousEnv {
     fn check_init(&mut self) {}
 
     /// Implements FIDO behavior (CTAP2 protocol)
+    ///
+    /// maki: the question is one of the launcher's asks, as a login's is: one ask on screen at a
+    /// time, the buttons only for the one showing, and only the centre answers, on allow or deny.
+    /// `reason` is its lines: who's asking (a site), the question, and what it's about (whose
+    /// passkey). The ask waits in a thread while this one keeps the computer posted, and is taken
+    /// back if the computer cancels or time runs out.
     fn wait_with_timeout(
         &mut self,
         timeout: Duration,
@@ -700,61 +715,59 @@ impl UserPresence for XousEnv {
         cid: [u8; 4],
     ) -> UserPresenceResult {
         log::info!("{}VAULT.PERMISSION,{}", BOOKEND_START, BOOKEND_END);
-        let reason = reason.unwrap_or(String::new());
-        let kbhit = Arc::new(AtomicU32::new(0));
+        let reason = reason.unwrap_or_default();
+        let mut lines = reason.splitn(3, '\n');
+        let subject = lines.next().unwrap_or_default().to_string();
+        let question = lines.next().unwrap_or_default().to_string();
+        let detail = lines.next().unwrap_or_default().to_string();
+        let tag = PRESENCE_TAGS.fetch_add(1, Ordering::SeqCst);
+        let answer = Arc::new(AtomicU32::new(PENDING));
         let expiration = Instant::now().checked_add(timeout).expect("duration bug");
-        self.modals.dynamic_notification(None, Some(&reason)).unwrap();
-        // start the keyboard hit listener thread
-        let _ = std::thread::spawn({
-            let token = self.modals.token().clone();
-            let conn = self.modals.conn().clone();
-            let kbhit = kbhit.clone();
+        let timeout_s = timeout.as_secs().max(1) as u32;
+        let asked = std::thread::Builder::new().stack_size(32 * 1024).spawn({
+            let answer = answer.clone();
             move || {
-                // note that if no key is hit, we get None back on dialog box close automatically
-                match modals::dynamic_notification_blocking_listener(token, conn) {
-                    Ok(Some(c)) => {
-                        log::trace!("kbhit got {}", c);
-                        kbhit.store(c as u32, Ordering::SeqCst)
-                    }
-                    Ok(None) => {
-                        log::trace!("kbhit exited or had no characters");
-                        kbhit.store(0, Ordering::SeqCst)
-                    }
-                    Err(e) => log::error!("error waiting for keyboard hit from blocking listener: {:?}", e),
-                }
+                let result = XousNames::new()
+                    .map_err(|_| xous::Error::InternalError)
+                    .and_then(|xns| Launcher::new(&xns))
+                    .and_then(|l| l.ask_tagged(&subject, &question, &detail, timeout_s, tag));
+                let a = match result {
+                    Ok(Answer::Allowed(_)) => ALLOWED,
+                    Ok(Answer::Denied) => DENIED,
+                    _ => TIMED_OUT,
+                };
+                answer.store(a, Ordering::SeqCst);
             }
         });
+        if asked.is_err() {
+            log::error!("no thread to ask the owner with");
+            return Err(UserPresenceError::Timeout);
+        }
 
-        let mut last_remaining = u64::MAX;
         loop {
-            let remaining = expiration.duration_since(Instant::now()).as_secs();
-            if last_remaining != remaining {
-                log::info!("countdown: {}", remaining);
-                // only update the UX once per second
-                self.modals
-                    .dynamic_notification_update(None, Some(&format!("{}\n{}s", reason, remaining)))
-                    .unwrap();
-                last_remaining = remaining;
+            match answer.load(Ordering::SeqCst) {
+                ALLOWED => return Ok(()),
+                DENIED => return Err(UserPresenceError::Declined),
+                TIMED_OUT => return Err(UserPresenceError::Timeout),
+                _ => {}
             }
-
-            // handle exit cases
-            if remaining == 0 {
-                self.modals.dynamic_notification_close().ok();
-                return Err(UserPresenceError::Timeout);
+            let over = if Instant::now() >= expiration {
+                Some(UserPresenceError::Timeout)
+            } else {
+                // delay, and keepalive
+                self.send_keepalive_up_needed(KEEPALIVE_DELAY, cid).err()
+            };
+            if let Some(e) = over {
+                // the ask goes, waiting or on screen: an answer now would answer nothing
+                for _ in 0..40 {
+                    self.launcher.withdraw(tag).ok();
+                    if answer.load(Ordering::SeqCst) != PENDING {
+                        break;
+                    }
+                    std::thread::sleep(Duration::from_millis(50));
+                }
+                return Err(e);
             }
-            let key_hit = kbhit.load(Ordering::SeqCst);
-            if key_hit != 0 && key_hit != '↓' as u32 {
-                // approve
-                self.modals.dynamic_notification_close().ok();
-                return Ok(());
-            } else if key_hit == '↓' as u32 {
-                // deny
-                self.modals.dynamic_notification_close().ok();
-                return Err(UserPresenceError::Declined);
-            }
-
-            // delay, and keepalive
-            self.send_keepalive_up_needed(KEEPALIVE_DELAY, cid).map_err(|e| e.into())?;
             std::thread::sleep(KEEPALIVE_DELAY);
         }
     }

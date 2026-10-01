@@ -88,8 +88,6 @@ use ctap_crypto::rng256::Rng256;
 use cbor as cbor;
 use cbor::cbor_map_options;
 
-use locales::t;
-
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum UsbEndpoint {
     MainHid = 1,
@@ -320,6 +318,16 @@ fn check_user_presence(env: &mut impl Env, channel: Channel, reason: Option<Stri
 
     env.user_presence().check_complete();
     result.map_err(|e| e.into())
+}
+
+/// maki: a question for the owner, as the launcher shows it (see `wait_with_timeout`): who's
+/// asking, in big letters (a site's RP ID, which the browser checked against the page, never
+/// the name the site gives itself), what they want, and whose passkey it is. Nothing the computer
+/// sent can start a line of its own.
+#[cfg(feature="xous")]
+fn question(asker: &str, question: &str, user: Option<&str>) -> String {
+    let clean = |s: &str| s.chars().filter(|c| !c.is_control()).collect::<String>();
+    format!("{}\n{}\n{}", clean(asker), question, clean(user.unwrap_or("")))
 }
 #[cfg(not(feature="xous"))]
 fn check_user_presence(env: &mut impl Env, channel: Channel) -> Result<(), Ctap2StatusCode> {
@@ -670,7 +678,7 @@ impl CtapState {
                     check_user_presence(
                         env,
                         channel,
-                        Some(String::from("Passkeys\nLet the computer manage them?")),
+                        Some(question("Passkeys", "Let the computer manage them?", None)),
                     )?;
                     #[cfg(not(feature = "xous"))]
                     check_user_presence(env, channel)?;
@@ -728,9 +736,8 @@ impl CtapState {
         if let Some(auth_param) = &pin_uv_auth_param {
             // This case was added in FIDO 2.1.
             if auth_param.is_empty() {
-                check_user_presence(env, channel, Some(
-                    t!("vault2.fido.pin_uv_auth", locales::LANG).to_owned(),
-                ))?;
+                // the computer asking which authenticator to use, by a press on it
+                check_user_presence(env, channel, Some(question("Passkeys", "Use this maki?", None)))?;
                 // maki: built-in UV counts as set up
                 if storage::pin_hash(env)?.is_none() && !env.builtin_uv() {
                     return Err(Ctap2StatusCode::CTAP2_ERR_PIN_NOT_SET);
@@ -866,12 +873,8 @@ impl CtapState {
                     // without user interaction.
                     #[cfg(feature="xous")]
                     {
-                        let rp = if let Some(name) = rp.rp_name {name.to_string()} else {rp_id.to_string()};
-                        let desc = format!(
-                            "{}\n{}",
-                            rp,
-                            t!("vault2.fido.exclude_list", locales::LANG)
-                        );
+                        let user = user.user_name.as_deref().or(user.user_display_name.as_deref());
+                        let desc = question(&rp_id, "Passkey already saved", user);
                         let _ = check_user_presence(env, channel, Some(desc));
                     }
                     #[cfg(not(feature="xous"))]
@@ -883,9 +886,8 @@ impl CtapState {
 
         #[cfg(feature="xous")]
         {
-            let rp = if let Some(name) = rp.rp_name {name.to_string()} else {rp_id.to_string()};
-            let make_cred_desc = format!("{}\n{}", rp, t!("vault2.fido.make_credentials", locales::LANG));
-            check_user_presence(env, channel, Some(make_cred_desc))?;
+            let who = user.user_name.as_deref().or(user.user_display_name.as_deref());
+            check_user_presence(env, channel, Some(question(&rp_id, "Save a passkey?", who)))?;
         }
         #[cfg(not(feature="xous"))]
         check_user_presence(env, channel)?;
@@ -1283,8 +1285,8 @@ impl CtapState {
         if options.up {
             #[cfg(feature="xous")]
             {
-                let desc: String = format!("{}\n{}", rp_id, t!("vault2.fido.get_assertion", locales::LANG));
-                check_user_presence(env, channel, Some(desc))?;
+                let who = credential.user_name.as_deref().or(credential.user_display_name.as_deref());
+                check_user_presence(env, channel, Some(question(&rp_id, "Sign in?", who)))?;
             }
             #[cfg(not(feature="xous"))]
             check_user_presence(env, channel)?;
@@ -1419,11 +1421,11 @@ impl CtapState {
         }
         #[cfg(feature="xous")]
         {
-            check_user_presence(env, channel, Some(
-                format!("{}",
-                    t!("vault2.u2f.factoryreset", locales::LANG),
-                )
-            ))?;
+            check_user_presence(env, channel, Some(question(
+                "Passkeys",
+                "Erase every passkey?",
+                Some("The computer asks to reset them"),
+            )))?;
         }
         #[cfg(not(feature="xous"))]
         check_user_presence(env, channel)?;
@@ -1446,11 +1448,7 @@ impl CtapState {
     ) -> Result<ResponseData, Ctap2StatusCode> {
         #[cfg(feature="xous")]
         {
-            check_user_presence(env, channel, Some(
-                format!("{}",
-                    t!("vault2.u2f.authenticator_selection", locales::LANG),
-                )
-            ))?;
+            check_user_presence(env, channel, Some(question("Passkeys", "Use this maki?", None)))?;
         }
         #[cfg(not(feature="xous"))]
         check_user_presence(env, channel)?;
@@ -1466,11 +1464,11 @@ impl CtapState {
         if params.attestation_material.is_some() || params.lockdown {
             #[cfg(feature="xous")]
             {
-                check_user_presence(env, channel, Some(
-                    format!("{}",
-                        t!("vault2.u2f.vendor_configure", locales::LANG),
-                    )
-                ))?;
+                check_user_presence(env, channel, Some(question(
+                    "Passkeys",
+                    "Allow vendor configuration?",
+                    None,
+                )))?;
             }
             #[cfg(not(feature="xous"))]
             check_user_presence(env, channel)?;

@@ -1119,6 +1119,12 @@ fn main() -> ! {
                     Err(_) => log::error!("malformed ask"),
                 }
             }
+            Some(LauncherOp::Withdraw) => {
+                let tag = msg.body.scalar_message().map(|m| m.arg1 as u32).unwrap_or(0);
+                if sys.asking.withdraw(msg.sender.pid(), tag) {
+                    sys.after_ask();
+                }
+            }
             Some(LauncherOp::KeyPress) => xous::msg_scalar_unpack!(msg, k1, k2, k3, k4, {
                 let chars: Vec<char> = [k1, k2, k3, k4]
                     .iter()

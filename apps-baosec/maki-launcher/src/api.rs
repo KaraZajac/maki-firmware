@@ -42,6 +42,9 @@ pub(crate) enum LauncherOp {
     /// Memory message carrying an `AppRegistration` whose `server_name` and `key_op` name an
     /// app to take off the home screen (the rest is ignored): an installed app removed.
     Unregister = 8,
+    /// Scalar from an asker: `arg1` is the `tag` of one of its asks, waiting or on screen, to take
+    /// back (a passkey's question the computer cancelled). It's answered as timed out.
+    Withdraw = 9,
 }
 
 /// A decision for the owner, which the launcher shows over whatever is on screen. The app in
@@ -76,6 +79,8 @@ pub struct AskRequest {
     pub answer: u32,
     /// Set by the launcher: the choice picked, when allowed.
     pub choice: u32,
+    /// The asker's own name for this ask, to take it back with `Withdraw`; 0 for none.
+    pub tag: u32,
 }
 
 /// `AskRequest::app`: an app from the store is asking.
@@ -219,6 +224,7 @@ mod tests {
             app: ASK_APP_STORE,
             answer: ANSWER_TIMED_OUT,
             choice: 0,
+            tag: 0,
         }
     }
 

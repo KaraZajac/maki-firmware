@@ -103,7 +103,46 @@ impl Launcher {
             app: 0,
             answer: ANSWER_TIMED_OUT,
             choice: 0,
+            tag: 0,
         })
+    }
+
+    /// `ask` with no choices, which this process can take back with `withdraw(tag)` until it's
+    /// answered: a passkey's question, which the computer may cancel or give up on. `tag` is
+    /// nonzero, and the asker's own.
+    pub fn ask_tagged(
+        &self,
+        subject: &str,
+        question: &str,
+        detail: &str,
+        timeout_s: u32,
+        tag: u32,
+    ) -> Result<Answer, xous::Error> {
+        self.send_ask(AskRequest {
+            subject: subject.into(),
+            question: question.into(),
+            detail: detail.into(),
+            choices: String::new(),
+            pages: String::new(),
+            yes: String::new(),
+            no: String::new(),
+            timeout_s,
+            app: 0,
+            answer: ANSWER_TIMED_OUT,
+            choice: 0,
+            tag,
+        })
+    }
+
+    /// Take back this process's ask `tag`, waiting or on screen: its asker hears it timed out. An
+    /// ask still on its way to the launcher isn't there to take back yet, so an asker that must
+    /// see it gone sends this until its ask returns.
+    pub fn withdraw(&self, tag: u32) -> Result<(), xous::Error> {
+        xous::send_message(
+            self.conn,
+            xous::Message::new_scalar(LauncherOp::Withdraw.to_usize().unwrap(), tag as usize, 0, 0, 0),
+        )
+        .map(|_| ())
     }
 
     /// An installed app's question for the owner (the app host asks for it): shown under the
@@ -132,6 +171,7 @@ impl Launcher {
             app: if sideloaded { ASK_APP_SIDELOADED } else { ASK_APP_STORE },
             answer: ANSWER_TIMED_OUT,
             choice: 0,
+            tag: 0,
         })
     }
 
@@ -162,6 +202,7 @@ impl Launcher {
             app: if sideloaded { ASK_APP_SIDELOADED } else { ASK_APP_STORE },
             answer: ANSWER_TIMED_OUT,
             choice: 0,
+            tag: 0,
         })
     }
 
@@ -191,6 +232,7 @@ impl Launcher {
             app: 0,
             answer: ANSWER_TIMED_OUT,
             choice: 0,
+            tag: 0,
         })
     }
 
