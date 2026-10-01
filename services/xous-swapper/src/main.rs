@@ -51,6 +51,8 @@
 mod debug;
 mod platform;
 mod swapmap;
+// the map checks slots with its own copy of the loader's mark of a slot in use
+const _: () = assert!(swapmap::SLOT_USED == loader::FLG_SWAP_USED);
 use core::fmt::Write;
 use std::collections::BinaryHeap;
 use std::fmt::Debug;
@@ -550,16 +552,31 @@ fn swap_handler(
                     writeln!(DebugUart {}, "RF*F* PID{} VA {:x}, {:x?}", pid, vaddr_in_pid, &buf[..8]).ok();
                 }
             } else {
-                // walk the PT to find the swap data, and remove it from the swap PT
-                let paddr_in_swap = match ss.pt_walk(pid as u8, vaddr_in_pid, true) {
-                    Some(paddr) => paddr,
-                    None => {
+                // find the swap data, and take it out of the swap map. maki: refused if its slot
+                // holds nothing (`SwapMap::take`): a stale entry, which would hand the process an
+                // old copy of its page
+                let paddr_in_swap = match ss.map.take(pid as u8, vaddr_in_pid, &*ss.sct.counts, PAGE_SIZE) {
+                    swapmap::Taken::Page(offset) => offset as usize | vaddr_in_pid & 0xFFF,
+                    swapmap::Taken::Missing => {
                         writeln!(
                             DebugUart {},
                             "Couldn't resolve swapped data. Was the page actually swapped?"
                         )
                         .ok();
                         panic!("Couldn't resolve swapped data. Was the page actually swapped?")
+                    }
+                    swapmap::Taken::Stale(offset) => {
+                        writeln!(
+                            DebugUart {},
+                            "PID{} VA {:x}: its swap map entry points at slot {:x}, which holds nothing",
+                            pid,
+                            vaddr_in_pid,
+                            offset
+                        )
+                        .ok();
+                        panic!(
+                            "A swap map entry pointed at a slot that holds nothing: refused an old copy of the page"
+                        )
                     }
                 };
                 // clear the used bit in swap

@@ -20,6 +20,21 @@ pub fn pid_of(key: u32) -> u8 { (key >> 20) as u8 }
 #[cfg(test)]
 pub fn vaddr_of(key: u32) -> usize { ((key & 0xF_FFFF) as usize) << 12 }
 
+/// The swap count tracker's mark of a slot that holds a page: its top bit, the slot's count below
+/// it. The loader's `FLG_SWAP_USED`, which main.rs holds it to.
+pub const SLOT_USED: u32 = 0x8000_0000;
+
+/// What `SwapMap::take` found.
+#[derive(Debug, PartialEq, Eq)]
+pub enum Taken {
+    /// the page's offset in swap: its slot holds it
+    Page(u32),
+    /// nothing for it in the map
+    Missing,
+    /// an entry pointing at a slot that holds nothing (its offset): see `take`
+    Stale(u32),
+}
+
 pub struct SwapMap {
     keys: &'static mut [u32],
     /// the page's offset in swap
@@ -113,6 +128,22 @@ impl SwapMap {
         }
         self.keys[i] = 0;
         self.offsets[i] = 0;
+    }
+
+    /// Takes `pid`'s page at `vaddr` out of the map as it comes back into RAM, checked against
+    /// the swap count tracker (`counts`: the slot at `offset / page_size`). Every page in the map
+    /// has its slot marked as holding it, so an entry whose slot isn't is stale: it points at an
+    /// old copy of the page, freed when the page last came back, with its count kept. That copy
+    /// would still decrypt (count, PID, slot and address all as they were), handing the process
+    /// old memory, so it's refused rather than used.
+    pub fn take(&mut self, pid: u8, vaddr: usize, counts: &[u32], page_size: usize) -> Taken {
+        match self.remove(pid, vaddr) {
+            None => Taken::Missing,
+            Some(offset) => match counts.get(offset as usize / page_size) {
+                Some(&count) if count & SLOT_USED != 0 => Taken::Page(offset),
+                _ => Taken::Stale(offset),
+            },
+        }
     }
 
     /// Forgets every entry whose key `drop` says to, telling `dropped` each offset.
@@ -212,6 +243,26 @@ mod tests {
             }
         }
         assert_eq!(m.len(), 20);
+    }
+
+    #[test]
+    fn refuses_an_entry_whose_slot_holds_nothing() {
+        let mut m = map(16);
+        let mut counts = vec![0u32; 8];
+        counts[3] = 7 | SLOT_USED;
+        m.insert(5, 0x2000_0000, 3 * 4096);
+        assert_eq!(m.take(5, 0x2000_0000, &counts, 4096), Taken::Page(3 * 4096));
+        // the page came back, freeing slot 3 with its count kept and the old copy still in it: an
+        // entry pointing there again (a bug's) is refused, and taken out
+        counts[3] &= !SLOT_USED;
+        m.insert(5, 0x2000_0000, 3 * 4096);
+        assert_eq!(m.take(5, 0x2000_0000, &counts, 4096), Taken::Stale(3 * 4096));
+        assert_eq!(m.take(5, 0x2000_0000, &counts, 4096), Taken::Missing);
+        // a slot past the tracker's end holds nothing either
+        m.insert(6, 0x2000_0000, 99 * 4096);
+        assert_eq!(m.take(6, 0x2000_0000, &counts, 4096), Taken::Stale(99 * 4096));
+        // and the check doesn't touch the count the page decrypts with
+        assert_eq!(counts[3], 7);
     }
 
     #[test]
