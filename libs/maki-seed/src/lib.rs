@@ -43,6 +43,16 @@ pub enum Error {
     Checksum,
 }
 
+/// Done with a phrase's words: each overwritten before they go, since which word each points to
+/// is the phrase.
+pub fn forget_words(mut words: Vec<&'static str>) {
+    for w in words.iter_mut() {
+        // safety: a valid &'static str, written where one was
+        unsafe { core::ptr::write_volatile(w, "") };
+    }
+    core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
+}
+
 /// Entropy (16 to 32 bytes, a multiple of 4) as words.
 pub fn to_words(entropy: &[u8]) -> Vec<&'static str> {
     assert!(entropy.len().is_multiple_of(4) && (16..=32).contains(&entropy.len()));
@@ -90,7 +100,8 @@ pub fn to_entropy(words: &[&str]) -> Result<Vec<u8>, Error> {
 /// the passphrase (maki has none: an empty one). The words are ASCII, so the normalization the
 /// BIP asks for changes nothing.
 pub fn seed(words: &[&str], passphrase: &str) -> [u8; 64] {
-    let mut phrase = String::new();
+    // all its room at once: a string that grows leaves copies of its start behind
+    let mut phrase = String::with_capacity(words.iter().map(|w| w.len() + 1).sum());
     for (i, w) in words.iter().enumerate() {
         if i > 0 {
             phrase.push(' ');

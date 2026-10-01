@@ -73,7 +73,25 @@ struct Entry {
     value: Vec<u8>,
 }
 
+// passwords, codes and passkeys' private keys: wiped as each entry goes
+impl Drop for Entry {
+    fn drop(&mut self) { self.value.zeroize() }
+}
+
+/// Room for `more` bytes in a buffer of secrets. A Vec that grows leaves its old allocation, and
+/// what it held, in freed memory: this wipes it first.
+fn reserve_secret(v: &mut Vec<u8>, more: usize) {
+    if v.capacity() - v.len() >= more {
+        return;
+    }
+    let mut bigger = Vec::with_capacity((v.len() + more).max(v.capacity() * 2));
+    bigger.extend_from_slice(v);
+    v.zeroize();
+    *v = bigger;
+}
+
 fn entry(out: &mut Vec<u8>, dict: u8, key: &str, value: &[u8]) {
+    reserve_secret(out, 1 + 2 + key.len() + 4 + value.len());
     out.push(dict);
     out.extend_from_slice(&(key.len() as u16).to_le_bytes());
     out.extend_from_slice(key.as_bytes());
@@ -103,6 +121,7 @@ fn gather_apps(store: &Store, basis: &str, out: &mut Vec<u8>) {
         if out.len() + app.len() > room {
             log::warn!("backup: {id}'s data left out: the backup would be too big");
         } else {
+            reserve_secret(out, app.len());
             out.extend_from_slice(&app);
         }
         app.zeroize();
@@ -110,20 +129,15 @@ fn gather_apps(store: &Store, basis: &str, out: &mut Vec<u8>) {
 }
 
 fn gather(store: &Store, basis: &str) -> Vec<u8> {
-    let mut out = BACKUP_HEADER.to_vec();
+    let mut out = Vec::with_capacity(64 * 1024);
+    out.extend_from_slice(BACKUP_HEADER);
     for (id, dict) in BACKUP_DICTS.iter().enumerate() {
         let Ok(keys) = store.pddb.list_keys(dict, Some(basis)) else { continue };
         for key in keys {
             if *dict == passkeys::DICT && !passkeys::backed_up(&key) {
                 continue;
             }
-            let Ok(mut k) = store.pddb.get(dict, &key, Some(basis), false, false, None, None::<fn()>) else {
-                continue;
-            };
-            let mut value = Vec::new();
-            if k.read_to_end(&mut value).is_err() {
-                continue;
-            }
+            let Some(mut value) = read_key(store, dict, &key, basis) else { continue };
             entry(&mut out, id as u8, &key, &value);
             value.zeroize();
         }
@@ -183,6 +197,7 @@ impl SeedCache {
             let words = maki_seed::to_words(&entropy);
             entropy.zeroize();
             self.0 = Some(maki_seed::seed(&words, ""));
+            maki_seed::forget_words(words);
         }
         self.0
     }
@@ -212,11 +227,28 @@ struct Added {
     apps: u32,
 }
 
+/// A record from the secret basis: passwords, codes, passkeys' private keys.
 fn read_key(store: &Store, dict: &str, key: &str, basis: &str) -> Option<Vec<u8>> {
-    let mut k = store.pddb.get(dict, key, Some(basis), false, false, None, None::<fn()>).ok()?;
-    let mut v = Vec::new();
-    k.read_to_end(&mut v).ok()?;
+    read_whole(store.pddb.get(dict, key, Some(basis), false, false, None, None::<fn()>).ok()?)
+}
+
+/// A key's value whole, read into a buffer of its size (one that grew would leave copies of it
+/// behind in freed memory), and the PDDB client's own buffer of it wiped.
+fn read_whole(mut k: pddb::PddbKey<'_>) -> Option<Vec<u8>> {
+    let len = k.attributes().ok()?.len;
+    let mut v = vec![0u8; len];
+    let read = k.read_exact(&mut v);
+    k.volatile_clear();
+    if read.is_err() {
+        v.zeroize();
+        return None;
+    }
     Some(v)
+}
+
+/// Whether there's a record by this name, without reading it.
+fn has_key(store: &Store, dict: &str, key: &str, basis: &str) -> bool {
+    store.pddb.get(dict, key, Some(basis), false, false, None, None::<fn()>).is_ok()
 }
 
 /// The resident credentials maki has: the slot of each, and its credential ID.
@@ -283,7 +315,7 @@ fn restore(store: &Store, basis: &str, entries: &[Entry], write: bool) -> Added 
             },
         }
         let dict = maki_app_host_api::data_dict(id);
-        if read_key(store, &dict, key, basis).is_some() {
+        if has_key(store, &dict, key, basis) {
             continue; // maki has it already: keep maki's
         }
         if (!write || put(&dict, key, &e.value)) && !apps_back.iter().any(|a| a == id) {
@@ -318,7 +350,7 @@ fn restore(store: &Store, basis: &str, entries: &[Entry], write: bool) -> Added 
             }
             continue;
         }
-        if read_key(store, dict, &e.key, basis).is_some() {
+        if has_key(store, dict, &e.key, basis) {
             continue; // maki has it already: keep maki's
         }
         if !write || put(dict, &e.key, &e.value) {
@@ -489,10 +521,8 @@ impl Store {
 
     /// The recovery phrase's entropy, from the secret basis (open only while unlocked).
     fn entropy(&self, basis: &str) -> Option<Vec<u8>> {
-        let mut k =
-            self.pddb.get(SEED_DICT, KEY_ENTROPY, Some(basis), false, false, None, None::<fn()>).ok()?;
-        let mut v = Vec::new();
-        k.read_to_end(&mut v).ok()?;
+        let k = self.pddb.get(SEED_DICT, KEY_ENTROPY, Some(basis), false, false, None, None::<fn()>).ok()?;
+        let v = read_whole(k)?;
         (!v.is_empty()).then_some(v)
     }
 
@@ -1303,8 +1333,9 @@ fn main() -> ! {
                             (RESULT_NOT_NOW, Vec::new())
                         } else {
                             let mut entropy: [u8; 32] = random();
-                            let words: Vec<String> =
-                                maki_seed::to_words(&entropy).iter().map(|w| w.to_string()).collect();
+                            let listed = maki_seed::to_words(&entropy);
+                            let words: Vec<String> = listed.iter().map(|w| w.to_string()).collect();
+                            maki_seed::forget_words(listed);
                             let stored = store.set_entropy(&lock.basis, &entropy);
                             entropy.zeroize();
                             match stored {

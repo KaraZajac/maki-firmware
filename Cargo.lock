@@ -5436,6 +5436,7 @@ dependencies = [
  "xous",
  "xous-api-names",
  "xous-ipc 0.10.10 (registry+https://github.com/rust-lang/crates.io-index)",
+ "zeroize",
 ]
 
 [[package]]

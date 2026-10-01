@@ -100,6 +100,12 @@ pub struct FidoSecret {
     pub keys: Vec<u8>,
 }
 
+// The secrets these carry are wiped wherever one is dropped: in maki-keys once it has answered,
+// and in the asker once it has taken them out.
+impl Drop for FidoSecret {
+    fn drop(&mut self) { zeroize::Zeroize::zeroize(&mut self.keys) }
+}
+
 /// Backups travel in pieces this big, here and over USB.
 pub const CHUNK: usize = 4096;
 /// Bigger than any vault maki could hold, and a bound on what a restore will take in.
@@ -166,11 +172,26 @@ pub struct WalletRequest {
     pub answer: Vec<u8>,
 }
 
+impl Drop for WalletRequest {
+    fn drop(&mut self) {
+        zeroize::Zeroize::zeroize(&mut self.digest);
+        zeroize::Zeroize::zeroize(&mut self.answer);
+    }
+}
+
 /// A recovery phrase, one way or the other, and what became of it (`RESULT_*`).
 #[derive(Debug, Default, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
 pub struct PhraseRequest {
     pub words: Vec<String>,
     pub result: u32,
+}
+
+impl Drop for PhraseRequest {
+    fn drop(&mut self) {
+        for w in self.words.iter_mut() {
+            zeroize::Zeroize::zeroize(w);
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, num_derive::FromPrimitive, num_derive::ToPrimitive)]
@@ -327,7 +348,7 @@ impl Keys {
             return (RESULT_FAILED, Vec::new());
         }
         match buf.to_original::<PhraseRequest, _>() {
-            Ok(r) => (r.result, r.words),
+            Ok(mut r) => (r.result, core::mem::take(&mut r.words)),
             Err(_) => (RESULT_FAILED, Vec::new()),
         }
     }
@@ -431,8 +452,8 @@ impl Keys {
             return None;
         };
         buf.lend_mut(self.conn, KeysOp::FidoKeys.to_u32().unwrap()).ok()?;
-        let answer = buf.to_original::<FidoSecret, _>().ok()?;
-        (answer.result == RESULT_OK && answer.keys.len() == 128).then_some(answer.keys)
+        let mut answer = buf.to_original::<FidoSecret, _>().ok()?;
+        (answer.result == RESULT_OK && answer.keys.len() == 128).then(|| core::mem::take(&mut answer.keys))
     }
 
     /// A wallet app's key at `path`, or a signature over `digest` with it (`WALLET_*`), for the
@@ -455,9 +476,9 @@ impl Keys {
             Buffer::into_buf(request).map_err(|_| RESULT_FAILED)?
         };
         buf.lend_mut(self.conn, KeysOp::Wallet.to_u32().unwrap()).map_err(|_| RESULT_FAILED)?;
-        let answer = buf.to_original::<WalletRequest, _>().map_err(|_| RESULT_FAILED)?;
+        let mut answer = buf.to_original::<WalletRequest, _>().map_err(|_| RESULT_FAILED)?;
         match answer.result {
-            RESULT_OK => Ok(answer.answer),
+            RESULT_OK => Ok(core::mem::take(&mut answer.answer)),
             code => Err(code),
         }
     }
