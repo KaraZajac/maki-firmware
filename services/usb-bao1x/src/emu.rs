@@ -86,7 +86,10 @@ impl Pipe {
 
     /// Watch the pipe for what the host sends and tell the service, as the controller's interrupt
     /// would: `IrqSerialRx` while serial bytes wait, `IrqFidoRx` while a whole FIDO report does.
-    /// Each takes everything waiting, so a ring too many finds nothing, and none is missed.
+    /// Each takes everything waiting, so a ring too many finds nothing, and none is missed. It
+    /// looks every few milliseconds while bytes come, and backs off to 50 ms once they stop: a
+    /// timer that wakes all the time would cost the emulated maki a fifth of its time, which a
+    /// badge never spends.
     pub fn watch(cid: xous::CID) {
         std::thread::spawn(move || {
             let tt = ticktimer::Ticktimer::new().unwrap();
@@ -96,14 +99,18 @@ impl Pipe {
                 xous::try_send_message(cid, xous::Message::new_scalar(op.to_usize().unwrap(), 0, 0, 0, 0))
                     .ok();
             };
+            let mut quiet = 0u32;
             loop {
-                tt.sleep_ms(5).ok();
-                if pipe.available(SERIAL) > 0 {
+                tt.sleep_ms(if quiet < 50 { 2 } else { 50 }).ok();
+                let serial = pipe.available(SERIAL) > 0;
+                let fido = pipe.available(FIDO) >= 64;
+                if serial {
                     ring(crate::api::Opcode::IrqSerialRx);
                 }
-                if pipe.available(FIDO) >= 64 {
+                if fido {
                     ring(crate::api::Opcode::IrqFidoRx);
                 }
+                quiet = if serial || fido || pipe.available(FIDO) > 0 { 0 } else { quiet.saturating_add(1) };
             }
         });
     }
