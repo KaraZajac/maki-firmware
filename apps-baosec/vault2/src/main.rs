@@ -12,6 +12,7 @@ pub mod vault_api;
 pub use vault_api::*;
 mod generator;
 mod link;
+mod migration;
 mod vendor_commands;
 
 use core::sync::atomic::{AtomicBool, Ordering};
@@ -108,6 +109,7 @@ fn scan_qr(
     )
     .ok();
     vault_ui.refresh_draw_list();
+    vault_ui.show_added();
     vault_ui.redraw();
 }
 

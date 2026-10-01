@@ -141,6 +141,17 @@ impl VaultUi {
         }
     }
 
+    /// maki: shows the code a scan just added, if one did.
+    pub(crate) fn show_added(&mut self) {
+        let mode = *self.mode.lock().unwrap();
+        let mut lists = self.item_lists.lock().unwrap();
+        if let Some(key) = lists.added.take() {
+            if let Some(i) = lists.full_list(mode).iter().position(|item| item.guid == key) {
+                self.carousel = i;
+            }
+        }
+    }
+
     /// How many entries the current mode has.
     pub(crate) fn len(&self) -> usize {
         let mode = *self.mode.lock().unwrap();

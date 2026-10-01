@@ -1285,6 +1285,17 @@ impl ActionManager {
         log::debug!("heap usage B: {}", heap_usage());
     }
 
+    /// maki: a code kept again (the same name, scanned or imported once more, its secret perhaps
+    /// new) keeps the sites it gives codes for, so the browser isn't asked again which it is.
+    fn keep_sites(&self, totp: &mut TotpRecord) {
+        let key = storage::hex(totp.hash());
+        if let Ok(old) = self.storage.borrow().get_record::<TotpRecord>(&storage::ContentKind::TOTP, &key) {
+            if totp.site.is_empty() {
+                totp.site = old.site;
+            }
+        }
+    }
+
     pub(crate) fn acquire_qr(&mut self) {
         match self.gfx.acquire_qr() {
             Ok(qr_data) => {
@@ -1315,8 +1326,12 @@ impl ActionManager {
                         match request {
                             "otpauth" => {
                                 if let Ok(mut totp) = TotpRecord::from_uri(data) {
+                                    self.keep_sites(&mut totp);
                                     match self.storage.borrow_mut().new_record(&mut totp, None, true) {
-                                        Ok(_) => (),
+                                        Ok(_) => {
+                                            self.item_lists.lock().unwrap().added =
+                                                Some(storage::hex(totp.hash()))
+                                        }
                                         Err(error) => {
                                             log::error!("internal error");
                                             self.report_err(
@@ -1333,6 +1348,77 @@ impl ActionManager {
                                         .ok();
                                 }
                             }
+                            // maki: Google Authenticator's "Transfer accounts" export, every code in
+                            // the QR code at once
+                            "otpauth-migration" => match crate::migration::parse(data) {
+                                Ok(batch) => {
+                                    let mut added = 0;
+                                    for code in batch.codes {
+                                        let mut totp = TotpRecord {
+                                            version: VAULT_TOTP_REC_VERSION,
+                                            secret: code.secret,
+                                            name: code.name,
+                                            notes: code.issuer,
+                                            algorithm: match code.algorithm {
+                                                crate::migration::Algorithm::Sha1 => TotpAlgorithm::HmacSha1,
+                                                crate::migration::Algorithm::Sha256 => {
+                                                    TotpAlgorithm::HmacSha256
+                                                }
+                                                crate::migration::Algorithm::Sha512 => {
+                                                    TotpAlgorithm::HmacSha512
+                                                }
+                                            },
+                                            digits: code.digits,
+                                            // HOTP keeps its counter where TOTP keeps its period
+                                            timestep: if code.hotp { code.counter } else { 30 },
+                                            is_hotp: code.hotp,
+                                            ..Default::default()
+                                        };
+                                        self.keep_sites(&mut totp);
+                                        match self.storage.borrow_mut().new_record(&mut totp, None, true) {
+                                            Ok(_) => {
+                                                let key = storage::hex(totp.hash());
+                                                let li = make_totp_item_from_record(&key, totp);
+                                                let mut lists = self.item_lists.lock().unwrap();
+                                                lists.insert_unique(self.mode_cache, li);
+                                                if added == 0 {
+                                                    lists.added = Some(key);
+                                                }
+                                                added += 1;
+                                            }
+                                            Err(e) => log::error!("couldn't keep an imported code: {:?}", e),
+                                        }
+                                    }
+                                    log::info!(
+                                        "imported {} codes from a Google Authenticator export ({} it can't use), QR code {} of {}",
+                                        added,
+                                        batch.skipped,
+                                        batch.index,
+                                        batch.size
+                                    );
+                                    let mut note = if added == 1 {
+                                        "1 code imported".to_string()
+                                    } else {
+                                        format!("{added} codes imported")
+                                    };
+                                    if batch.skipped > 0 {
+                                        note.push_str(&format!("; {} it can't use (MD5)", batch.skipped));
+                                    }
+                                    if batch.index < batch.size {
+                                        note.push_str(&format!(
+                                            ". That was QR code {} of {}: scan the next.",
+                                            batch.index, batch.size
+                                        ));
+                                    }
+                                    self.modals.show_notification(&note, None).ok();
+                                }
+                                Err(e) => {
+                                    log::warn!("not a Google Authenticator export: {}", e);
+                                    self.modals
+                                        .show_notification(t!("vault.error.qr", locales::LANG), None)
+                                        .ok();
+                                }
+                            },
                             "pwauth" => {
                                 if let Some((op_type, rest)) = data.split_once('/') {
                                     match op_type {

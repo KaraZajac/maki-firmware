@@ -1,3 +1,4 @@
+// Changed for maki (a fork of Xous: github.com/KaraZajac/maki-firmware) in 2026; its git history says what.
 use core::num::NonZeroUsize;
 use std::cmp::Ordering;
 use std::ops::Range;
@@ -285,10 +286,15 @@ impl FilteredListView {
 pub struct ItemLists {
     totp: FilteredListView,
     pw: FilteredListView,
+    /// maki: the key of the code a scan just added (the first, of an import), for the list to show
+    /// it: enrolling a site's 2FA, the site asks for the code next
+    pub added: Option<String>,
 }
 #[allow(dead_code)]
 impl ItemLists {
-    pub fn new() -> Self { ItemLists { totp: FilteredListView::new(), pw: FilteredListView::new() } }
+    pub fn new() -> Self {
+        ItemLists { totp: FilteredListView::new(), pw: FilteredListView::new(), added: None }
+    }
 
     pub fn is_db_empty(&self, list_type: VaultMode) -> bool { self.li(list_type).is_db_empty() }
 
