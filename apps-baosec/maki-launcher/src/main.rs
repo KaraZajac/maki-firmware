@@ -1098,6 +1098,8 @@ fn main() -> ! {
             }
             Some(LauncherOp::Tick) => {
                 if sys.asking.active() {
+                    // the ask's bar shows the clock too, until its last seconds
+                    sys.set_clock();
                     if let Some(answer) = sys.asking.tick(&sys.screen, sys.linked) {
                         sys.asking.finish(answer);
                         sys.after_ask();
