@@ -34,6 +34,15 @@ const KEY_LOCK_NEXT: &str = "lock.next";
 const KEY_TRIES: &str = "tries";
 /// Which chip counter counts the tries, and its value at the last right PIN (`tries::Base`).
 const KEY_TRIES_BASE: &str = "tries.chip";
+/// Where the tries' base is kept since 2026-10-01: two slots, written in turn, each with a number
+/// one past the other's, so the newest whole one is the base.
+const KEY_TRIES_SLOTS: [&str; 2] = ["tries.chip.a", "tries.chip.b"];
+
+/// A slot's record: its number, then the base.
+fn tries_slot(b: &[u8]) -> Option<(u32, tries::Base)> {
+    let b: &[u8; 12] = b.try_into().ok()?;
+    Some((u32::from_le_bytes(b[..4].try_into().unwrap()), tries::Base::from_bytes(&b[4..])?))
+}
 /// This maki's name (`maki_proto::names`): picked the first time it starts, kept through wipes,
 /// which forget only the lock.
 const KEY_NAME: &str = "name";
@@ -417,6 +426,36 @@ impl Store {
         Some(v)
     }
 
+    /// A key's value: Ok(None) if it isn't there, Err if it couldn't be read.
+    fn read_checked(&self, key: &str) -> Result<Option<Vec<u8>>, ()> {
+        match self.pddb.get(DICT, key, Some(PDDB_DEFAULT_SYSTEM_BASIS), false, false, None, None::<fn()>) {
+            Ok(mut k) => {
+                let mut v = Vec::new();
+                k.read_to_end(&mut v).map_err(|_| ())?;
+                Ok(Some(v))
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(_) => Err(()),
+        }
+    }
+
+    /// Overwrite a fixed-size record where it is, never deleting it first (a delete reaches the
+    /// flash at once, its replacement only at the sync), and make sure it's on flash.
+    fn overwrite(&self, key: &str, value: &[u8]) -> std::io::Result<()> {
+        let mut k = self.pddb.get(
+            DICT,
+            key,
+            Some(PDDB_DEFAULT_SYSTEM_BASIS),
+            true,
+            true,
+            Some(value.len()),
+            None::<fn()>,
+        )?;
+        k.write_all(value)?;
+        drop(k);
+        self.pddb.sync()
+    }
+
     /// Replace a key's value in the system basis, and make sure it's on flash.
     fn write(&self, key: &str, value: &[u8]) -> std::io::Result<()> {
         self.pddb.delete_key(DICT, key, Some(PDDB_DEFAULT_SYSTEM_BASIS)).ok();
@@ -514,12 +553,50 @@ impl tries::Counters for PinTries<'_> {
         unsafe { self.chip.inc_owc(counter) }.is_ok()
     }
 
-    fn base(&self) -> Option<tries::Base> {
-        self.store.read(KEY_TRIES_BASE).and_then(|b| tries::Base::from_bytes(&b))
+    /// The newest of the two slots' bases, or before the slots, the one record. A slot that
+    /// can't be read is passed over if the other has a base; only if neither does is it an error.
+    fn base(&self) -> Result<Option<tries::Base>, ()> {
+        let mut newest: Option<(u32, tries::Base)> = None;
+        let mut unreadable = false;
+        for key in KEY_TRIES_SLOTS {
+            match self.store.read_checked(key) {
+                Ok(Some(b)) => {
+                    if let Some((seq, base)) = tries_slot(&b) {
+                        if newest.is_none_or(|(s, _)| seq > s) {
+                            newest = Some((seq, base));
+                        }
+                    }
+                }
+                Ok(None) => {}
+                Err(()) => unreadable = true,
+            }
+        }
+        if let Some((_, base)) = newest {
+            return Ok(Some(base));
+        }
+        if unreadable {
+            return Err(());
+        }
+        Ok(self.store.read_checked(KEY_TRIES_BASE)?.and_then(|b| tries::Base::from_bytes(&b)))
     }
 
+    /// Into the slot that doesn't hold the newest base, numbered one past it: a write cut short
+    /// (the badge unplugged) leaves the other whole, and the last right PIN merely unrecorded.
     fn set_base(&self, base: tries::Base) -> bool {
-        self.store.write(KEY_TRIES_BASE, &base.to_bytes()).is_ok()
+        let seqs: Vec<Option<u32>> = KEY_TRIES_SLOTS
+            .iter()
+            .map(|k| self.store.read_checked(k).ok().flatten().and_then(|b| tries_slot(&b)).map(|(s, _)| s))
+            .collect();
+        let (seq, slot) = match (seqs[0], seqs[1]) {
+            (Some(a), Some(b)) if a >= b => (a.wrapping_add(1), 1),
+            (_, Some(b)) => (b.wrapping_add(1), 0),
+            (Some(a), None) => (a.wrapping_add(1), 1),
+            (None, None) => (1, 0),
+        };
+        let mut record = [0u8; 12];
+        record[..4].copy_from_slice(&seq.to_le_bytes());
+        record[4..].copy_from_slice(&base.to_bytes());
+        self.store.overwrite(KEY_TRIES_SLOTS[slot], &record).is_ok()
     }
 
     fn old_tries(&self) -> u32 {
@@ -828,6 +905,25 @@ fn main() -> ! {
                         _ => RESULT_FAILED,
                     };
                     log::info!("update mode: {}", result);
+                    // on a yes, maki-keys' loop sets bootwait and syncs first: an answer of yes
+                    // means the update drive is coming
+                    let result = if result == RESULT_OK {
+                        let set = xous::connect(sid).and_then(|me| {
+                            xous::send_message(
+                                me,
+                                xous::Message::new_blocking_scalar(
+                                    KeysOp::EnterUpdateMode.to_usize().unwrap(),
+                                    0,
+                                    0,
+                                    0,
+                                    0,
+                                ),
+                            )
+                        });
+                        if matches!(set, Ok(xous::Result::Scalar1(1))) { RESULT_OK } else { RESULT_FAILED }
+                    } else {
+                        result
+                    };
                     if let Some(mem) = msg.body.memory_message_mut() {
                         let mut buffer = unsafe { Buffer::from_memory_message_mut(mem) };
                         if let Ok(mut req) = buffer.to_original::<UpdateModeRequest, _>() {
@@ -835,14 +931,15 @@ fn main() -> ! {
                             buffer.replace(req).ok();
                         }
                     }
-                    // the answer goes back to maki-link first, then the restart
                     drop(msg);
                     if result == RESULT_OK {
+                        // the answer on its way to maki-link, then over USB: then the restart
+                        std::thread::sleep(std::time::Duration::from_millis(500));
                         if let Ok(me) = xous::connect(sid) {
                             xous::send_message(
                                 me,
                                 xous::Message::new_scalar(
-                                    KeysOp::EnterUpdateMode.to_usize().unwrap(),
+                                    KeysOp::RestartIntoUpdateMode.to_usize().unwrap(),
                                     0,
                                     0,
                                     0,
@@ -854,24 +951,24 @@ fn main() -> ! {
                     }
                 });
             }
-            // only from this process, once the owner said yes to `UpdateMode`
+            // only from this process, once the owner said yes to `UpdateMode`: bootwait set and
+            // the storage synced before the yes goes back; 1 if both were
             Some(KeysOp::EnterUpdateMode) if msg.sender.pid() == xous::current_pid().ok() => {
-                if let Err(e) = chip.bootwait(Some(true)) {
-                    log::error!("couldn't set boot1's bootwait flag, so no update mode: {:?}", e);
-                    continue;
-                }
-                store.pddb.sync().ok();
-                // a moment for maki-link's answer to leave over USB
-                std::thread::sleep(std::time::Duration::from_millis(500));
-                log::info!("restarting into update mode, for maki desktop");
-                match susres::Susres::new_without_hook(&xns) {
-                    Ok(s) => {
-                        if let Err(e) = s.reboot(true) {
-                            log::error!("couldn't restart: {:?}", e);
-                        }
+                let set = match chip.bootwait(Some(true)) {
+                    Ok(_) => store.pddb.sync().is_ok(),
+                    Err(e) => {
+                        log::error!("couldn't set boot1's bootwait flag, so no update mode: {:?}", e);
+                        false
                     }
-                    Err(e) => log::error!("couldn't reach susres to restart: {:?}", e),
-                }
+                };
+                xous::return_scalar(msg.sender, set as usize).ok();
+            }
+            Some(KeysOp::RestartIntoUpdateMode) if msg.sender.pid() == xous::current_pid().ok() => {
+                log::info!("restarting into update mode, for maki desktop");
+                let restarted = susres::Susres::new_without_hook(&xns).map(|s| s.reboot(true));
+                // still here: every later start would wait in update mode, so not this one
+                log::error!("couldn't restart into update mode: {:?}", restarted);
+                chip.bootwait(Some(false)).ok();
             }
             Some(KeysOp::DeviceName) => {
                 let name = name_known.get_or_insert_with(|| store.name());
@@ -905,7 +1002,9 @@ fn main() -> ! {
                 req.data.clear();
                 req.result = match (state, store.lock()) {
                     (State::Unlocked, Some(lock)) => {
-                        if req.offset == 0 || sealed.is_none() {
+                        // sealed once, at the start: a seal has a fresh nonce, and pieces of two
+                        // would make a backup that doesn't open
+                        if req.offset == 0 {
                             let planted = option_env!("MAKI_DEMO_BACKUP").is_some()
                                 && passkeys::plant_demo(&store.pddb, &lock.basis);
                             sealed = backup_key(seed.get(&store, state)).and_then(|mut key| {
@@ -924,7 +1023,7 @@ fn main() -> ! {
                                 passkeys::unplant_demo(&store.pddb, &lock.basis);
                             }
                         }
-                        match &sealed {
+                        let result = match &sealed {
                             None if store.entropy(&lock.basis).is_none() => RESULT_NO_PHRASE,
                             None => RESULT_FAILED,
                             Some(blob) => {
@@ -934,7 +1033,14 @@ fn main() -> ! {
                                 req.data.extend_from_slice(&blob[start..end]);
                                 RESULT_OK
                             }
+                        };
+                        // the last piece gone: the blob needn't take up the heap until Lock
+                        if result == RESULT_OK && req.offset as usize + req.data.len() >= req.total as usize {
+                            if let Some(mut b) = sealed.take() {
+                                b.zeroize();
+                            }
                         }
+                        result
                     }
                     _ => RESULT_NOT_NOW,
                 };
@@ -1179,9 +1285,12 @@ fn main() -> ! {
                 xous::return_scalar(msg.sender, (msg.sender.pid() == screen) as usize).ok();
             }
             Some(op @ (KeysOp::NewPhrase | KeysOp::RestorePhrase)) => {
-                // whatever was derived before comes from another phrase, if any
-                seed.forget();
-                wallet = None;
+                // whatever was derived before comes from another phrase, if any: the screen's
+                // request alone, or anyone could make the next request derive it all again
+                if from_screen && state == State::Unlocked {
+                    seed.forget();
+                    wallet = None;
+                }
                 let Some(mem) = msg.body.memory_message_mut() else { continue };
                 let mut buffer = unsafe { Buffer::from_memory_message_mut(mem) };
                 let Ok(mut req) = buffer.to_original::<PhraseRequest, _>() else { continue };

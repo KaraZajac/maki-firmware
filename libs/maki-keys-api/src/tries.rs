@@ -61,8 +61,10 @@ pub trait Counters {
     fn get(&self, counter: usize) -> Option<u32>;
     /// Counts one up; false if it didn't (worn out, or the chip couldn't be asked).
     fn bump(&self, counter: usize) -> bool;
-    /// The base the flash keeps, if any.
-    fn base(&self) -> Option<Base>;
+    /// The base the flash keeps: Ok(None) if it keeps none, Err if the flash couldn't be read.
+    /// Not being able to read it mustn't look like a flash with no base (one from before, put
+    /// back, whose tries are used up): then nothing is counted, and no PIN checked.
+    fn base(&self) -> Result<Option<Base>, ()>;
     fn set_base(&self, base: Base) -> bool;
     /// The count firmware before this kept in the flash (0 if none), and forgetting it.
     fn old_tries(&self) -> u32;
@@ -76,7 +78,7 @@ enum Start {
 }
 
 fn start<C: Counters>(c: &C) -> Option<Start> {
-    if let Some(base) = c.base() {
+    if let Some(base) = c.base().ok()? {
         return Some(Start::Base(base));
     }
     // counted on the chip before, but the flash doesn't say so: it's from before, put back
@@ -146,7 +148,8 @@ pub fn count_try<C: Counters>(c: &C) -> Option<Try> {
 /// A right PIN, or a new one: the tries start again from here, on the next counter once this
 /// one is nearly worn. False if the flash couldn't take it (the try stays counted).
 pub fn forgive<C: Counters>(c: &C) -> bool {
-    let current = c.base().map(|b| b.counter).unwrap_or(COUNTER_FIRST);
+    let Ok(base) = c.base() else { return false };
+    let current = base.map(|b| b.counter).unwrap_or(COUNTER_FIRST);
     let Some(value) = c.get(current) else { return false };
     if value >= WORN_AT {
         let next = pool().find(|&n| n > current && c.get(n).is_some_and(|v| v < WORN_AT));
@@ -178,6 +181,8 @@ mod tests {
         base: Cell<Option<Base>>,
         old: Cell<u32>,
         flash_ok: Cell<bool>,
+        /// whether the flash can be read
+        readable: Cell<bool>,
     }
 
     impl Fake {
@@ -187,6 +192,7 @@ mod tests {
                 base: Cell::new(None),
                 old: Cell::new(0),
                 flash_ok: Cell::new(true),
+                readable: Cell::new(true),
             }
         }
 
@@ -211,7 +217,9 @@ mod tests {
             true
         }
 
-        fn base(&self) -> Option<Base> { self.base.get() }
+        fn base(&self) -> Result<Option<Base>, ()> {
+            if self.readable.get() { Ok(self.base.get()) } else { Err(()) }
+        }
 
         fn set_base(&self, base: Base) -> bool {
             if self.flash_ok.get() {
@@ -233,6 +241,20 @@ mod tests {
             assert!(checked.len() <= 10, "never used up");
         }
         checked
+    }
+
+    #[test]
+    fn a_flash_that_cant_be_read_counts_nothing_and_wipes_nothing() {
+        let c = Fake::new();
+        forgive(&c);
+        assert_eq!(count_try(&c), Some(Try::Check(1)));
+        c.readable.set(false);
+        // not a flash with no base, which would be one put back with its tries used up
+        assert_eq!(count_try(&c), None);
+        assert_eq!(tries(&c), None);
+        assert!(!forgive(&c));
+        c.readable.set(true);
+        assert_eq!(count_try(&c), Some(Try::Check(2)));
     }
 
     #[test]

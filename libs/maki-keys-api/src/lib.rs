@@ -83,10 +83,14 @@ pub enum KeysOp {
     /// desktop: once unlocked, maki asks its owner on screen whether to restart into update mode,
     /// where boot1 takes new firmware on its USB drive. On a yes, it answers, then restarts there.
     UpdateMode = 28,
-    /// Scalar from maki-keys itself, once its owner said yes to `UpdateMode`: boot1 is to wait
-    /// for new firmware at the next start (its bootwait flag), and maki restarts. Whoever installs
-    /// the firmware turns the flag off on boot1's console, and maki-keys does when it starts.
+    /// Blocking scalar from maki-keys itself, once its owner said yes to `UpdateMode`: boot1 is to
+    /// wait for new firmware at the next start (its bootwait flag), the storage synced. Answers 1
+    /// once both are done. Whoever installs the firmware turns the flag off on boot1's console,
+    /// and maki-keys does when it starts.
     EnterUpdateMode = 29,
+    /// Scalar from maki-keys itself, after `EnterUpdateMode` and the answer: restart. If that
+    /// fails, bootwait goes off again, so that a later start isn't caught in update mode.
+    RestartIntoUpdateMode = 30,
 }
 
 /// `FidoKeys`' answer: `keys` is 128 bytes (encryption, authentication, CredRandom).
