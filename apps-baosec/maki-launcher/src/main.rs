@@ -403,7 +403,11 @@ impl System {
             return self.choose(
                 "No phrase yet",
                 &["Setup stopped before the", "recovery phrase was made."],
-                vec![("make one now", Next::ShowPhrase), ("restore mine", Next::Words(24))],
+                vec![
+                    ("make one now", Next::ShowPhrase),
+                    ("restore 24 words", Next::Words(24)),
+                    ("restore 12 words", Next::Words(12)),
+                ],
             );
         }
         self.go_home();
@@ -428,15 +432,18 @@ impl System {
                         };
                         self.pin_pad("Enter your PIN", &note, PinFor::Enter)
                     }
+                    // the Welcome screen next: set up afresh, or restore from the phrase, which
+                    // brings back passkeys, wallets and backups
                     PinResult::Wiped => self.info(
                         "Too many tries",
                         &[
                             "maki's secrets were wiped.",
-                            "Choose a new PIN, then",
-                            "restore from your backup.",
+                            "Restore it from your",
+                            "recovery phrase, or set",
+                            "it up anew.",
                         ],
                         "continue",
-                        Next::ChoosePin,
+                        Next::Home,
                     ),
                     _ => self.info("Couldn't check it", &["Unplug maki and try again."], "", Next::Home),
                 }
@@ -575,12 +582,14 @@ impl System {
             set_focus(&self.apps[i], Focus::Background);
             self.paused = Some(i);
         }
-        self.asking.show_next(&self.screen, self.linked);
+        let over_app = self.paused.is_some();
+        self.asking.show_next(&self.screen, self.linked, over_app);
     }
 
     /// An ask was answered: the next one, or the screen goes back to what was there.
     fn after_ask(&mut self) {
-        if self.asking.show_next(&self.screen, self.linked) {
+        // the next ask, over the app still paused, if there was one
+        if self.asking.show_next(&self.screen, self.linked, self.paused.is_some()) {
             return;
         }
         match self.paused.take() {

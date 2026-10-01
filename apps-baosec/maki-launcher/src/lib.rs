@@ -239,7 +239,18 @@ impl Launcher {
     fn send_ask(&self, request: AskRequest) -> Result<Answer, xous::Error> {
         // `into_buf` would size the buffer by the struct, one page, which a review with many
         // pages outgrows: room for the text, plus its bookkeeping
-        let text = request.pages.len() + request.choices.len();
+        let text = [
+            &request.pages,
+            &request.choices,
+            &request.subject,
+            &request.question,
+            &request.detail,
+            &request.yes,
+            &request.no,
+        ]
+        .iter()
+        .map(|t| t.len())
+        .sum::<usize>();
         let mut buf = Buffer::new((4096 + text).next_multiple_of(4096));
         buf.replace(request).or(Err(xous::Error::InternalError))?;
         buf.lend_mut(self.conn, LauncherOp::Ask.to_u32().unwrap())?;

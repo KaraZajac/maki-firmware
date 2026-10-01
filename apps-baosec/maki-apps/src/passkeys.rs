@@ -31,6 +31,9 @@ pub(crate) struct Passkeys {
     list: Vec<Passkey>,
     index: usize,
     front: bool,
+    /// the passkey on screen when the menu was opened, by its slot: picking an item brings the
+    /// app back to the front, which reads the list afresh, and the one on screen may have moved
+    menu_slot: core::cell::Cell<Option<usize>>,
 }
 
 impl Passkeys {
@@ -43,6 +46,7 @@ impl Passkeys {
             list: Vec::new(),
             index: 0,
             front: false,
+            menu_slot: core::cell::Cell::new(None),
         }
     }
 
@@ -125,6 +129,7 @@ impl Passkeys {
     }
 
     pub(crate) fn menu(&self) -> &'static [&'static str] {
+        self.menu_slot.set(self.list.get(self.index).map(|p| p.slot));
         if self.list.is_empty() { &[] } else { &["Delete this passkey"] }
     }
 
@@ -138,7 +143,8 @@ impl Passkeys {
     /// Delete the passkey on screen, once the owner says so on maki: a site that relies on it
     /// won't let them in with it again.
     fn delete(&mut self) {
-        let Some(p) = self.list.get(self.index) else { return };
+        let Some(slot) = self.menu_slot.take() else { return };
+        let Some(p) = self.list.iter().find(|p| p.slot == slot) else { return };
         let user = p.user.clone().unwrap_or_default();
         let answer = self.launcher.ask(&p.rp_id, "Delete passkey?", &user, &[], ASK_TIMEOUT_S);
         if !matches!(answer, Ok(Answer::Allowed(_))) {

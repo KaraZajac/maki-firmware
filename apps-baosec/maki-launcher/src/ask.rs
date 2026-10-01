@@ -22,6 +22,10 @@ const SITE_LINES: usize = 3;
 /// ignored: one already on its way, meant for what was on screen before, mustn't answer it,
 /// nor one pressed while something else was still being drawn over it.
 const SETTLE_MS: u64 = 700;
+/// The same, for an ask that came up over an app in use: the owner may have been pressing its
+/// buttons (Initiative's and Presenter's centre), and a press meant for the app mustn't answer a
+/// question they haven't read.
+const SETTLE_OVER_APP_MS: u64 = 1500;
 /// The seconds an ask counts down on the bar, in place of the clock, before it gives up.
 const LAST_SECONDS: u32 = 10;
 
@@ -177,10 +181,12 @@ pub(crate) struct Prompt {
     deadline_ms: u64,
     /// when it was first drawn
     shown_ms: u64,
-    /// whether a tick has drawn it again since, SETTLE_MS or more after. Presses count only
+    /// whether a tick has drawn it again since, `settle_ms` or more after. Presses count only
     /// after that: until then it may not be on the screen (an app drawing as it was paused),
     /// and presses queued before it appeared may still be arriving.
     redrawn: bool,
+    /// SETTLE_MS, or SETTLE_OVER_APP_MS for an ask over an app
+    settle_ms: u64,
 }
 
 impl Prompt {
@@ -297,7 +303,8 @@ impl Asking {
     pub(crate) fn active(&self) -> bool { self.current.is_some() }
 
     /// Show the next ask waiting, if there is one and none is showing. Returns whether one is.
-    pub(crate) fn show_next(&mut self, screen: &Screen, linked: bool) -> bool {
+    /// `over_app`: it comes up over an app in use (see SETTLE_OVER_APP_MS).
+    pub(crate) fn show_next(&mut self, screen: &Screen, linked: bool, over_app: bool) -> bool {
         if self.current.is_none() {
             if let Some((msg, req)) = self.queue.pop_front() {
                 let now = self.tt.elapsed_ms();
@@ -313,6 +320,7 @@ impl Asking {
                     stops,
                     selected: 0,
                     redrawn: false,
+                    settle_ms: if over_app { SETTLE_OVER_APP_MS } else { SETTLE_MS },
                 };
                 prompt.draw(screen, now, linked);
                 // the settling starts once it's drawn, however long that took
@@ -366,7 +374,7 @@ impl Asking {
         if !p.redrawn {
             // not drawn again since it appeared (the tick is late): past the settling, this press
             // shows it again rather than answering what may not have been on the screen
-            if now >= p.shown_ms + SETTLE_MS {
+            if now >= p.shown_ms + p.settle_ms {
                 p.draw(screen, now, linked);
                 p.redrawn = true;
             }
@@ -398,7 +406,7 @@ impl Asking {
             return Some(ANSWER_TIMED_OUT);
         }
         p.draw(screen, now, linked);
-        p.redrawn |= now >= p.shown_ms + SETTLE_MS;
+        p.redrawn |= now >= p.shown_ms + p.settle_ms;
         None
     }
 
