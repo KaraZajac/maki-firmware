@@ -208,8 +208,8 @@ fn vault_worker(work: mpsc::Receiver<Work>, waiting: Arc<AtomicU32>, send_lock: 
             }
         };
         let (kind, body) = match &ask {
-            Ask::Login { site } => {
-                let (approval, username, password) = vault.login(site);
+            Ask::Login { site, even_with_passkey } => {
+                let (approval, username, password) = vault.login(site, *even_with_passkey);
                 reply::login(approval, &username, &password)
             }
             Ask::Totp { site } => {
@@ -418,7 +418,7 @@ fn main() -> ! {
                 username: "kara-work".into(),
                 password: "battery staple".into(),
             },
-            Ask::Login { site: "gist.github.com".into() },
+            Ask::Login { site: "gist.github.com".into(), even_with_passkey: false },
             Ask::SaveLogin {
                 site: "accounts.a-rather-long-subdomain.login.example.co.uk".into(),
                 username: "kara@example.com".into(),

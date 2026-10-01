@@ -87,6 +87,30 @@ impl ContentKind {
 impl Manager {
     pub fn new(_xns: &xous_names::XousNames) -> Manager { Manager { pddb: pddb::Pddb::new() } }
 
+    /// maki: whether one of the vault's passkeys (its FIDO authenticator's resident credentials)
+    /// is for a site that covers `site`, as a saved login covers it. The authenticator keeps
+    /// them in a dictionary of its own (see maki-fido).
+    pub fn has_passkey(&self, site: &str) -> bool {
+        let Ok(keys) = self.pddb.list_keys(maki_fido::DICT, None) else {
+            return false;
+        };
+        keys.iter().filter(|k| k.parse::<usize>().is_ok_and(|n| maki_fido::CREDENTIALS.contains(&n))).any(
+            |key| {
+                let Ok(mut k) =
+                    self.pddb.get(maki_fido::DICT, key, None, false, false, None, Some(vault2::basis_change))
+                else {
+                    return false;
+                };
+                let mut v = Vec::new();
+                let covers = k.read_to_end(&mut v).is_ok()
+                    && maki_fido::summary(&v).is_some_and(|s| maki_proto::site::covers(s.rp_id, site));
+                // the record holds the credential's private key
+                v.fill(0);
+                covers
+            },
+        )
+    }
+
     fn pddb_exists(&self, dict: &str, key_name: &str, basis: Option<String>) -> bool {
         match self.pddb.get(dict, &key_name, basis.as_deref(), false, false, None, Some(vault2::basis_change))
         {

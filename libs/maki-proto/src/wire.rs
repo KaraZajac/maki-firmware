@@ -95,6 +95,9 @@ impl<'a> Reader<'a> {
         self.take(n)
     }
 
+    /// Whether everything has been read: for a field a request may leave off at its end.
+    pub fn at_end(&self) -> bool { self.pos == self.data.len() }
+
     /// Everything must have been consumed: trailing bytes mean a malformed message.
     pub fn end(&self) -> Result<(), Truncated> {
         if self.pos == self.data.len() { Ok(()) } else { Err(Truncated) }

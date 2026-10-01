@@ -54,7 +54,7 @@ bytes. Bodies must be consumed exactly: trailing bytes are an error.
 | `0x03` TIME_CHALLENGE | — | `count:u8`, then `count` × (`id:u8` `host:str8` `port:u16` `request:bytes16`) |
 | `0x04` TIME_PROOF | `tz_offset_s:i32` `count:u8`, then `count` × (`id:u8` `response:bytes16`) | `status:u8` `verified:u8` `utc_ms:u64`, then `count:u8` × (`id:u8` `answer:u8`) |
 | `0x05` TIME_UNVERIFIED | `utc_ms:u64` `tz_offset_s:i32` | `refused:u8` (0 set, 1 refused) |
-| `0x10` GET_LOGIN | `site:str8` | `approval:u8` `username:str8` `password:str8` |
+| `0x10` GET_LOGIN | `site:str8` [`flags:u8`] | `approval:u8` `username:str8` `password:str8` |
 | `0x11` GET_TOTP | `site:str8` | `approval:u8` `code:str8` `valid_for_s:u8` |
 | `0x12` SAVE_LOGIN | `site:str8` `username:str8` `password:str8` | `approval:u8` |
 | `0x20` BACKUP_GET | `offset:u32` | `status:u8` `total:u32` `offset:u32` `piece:bytes16` |
@@ -75,8 +75,9 @@ ERROR `code`: 1 malformed, 2 unknown kind, 3 no challenge, 4 challenge expired, 
 out, 4 vault unavailable (or busy: at most three requests wait for the owner at once), 5 clock
 not verified (GET_TOTP only), 6 locked (maki is waiting for its PIN), 7 not yours (a backup
 this maki's recovery phrase can't open), 8 no phrase (no recovery phrase yet), 9 refused (a bundle
-or record maki won't take; the reply says why). Only an approved reply carries a username,
-password, code or backup piece.
+or record maki won't take; the reply says why), 10 passkey (GET_LOGIN only: maki holds a passkey
+for the site, so it offered no password and didn't ask). Only an approved reply carries a
+username, password, code or backup piece.
 
 ## Setting the time
 
@@ -125,6 +126,13 @@ logins for a site), left and right go through them, then "cancel", and the centr
 - **Nothing saved means no prompt**: maki answers `2` at once rather than asking the owner about a
   site it has nothing for. An entry that doesn't name a host with a dot ("GitHub", "bank")
   covers nothing, rather than whole top-level domains.
+- **A passkey comes first.** When maki holds a passkey for the site (one for its RP ID, which
+  covers the site as a saved login would) as well as a login, GET_LOGIN is answered `10` at once:
+  the passkey is the way in, and a site that offers both shouldn't have the password asked for
+  every time its username field is focused. The owner can still ask for it: GET_LOGIN with
+  `flags` bit 0 set is the password even so, and asks as ever. `flags` may be left off (0); its
+  other bits are 0. Only maki answers `10`, so a host sends the flag only after a `10`, and an
+  older maki, which takes no flags, never gets one.
 - **Codes need a verified clock.** GET_TOTP is answered `5` at once unless Roughtime set the
   clock: a host that could set the time with TIME_UNVERIFIED could otherwise collect codes for
   times still to come.

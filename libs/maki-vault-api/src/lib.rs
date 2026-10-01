@@ -42,6 +42,9 @@ pub struct Request {
     /// On the way back, for Totp.
     pub code: String,
     pub valid_for_s: u8,
+    /// Login: the password even if the vault holds a passkey for the site, which it otherwise
+    /// answers `Passkey` instead of asking.
+    pub even_with_passkey: bool,
 }
 
 impl Request {
@@ -73,9 +76,11 @@ impl VaultLink {
 
     fn approval(code: u8) -> Approval { Approval::from_u8(code).unwrap_or(Approval::Unavailable) }
 
-    /// The login saved for `site`, if the owner allows it: (approval, username, password).
-    pub fn login(&self, site: &str) -> (Approval, String, String) {
-        let request = Request { kind: Kind::Login as u8, site: site.into(), ..Default::default() };
+    /// The login saved for `site`, if the owner allows it: (approval, username, password). A
+    /// site maki holds a passkey for is answered `Passkey` unless `even_with_passkey`.
+    pub fn login(&self, site: &str, even_with_passkey: bool) -> (Approval, String, String) {
+        let request =
+            Request { kind: Kind::Login as u8, site: site.into(), even_with_passkey, ..Default::default() };
         match self.call(request) {
             Ok(r) => (Self::approval(r.approval), r.username, r.password),
             Err(_) => (Approval::Unavailable, String::new(), String::new()),

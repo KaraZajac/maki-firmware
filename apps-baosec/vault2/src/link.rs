@@ -166,6 +166,10 @@ fn login(r: &mut Request, storage: &mut storage::Manager, launcher: &Launcher) -
     if found.is_empty() {
         return Err(Approval::NoMatch);
     }
+    // a passkey is the better way in: the password isn't offered unless the owner asks for it
+    if !r.even_with_passkey && storage.has_passkey(&r.site) {
+        return Err(Approval::Passkey);
+    }
     found.sort_by_key(|p| std::cmp::Reverse(p.atime)); // the one used last, first
     let i = if found.len() == 1 {
         ask(launcher, &r.site, "Fill login?", &found[0].username, &[])?

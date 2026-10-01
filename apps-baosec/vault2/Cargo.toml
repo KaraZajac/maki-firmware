@@ -29,6 +29,7 @@ userprefs = { path = "../../libs/userprefs" }
 ux-api = { path = "../../libs/ux-api" }
 maki-launcher = { path = "../maki-launcher" }
 maki-proto = { path = "../../libs/maki-proto" }
+maki-fido = { path = "../../libs/maki-fido" }
 maki-vault-api = { path = "../../libs/maki-vault-api" }
 maki-icons = { path = "../../libs/maki-icons" }
 maki-keys = { package = "maki-keys-api", path = "../../libs/maki-keys-api" }

@@ -290,7 +290,23 @@ fn login_and_totp_requests_become_asks() {
     let mut d = verified_device();
     assert_eq!(
         handled(&mut d, kind::GET_LOGIN, Writer::new().str8("github.com").finish()),
-        Handled::Ask(Ask::Login { site: "github.com".into() })
+        Handled::Ask(Ask::Login { site: "github.com".into(), even_with_passkey: false })
+    );
+    assert_eq!(
+        handled(&mut d, kind::GET_LOGIN, Writer::new().str8("github.com").u8(1).finish()),
+        Handled::Ask(Ask::Login { site: "github.com".into(), even_with_passkey: true }),
+        "the flag asks for the password even with a passkey"
+    );
+    assert_eq!(
+        handled(&mut d, kind::GET_LOGIN, Writer::new().str8("github.com").u8(0).finish()),
+        Handled::Ask(Ask::Login { site: "github.com".into(), even_with_passkey: false })
+    );
+    assert!(
+        matches!(
+            handled(&mut d, kind::GET_LOGIN, Writer::new().str8("github.com").u8(1).u8(0).finish()),
+            Handled::Reply(..)
+        ),
+        "nothing after the flags"
     );
     assert_eq!(
         handled(&mut d, kind::GET_TOTP, Writer::new().str8("xn--80ak6aa92e.com").finish()),

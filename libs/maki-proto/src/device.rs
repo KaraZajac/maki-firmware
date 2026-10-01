@@ -226,9 +226,20 @@ pub const MAX_BACKUP: u32 = 512 * 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Ask {
-    Login { site: String },
-    Totp { site: String },
-    SaveLogin { site: String, username: String, password: String },
+    /// `even_with_passkey`: the password even if maki holds a passkey for the site, which it's
+    /// otherwise answered `Passkey` instead of offering (GET_LOGIN's flag, bit 0)
+    Login {
+        site: String,
+        even_with_passkey: bool,
+    },
+    Totp {
+        site: String,
+    },
+    SaveLogin {
+        site: String,
+        username: String,
+        password: String,
+    },
 }
 
 /// First byte of every approval reply.
@@ -255,6 +266,9 @@ pub enum Approval {
     /// A PSBT maki won't sign: not this wallet's, or without what it needs to check it. The
     /// reply says why; the owner wasn't asked.
     Refused = 9,
+    /// A login for a site maki holds a passkey for: the passkey's the way in, so the password
+    /// wasn't offered and the owner wasn't asked. Asked again with the flag, it is.
+    Passkey = 10,
 }
 
 impl Approval {
@@ -270,6 +284,7 @@ impl Approval {
             7 => Approval::NotYours,
             8 => Approval::NoPhrase,
             9 => Approval::Refused,
+            10 => Approval::Passkey,
             _ => return None,
         })
     }
@@ -500,7 +515,11 @@ impl<P: Platform> Device<P> {
             let mut r = Reader::new(body);
             let site = r.str8()?.to_string();
             let ask = match kind {
-                kind::GET_LOGIN => Ask::Login { site: site.clone() },
+                kind::GET_LOGIN => {
+                    // the flags byte came later: a request may leave it off
+                    let flags = if r.at_end() { 0 } else { r.u8()? };
+                    Ask::Login { site: site.clone(), even_with_passkey: flags & 1 != 0 }
+                }
                 kind::GET_TOTP => Ask::Totp { site: site.clone() },
                 _ => Ask::SaveLogin {
                     site: site.clone(),

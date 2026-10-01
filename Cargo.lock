@@ -9880,6 +9880,7 @@ dependencies = [
  "keystore",
  "locales",
  "log",
+ "maki-fido",
  "maki-icons",
  "maki-keys-api",
  "maki-launcher",

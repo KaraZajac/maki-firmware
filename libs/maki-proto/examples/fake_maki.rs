@@ -73,6 +73,8 @@ enum Policy {
 #[derive(Default)]
 struct Store {
     logins: Vec<(String, String, String)>,
+    /// the sites (RP IDs) maki holds a passkey for (`--passkey`)
+    passkeys: Vec<String>,
     totp: Vec<(String, Vec<u8>)>,
     /// the backup being read out, and one coming in
     sealed: Vec<u8>,
@@ -672,11 +674,17 @@ fn app_entry(app: &Installed) -> AppEntry {
 /// What the vault does on the badge, minus the screen.
 fn answer(ask: Ask, store: &Mutex<Store>, policy: Policy) -> (u8, Vec<u8>) {
     match ask {
-        Ask::Login { site: s } => {
-            let found =
-                store.lock().unwrap().logins.iter().find(|(saved, _, _)| site::covers(saved, &s)).cloned();
+        Ask::Login { site: s, even_with_passkey } => {
+            let (found, passkey) = {
+                let st = store.lock().unwrap();
+                (
+                    st.logins.iter().find(|(saved, _, _)| site::covers(saved, &s)).cloned(),
+                    st.passkeys.iter().any(|rp| site::covers(rp, &s)),
+                )
+            };
             match found {
                 None => reply::login(Approval::NoMatch, "", ""),
+                Some(_) if passkey && !even_with_passkey => reply::login(Approval::Passkey, "", ""),
                 Some((_, user, pass)) => {
                     reply::login(approve(policy, &format!("log in to {s} as {user}?")), &user, &pass)
                 }
@@ -734,6 +742,10 @@ fn main() {
         maki_seed::to_entropy(&words).expect("--phrase isn't a BIP39 phrase");
         maki_seed::seed(&words, "")
     };
+    // a passkey for a site, which its login request is answered with: --passkey github.com
+    for rp in args.windows(2).filter(|w| w[0] == "--passkey").map(|w| &w[1]) {
+        store.lock().unwrap().passkeys.push(rp.clone());
+    }
     for pair in args.windows(2).filter(|w| w[0] == "--totp").map(|w| &w[1]) {
         let (s, secret) = pair.split_once('=').expect("--totp SITE=BASE32");
         store.lock().unwrap().totp.push((s.to_string(), base32(secret).expect("bad base32")));
