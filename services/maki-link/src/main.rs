@@ -23,9 +23,14 @@ const LINK_TIMEOUT_MS: u32 = 25_000;
 const MAX_WAITING_ASKS: u32 = 3;
 
 /// Send a whole frame. Replies come from two threads, so the lock keeps frames from
-/// interleaving if the USB side takes one in pieces.
-fn send(usb: &usb_bao1x::UsbHid, lock: &Mutex<()>, bytes: &[u8]) {
+/// interleaving if the USB side takes one in pieces. Each starts with a delimiter (an empty frame
+/// to the host, which skips it): if one before was given up halfway, its piece ends there rather
+/// than spoiling this one too.
+fn send(usb: &usb_bao1x::UsbHid, lock: &Mutex<()>, frame: &[u8]) {
     let _guard = lock.lock().unwrap();
+    let mut bytes = Vec::with_capacity(frame.len() + 1);
+    bytes.push(0);
+    bytes.extend_from_slice(frame);
     let mut sent = 0;
     for _ in 0..50 {
         match usb.serial_send(&bytes[sent..]) {
@@ -62,10 +67,31 @@ fn locked(ask: &Ask) -> (u8, Vec<u8>) { refused(ask, Approval::Locked) }
 /// before it answers: wallet apps among them).
 enum Work {
     Ask(u16, Ask),
-    Restore { id: u16, total: u32, offset: u32, data: Vec<u8> },
-    AppInstall { id: u16, total: u32, offset: u32, data: Vec<u8> },
-    AppRemove { id: u16, app: String },
-    AppMessage { id: u16, app: String, message: Vec<u8> },
+    /// The last piece of a restore, or of a bundle: `tail` is up while it waits, and goes down
+    /// once it's been answered (see `restore_tail` in `main`)
+    Restore {
+        id: u16,
+        total: u32,
+        offset: u32,
+        data: Vec<u8>,
+        tail: Arc<AtomicBool>,
+    },
+    AppInstall {
+        id: u16,
+        total: u32,
+        offset: u32,
+        data: Vec<u8>,
+        tail: Arc<AtomicBool>,
+    },
+    AppRemove {
+        id: u16,
+        app: String,
+    },
+    AppMessage {
+        id: u16,
+        app: String,
+        message: Vec<u8>,
+    },
 }
 
 /// The app host's answers, as the protocol's.
@@ -167,8 +193,9 @@ fn vault_worker(work: mpsc::Receiver<Work>, waiting: Arc<AtomicU32>, send_lock: 
     for item in work {
         let (id, ask) = match item {
             Work::Ask(id, ask) => (id, ask),
-            Work::Restore { id, total, offset, data } => {
+            Work::Restore { id, total, offset, data, tail } => {
                 let c = keys.restore_chunk(total, offset, data);
+                tail.store(false, Ordering::SeqCst);
                 let (kind, body) = reply::restore_piece(
                     true,
                     approval(c.result),
@@ -180,8 +207,9 @@ fn vault_worker(work: mpsc::Receiver<Work>, waiting: Arc<AtomicU32>, send_lock: 
                 send(&usb, &send_lock, &frame::encode(kind, id, &body));
                 continue;
             }
-            Work::AppInstall { id, total, offset, data } => {
+            Work::AppInstall { id, total, offset, data, tail } => {
                 let (kind, body) = app_install(app_host::AppHost::try_new(&xns), total, offset, data);
+                tail.store(false, Ordering::SeqCst);
                 waiting.fetch_sub(1, Ordering::SeqCst);
                 send(&usb, &send_lock, &frame::encode(kind, id, &body));
                 continue;
@@ -404,6 +432,33 @@ fn main() -> ! {
     let keys = maki_keys::Keys::new(&xns).expect("couldn't connect to maki-keys");
     let send_lock = Arc::new(Mutex::new(()));
     let waiting = Arc::new(AtomicU32::new(0));
+    // A restore's or a bundle's last piece waits in the worker's queue, maybe behind an ask; a
+    // host that gave up meanwhile and starts again would have its new pieces spoiled when the old
+    // last one arrives (out of order, so both are dropped). While one waits, the pieces of
+    // another are turned away as unavailable: the host tries again later.
+    let restore_tail = Arc::new(AtomicBool::new(false));
+    // maki's lock state, followed by a thread that waits on maki-keys for each change: the link's
+    // loop never waits on maki-keys to know it, which a long job there (a Monero signature) would
+    // otherwise make it, the heartbeats with it
+    let unlocked = Arc::new(AtomicBool::new(false));
+    std::thread::spawn({
+        let unlocked = unlocked.clone();
+        move || {
+            let xns = xous_names::XousNames::new().unwrap();
+            let keys = maki_keys::Keys::new(&xns).expect("couldn't connect to maki-keys");
+            let mut seen = keys.status().0;
+            loop {
+                unlocked.store(seen == maki_keys::State::Unlocked, Ordering::SeqCst);
+                let now = keys.wait_change(seen);
+                if now == seen {
+                    // maki-keys couldn't be waited on: not a busy loop
+                    std::thread::sleep(std::time::Duration::from_secs(1));
+                }
+                seen = now;
+            }
+        }
+    });
+    let install_tail = Arc::new(AtomicBool::new(false));
     let (to_vault, asks) = mpsc::channel::<Work>();
     std::thread::spawn({
         let (waiting, send_lock) = (waiting.clone(), send_lock.clone());
@@ -1117,6 +1172,9 @@ fn main() -> ! {
                             let c = keys.backup_chunk(offset);
                             reply::backup_piece(approval(c.result), c.total, offset, &c.data)
                         }
+                        Handled::Backup(Backup::Put { .. }) if restore_tail.load(Ordering::SeqCst) => {
+                            reply::restore_piece(true, Approval::Unavailable, 0, 0, 0)
+                        }
                         Handled::Backup(Backup::Put { total, offset, data }) => {
                             if offset as usize + data.len() < total as usize {
                                 let c = keys.restore_chunk(total, offset, data);
@@ -1126,9 +1184,18 @@ fn main() -> ! {
                                 reply::restore_piece(true, Approval::Unavailable, 0, 0, 0)
                             } else {
                                 // the last piece asks the owner: the worker answers
-                                match to_vault.send(Work::Restore { id: packet.id, total, offset, data }) {
+                                restore_tail.store(true, Ordering::SeqCst);
+                                let tail = restore_tail.clone();
+                                match to_vault.send(Work::Restore {
+                                    id: packet.id,
+                                    total,
+                                    offset,
+                                    data,
+                                    tail,
+                                }) {
                                     Ok(()) => continue,
                                     Err(_) => {
+                                        restore_tail.store(false, Ordering::SeqCst);
                                         waiting.fetch_sub(1, Ordering::SeqCst);
                                         reply::restore_piece(true, Approval::Unavailable, 0, 0, 0)
                                     }
@@ -1141,6 +1208,9 @@ fn main() -> ! {
                         Handled::Apps(Apps::Space) => app_space(app_host::AppHost::try_new(&xns)),
                         Handled::Apps(Apps::StoreUpdate { total, offset, data }) => {
                             store_update(app_host::AppHost::try_new(&xns), total, offset, data)
+                        }
+                        Handled::Apps(Apps::Install { .. }) if install_tail.load(Ordering::SeqCst) => {
+                            reply::app_install(true, Approval::Unavailable, "")
                         }
                         // pieces go straight to the host; the last one waits for the owner
                         Handled::Apps(Apps::Install { total, offset, data })
@@ -1160,9 +1230,12 @@ fn main() -> ! {
                                 log::warn!("too many requests waiting on the owner");
                                 unavailable
                             } else {
+                                let installing = matches!(request, Apps::Install { .. });
                                 let work = match request {
                                     Apps::Install { total, offset, data } => {
-                                        Work::AppInstall { id: packet.id, total, offset, data }
+                                        install_tail.store(true, Ordering::SeqCst);
+                                        let tail = install_tail.clone();
+                                        Work::AppInstall { id: packet.id, total, offset, data, tail }
                                     }
                                     Apps::Remove { id } => Work::AppRemove { id: packet.id, app: id },
                                     Apps::Message { id, message } => {
@@ -1176,6 +1249,9 @@ fn main() -> ! {
                                     Ok(()) => continue,
                                     Err(_) => {
                                         log::error!("the worker is gone");
+                                        if installing {
+                                            install_tail.store(false, Ordering::SeqCst);
+                                        }
                                         waiting.fetch_sub(1, Ordering::SeqCst);
                                         unavailable
                                     }
@@ -1183,7 +1259,7 @@ fn main() -> ! {
                             }
                         }
                         // nothing is asked of a maki that hasn't had its PIN
-                        Handled::Ask(ask) if keys.status().0 != maki_keys::State::Unlocked => locked(&ask),
+                        Handled::Ask(ask) if !unlocked.load(Ordering::SeqCst) => locked(&ask),
                         Handled::Ask(ask) => {
                             if waiting.fetch_add(1, Ordering::SeqCst) >= MAX_WAITING_ASKS {
                                 waiting.fetch_sub(1, Ordering::SeqCst);
