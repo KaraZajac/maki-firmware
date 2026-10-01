@@ -15,7 +15,7 @@ mod session;
 
 use std::time::Duration;
 
-pub use canvas::{Canvas, Color, HEIGHT, MAX_BLIT, Style, TOP, WIDTH};
+pub use canvas::{Canvas, Color, HEIGHT, MAX_BLIT, MAX_SCALE, Style, TOP, WIDTH};
 use maki_bundle::{Kind, Manifest, Permission};
 pub use session::{REFUSED, Session};
 use wasmi::{
@@ -27,8 +27,9 @@ use wasmi::{
 /// pointers holds a few hundred.
 const MAX_TABLE_ELEMENTS: usize = 10_000;
 
-/// The functions this host offers apps.
-pub const API_VERSION: u16 = 8;
+/// The functions this host offers apps. 9 adds `text_scaled` (maki's fonts drawn bigger), and
+/// `wallet_show_backup` shows BIP-85 child seeds.
+pub const API_VERSION: u16 = 9;
 
 /// Host API 8: the jog dial on maki's side, up and down (`Event::Up`, `Event::Down`). Only an app
 /// that says this API or later gets them: an older one would read them as a timeout. The API also
@@ -65,6 +66,7 @@ pub const SINCE: &[(&str, u16)] = &[
     ("key_press", 8),
     ("motion_range", 8),
     ("screen_dark", 8),
+    ("text_scaled", 9),
 ];
 
 /// Keys an app may press beyond text (`key_press`, the keyboard permission), as USB HID usage IDs:
@@ -743,6 +745,29 @@ fn link(linker: &mut Linker<State>) -> Result<(), Error> {
             let s = read_str(&c, ptr, len.min(MAX_TEXT as i32), MAX_TEXT, "text")?;
             charge(&mut c, TEXT_FUEL * s.chars().count() as u64)?;
             Ok(c.data_mut().session.canvas.text(x, y, &s, sty, col))
+        },
+    )?;
+    linker.func_wrap(
+        M,
+        "text_scaled",
+        |mut c: Caller<'_, State>,
+         x: i32,
+         y: i32,
+         ptr: i32,
+         len: i32,
+         sty: i32,
+         col: i32,
+         scale: i32|
+         -> Result<i32, Error> {
+            let (sty, col) = (style(sty)?, color(col)?);
+            if !(1..=MAX_SCALE).contains(&scale) {
+                return Err(trap(format_args!("text_scaled: scale {scale} isn't 1 to {MAX_SCALE}")));
+            }
+            let s = read_str(&c, ptr, len.min(MAX_TEXT as i32), MAX_TEXT, "text_scaled")?;
+            // each pixel of the font is scale by scale of the screen's, on top of what text costs
+            // (host_work_costs)
+            charge(&mut c, TEXT_FUEL * s.chars().count() as u64 * (1 + scale * scale) as u64)?;
+            Ok(c.data_mut().session.canvas.text_scaled(x, y, &s, sty, scale, col))
         },
     )?;
     linker.func_wrap(

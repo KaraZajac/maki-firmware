@@ -812,6 +812,7 @@ dependencies = [
  "ed25519-dalek-compat",
  "hmac",
  "k256",
+ "maki-seed",
  "maki-xmr",
  "ripemd",
  "sha2",

@@ -268,17 +268,12 @@ impl maki_wasm::Platform for FakeApp {
         if self.keys.is_none() {
             self.keys = Some(maki_hd::seed::SeedKeys::from_seed(&self.seed).map_err(|_| maki_wasm::FAILED)?);
         }
-        let words = maki_hd::seed::answer(
-            self.keys.as_ref().unwrap(),
-            maki_hd::op::MONERO_WORDS,
-            path,
-            &[],
-            &[0; 32],
-        )
-        .map_err(|e| match e {
-            maki_hd::Error::Path => maki_wasm::NOT_FOUND,
-            _ => maki_wasm::FAILED,
-        })?;
+        let words =
+            maki_hd::seed::answer(self.keys.as_ref().unwrap(), maki_hd::words_op(path), path, &[], &[0; 32])
+                .map_err(|e| match e {
+                    maki_hd::Error::Path => maki_wasm::NOT_FOUND,
+                    _ => maki_wasm::FAILED,
+                })?;
         match approve(self.policy, &format!("{}: show its backup words?", self.name)) {
             Approval::Approved => {
                 println!("  maki shows its owner {} backup words", words.split(|b| *b == b' ').count());

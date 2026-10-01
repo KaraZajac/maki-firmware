@@ -59,6 +59,15 @@ mod sys {
         pub fn rect(x: i32, y: i32, w: i32, h: i32, color: i32, filled: i32);
         pub fn text(x: i32, y: i32, ptr: *const u8, len: usize, style: i32, color: i32) -> i32;
         pub fn text_width(ptr: *const u8, len: usize, style: i32) -> i32;
+        pub fn text_scaled(
+            x: i32,
+            y: i32,
+            ptr: *const u8,
+            len: usize,
+            style: i32,
+            color: i32,
+            scale: i32,
+        ) -> i32;
         pub fn blit(x: i32, y: i32, w: i32, h: i32, ptr: *const u8, color: i32);
         pub fn qr(x: i32, y: i32, ptr: *const u8, len: usize, size: i32) -> i32;
         pub fn present();
@@ -258,6 +267,20 @@ pub mod screen {
     /// `s` centred across the screen, its top at `y`.
     pub fn text_centred(y: i32, s: &str, style: Style, color: Color) {
         text((super::WIDTH - text_width(s, style)) / 2, y, s, style, color);
+    }
+
+    /// Draws `s` as `text` does, each pixel of the font a `scale` by `scale` square (1 to 8):
+    /// maki's own fonts made big, for a name tag or a number read across a room. A line is
+    /// `style.height() * scale` tall and `text_scaled_width` wide. Host API 9 (`api = 9` in
+    /// maki.toml), and WebAssembly apps only.
+    #[cfg(not(target_os = "xous"))]
+    pub fn text_scaled(x: i32, y: i32, s: &str, style: Style, scale: i32, color: Color) -> i32 {
+        unsafe { sys::text_scaled(x, y, s.as_ptr(), s.len(), style as i32, color as i32, scale.clamp(1, 8)) }
+    }
+
+    /// How wide `text_scaled` draws `s`.
+    pub fn text_scaled_width(s: &str, style: Style, scale: i32) -> i32 {
+        text_width(s, style) * scale.clamp(1, 8)
     }
 
     /// A `w` by `h` bitmap, each row `(w + 7) / 8` bytes, the leftmost pixel in the top bit
@@ -1000,8 +1023,10 @@ pub mod wallet {
 
     /// Has maki show its owner the backup words of the account at `path` (a Monero wallet's 25,
     /// which restore it in any Monero wallet), on maki's own screens, once they've said they want
-    /// them (host API 4). The words never reach the app: `Answer::Yes` once they were shown.
-    /// `Error::NotFound` for an account without words of its own.
+    /// them (host API 4). From host API 9, a BIP-85 child seed's too: at
+    /// `m/83696968'/39'/0'/{words}'/{index}'`, 12, 18 or 24 words, a phrase of its own for another
+    /// wallet, which maki makes from its own. The words never reach the app: `Answer::Yes` once
+    /// they were shown. `Error::NotFound` for an account without words of its own.
     pub fn show_backup(path: &[u32]) -> Result<Answer, Error> {
         result(unsafe { sys::wallet_show_backup(path.as_ptr(), path.len()) }).map(|a| match a {
             0 => Answer::Yes,

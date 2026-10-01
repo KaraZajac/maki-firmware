@@ -820,19 +820,39 @@ impl Platform for Device {
         }
     }
 
-    /// A wallet's backup words (a Monero wallet's 25), on maki's own screens: maki asks first,
-    /// then shows them a word to a screen under its own bar, and forgets them. The app hears only
-    /// whether they were shown, and nothing says them in the log.
+    /// A wallet's backup words (a Monero wallet's 25, or a BIP-85 child seed's), on maki's own
+    /// screens: maki asks first, then shows them a word to a screen under its own bar, and forgets
+    /// them. The app hears only whether they were shown, and nothing says them in the log.
     fn show_backup(&mut self, path: &[u32]) -> Result<maki_wasm::Answer, i32> {
         use zeroize::Zeroize;
         if !self.ctx.unlocked() {
             return Err(maki_wasm::LOCKED);
         }
+        // what they are: a phrase of its own for another wallet (BIP-85), or this wallet's
         let coin = maki_hd::coin(path).unwrap_or("wallet");
+        let child = maki_hd::child_seed(path);
+        let (op, subject, question, detail, title, prose) = match child {
+            Some((words, index)) => (
+                maki_keys::WALLET_BIP85_WORDS,
+                "Child seed",
+                "Show a child seed?",
+                format!("{words} words, number {index}"),
+                "Child seed".to_string(),
+                "Write it down, in order: it's a whole wallet's key.",
+            ),
+            None => (
+                maki_keys::WALLET_MONERO_WORDS,
+                coin,
+                "Show backup words?",
+                "keep them secret".to_string(),
+                format!("{coin} backup"),
+                "Write it down, in order. Keep it off computers.",
+            ),
+        };
         let asked = self.ctx.launcher.review(
-            coin,
-            "Show backup words?",
-            "keep them secret",
+            subject,
+            question,
+            &detail,
             Vec::new(),
             "show",
             "don't",
@@ -843,10 +863,10 @@ impl Platform for Device {
             Ok(Answer::Denied) => return Ok(maki_wasm::Answer::No),
             _ => return Ok(maki_wasm::Answer::NoAnswer),
         }
-        let mut words = match self.ctx.keys.wallet(maki_keys::WALLET_MONERO_WORDS, path, &[]) {
+        let mut words = match self.ctx.keys.wallet(op, path, &[]) {
             Ok(w) => w,
             Err(maki_keys::RESULT_NOT_NOW | maki_keys::RESULT_NO_PHRASE) => return Err(maki_wasm::LOCKED),
-            // no words of its own: not a Monero account
+            // no words of its own: not a Monero account, or a child seed's path
             Err(maki_keys::RESULT_REFUSED) => return Err(maki_wasm::NOT_FOUND),
             Err(_) => return Err(maki_wasm::FAILED),
         };
@@ -859,13 +879,17 @@ impl Platform for Device {
                 heading: format!("Word {}/{n}", i + 1),
                 value: String::from_utf8_lossy(w).into_owned(),
                 mono: String::new(),
-                prose: "Write it down, in order. Keep it off computers.".into(),
+                prose: prose.into(),
             })
             .collect();
         words.zeroize();
-        log::info!("{}: showing its account's backup words", self.id);
+        log::info!(
+            "{}: showing {}",
+            self.id,
+            if child.is_some() { "a child seed" } else { "its account's backup words" }
+        );
         let shown = self.ctx.launcher.review(
-            &format!("{coin} backup"),
+            &title,
             "Wrote them down?",
             &format!("{n} words, in order"),
             pages,

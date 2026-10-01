@@ -683,15 +683,16 @@ impl Platform for Sim {
     fn show_backup(&mut self, path: &[u32]) -> Result<Answer, i32> {
         let seed = self.test_seed();
         let keys = maki_hd::seed::SeedKeys::from_seed(&seed).map_err(|_| maki_wasm::FAILED)?;
-        let words = maki_hd::seed::answer(&keys, maki_hd::op::MONERO_WORDS, path, &[], &[0; 32]).map_err(
+        let words = maki_hd::seed::answer(&keys, maki_hd::words_op(path), path, &[], &[0; 32]).map_err(
             |e| match e {
                 maki_hd::Error::Path => maki_wasm::NOT_FOUND,
                 _ => maki_wasm::FAILED,
             },
         )?;
         let words = String::from_utf8(words).map_err(|_| maki_wasm::FAILED)?;
+        let child = maki_hd::child_seed(path).is_some();
         let ask = Review {
-            question: "Show backup words?".into(),
+            question: if child { "Show a child seed?" } else { "Show backup words?" }.into(),
             detail: "anyone who sees them can spend".into(),
             yes: "show".into(),
             no: "don't".into(),

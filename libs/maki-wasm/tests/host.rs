@@ -173,10 +173,12 @@ impl Platform for Script {
         let answer = r.answers.pop_front().unwrap_or(Answer::NoAnswer);
         if answer == Answer::Yes {
             let keys = maki_hd::seed::SeedKeys::from_seed(&test_seed()).unwrap();
-            let words = maki_hd::seed::answer(&keys, maki_hd::op::MONERO_WORDS, path, &[], &[0; 32])
-                .map_err(|e| match e {
-                    maki_hd::Error::Path => NOT_FOUND,
-                    _ => FAILED,
+            let words =
+                maki_hd::seed::answer(&keys, maki_hd::words_op(path), path, &[], &[0; 32]).map_err(|e| {
+                    match e {
+                        maki_hd::Error::Path => NOT_FOUND,
+                        _ => FAILED,
+                    }
                 })?;
             r.backups.push(String::from_utf8(words).unwrap());
         }
@@ -633,6 +635,87 @@ fn text_width_matches_what_text_draws() {
     }
     // unknown characters draw as the replacement character, not nothing
     assert!(Canvas::text_width("\u{e000}", Style::Regular) > 0);
+}
+
+#[test]
+fn scaled_text_is_the_font_made_bigger() {
+    // each pixel of the font a scale by scale square: the same shape, at the same place
+    for style in [Style::Regular, Style::Bold, Style::Small, Style::Mono, Style::Tall] {
+        let mut one = Canvas::default();
+        one.text(1, 2, "Kara 7", style, Color::Light);
+        for scale in [2, 3] {
+            let mut big = Canvas::default();
+            let end = big.text_scaled(1, 2, "Kara 7", style, scale, Color::Light);
+            assert_eq!(end - 1, (Canvas::text_width("Kara 7", style) + 1) * scale, "{style:?} x{scale}");
+            for y in 0..HEIGHT as i32 {
+                for x in 0..WIDTH as i32 {
+                    let (ox, oy) = (1 + (x - 1).div_euclid(scale), 2 + (y - 2).div_euclid(scale));
+                    let want = x >= 1 && y >= 2 && one.get(ox, oy);
+                    assert_eq!(big.get(x, y), want, "{style:?} x{scale} at {x},{y}");
+                }
+            }
+        }
+    }
+    // scale 1 is text; far off the screen and huge scales neither panic nor draw
+    let (mut a, mut b) = (Canvas::default(), Canvas::default());
+    a.text(5, 5, "same", Style::Bold, Color::Light);
+    b.text_scaled(5, 5, "same", Style::Bold, 1, Color::Light);
+    assert_eq!(a, b);
+    b.clear(Color::Dark);
+    b.text_scaled(i32::MAX, i32::MIN, "far away", Style::Tall, MAX_SCALE, Color::Light);
+    b.text_scaled(-40, -40, "x", Style::Tall, i32::MAX, Color::Light);
+    assert_eq!(b.words().iter().filter(|w| **w != 0).count(), 0);
+}
+
+#[test]
+fn scaled_text_is_host_api_9_and_takes_scales_1_to_8() {
+    let wat = |scale: i32| {
+        format!(
+            r#"(module
+          (import "maki" "text_scaled" (func $big (param i32 i32 i32 i32 i32 i32 i32) (result i32)))
+          (import "maki" "present" (func $present))
+          (memory (export "memory") 1)
+          (data (i32.const 0) "Al")
+          (func (export "maki_main")
+            (drop (call $big (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 2) (i32.const 1) (i32.const 1) (i32.const {scale})))
+            (call $present)))"#
+        )
+    };
+    let (stop, r) = run_with(&wat(4), &[], LIMITS);
+    assert_eq!(stop, Stop::Finished);
+    let lit = |c: &Canvas| {
+        (0..HEIGHT as i32)
+            .flat_map(|y| (0..WIDTH as i32).map(move |x| (x, y)))
+            .filter(|&(x, y)| c.get(x, y))
+            .count()
+    };
+    let mut small = Canvas::default();
+    small.text(0, 0, "Al", Style::Bold, Color::Light);
+    assert_eq!(lit(&r.frames[0]), 16 * lit(&small));
+    for bad in [0, -1, MAX_SCALE + 1] {
+        let (stop, _) = run_with(&wat(bad), &[], LIMITS);
+        assert!(matches!(&stop, Stop::Crashed(e) if e.contains("isn't 1 to 8")), "{bad}: {stop:?}");
+    }
+    // an app that says an older API is refused, and says why
+    let manifest = |api: u16| maki_bundle::Manifest {
+        id: "org.example.big".into(),
+        name: "Big".into(),
+        version: 1,
+        label: "1.0".into(),
+        kind: maki_bundle::Kind::Wasm,
+        api,
+        firmware: String::new(),
+        permissions: vec![],
+        storage_kib: 1,
+        memory_kib: 64,
+        backup: true,
+        description: String::new(),
+        wallet: None,
+    };
+    let code = module(&wat(2));
+    let err = admit(&manifest(8), &code).unwrap_err();
+    assert!(err.contains("text_scaled, which came with host API 9, and its manifest says 8"), "{err}");
+    admit(&manifest(9), &code).unwrap();
 }
 
 #[test]
@@ -1737,6 +1820,12 @@ fn host_work_costs() {
     });
     let long = "A".repeat(1024);
     cost("text, 1024 characters", 2_000, &mut |c| drop(c.text(0, 0, &long, Style::Bold, Color::Light)));
+    // charged TEXT_FUEL a character times one more than the scale squared
+    for scale in [2, 4, MAX_SCALE] {
+        cost(&format!("text at scale {scale}, 4 characters"), 2_000, &mut |c| {
+            drop(c.text_scaled(0, 0, "WMWM", Style::Tall, scale, Color::Light))
+        });
+    }
     cost("rect, the screen", 20_000, &mut |c| c.rect(0, 0, 128, 128, Color::Light, true));
     cost("line, longest", 20_000, &mut |c| c.line(-1024, -1024, 1024, 1024, Color::Light));
     let rows = vec![0x55u8; (maki_wasm::MAX_BLIT as usize + 7) / 8 * maki_wasm::MAX_BLIT as usize];

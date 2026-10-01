@@ -304,6 +304,20 @@ impl SeedKeys {
         Ok(keys)
     }
 
+    /// A BIP-85 child seed's words (`crate::child_seed`'s path): the key there made entropy
+    /// (`bip85_entropy`), its first 16, 24 or 32 bytes a BIP39 phrase of 12, 18 or 24 words.
+    fn child_seed_words(&self, path: &[u32]) -> Result<alloc::string::String, Error> {
+        let (words, _) = crate::child_seed(path).ok_or(Error::Path)?;
+        let mut k: [u8; 32] = self.derive(path)?.key.to_bytes().into();
+        let mut entropy = bip85_entropy(&k);
+        k.zeroize();
+        let phrase = maki_seed::to_words(&entropy[..words as usize * 4 / 3]);
+        entropy.zeroize();
+        let out = phrase.join(" ");
+        maki_seed::forget_words(phrase);
+        Ok(out)
+    }
+
     /// The Ed25519 key at `path` (SLIP-10), every step hardened. Each is a single HMAC: nothing
     /// to keep.
     fn ed25519_key(&self, path: &[u32]) -> Result<ed25519_dalek::SigningKey, Error> {
@@ -419,6 +433,10 @@ impl Keys for OneKey {
     }
 }
 
+/// BIP-85's entropy from a private key `k` it derived: HMAC-SHA512, keyed "bip-entropy-from-k",
+/// of `k`. Hashed, so what's made of it gives nothing of `k` (or the keys above it) away.
+pub fn bip85_entropy(k: &[u8; 32]) -> [u8; 64] { hmac512(b"bip-entropy-from-k", &[k]) }
+
 /// A numbered request (`crate::op`) on `keys`, as maki-keys answers the app host (and the fake
 /// maki and the simulator answer apps): the answer's bytes. `aux` is BIP340's auxiliary
 /// randomness for a Schnorr signature. Which paths an app may use is the caller's to check.
@@ -466,6 +484,7 @@ pub fn answer(
             [spend, view].concat()
         }
         op::MONERO_WORDS => keys.monero(path)?.words().join(" ").into_bytes(),
+        op::BIP85_WORDS => keys.child_seed_words(path)?.into_bytes(),
         op::MONERO_VIEW_KEY => keys.monero(path)?.view_bytes().to_vec(),
         op::MONERO_KEY_IMAGE => {
             let d: &[u8; 80] = asked.try_into().map_err(|_| Error::Failed)?;

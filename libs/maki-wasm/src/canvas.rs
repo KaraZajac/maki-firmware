@@ -13,6 +13,9 @@ const WORDS: usize = WIDTH / 32;
 pub(crate) const REACH: i32 = 1024;
 /// Most characters one `text` call draws.
 const MAX_CHARS: usize = 256;
+/// Largest scale `text_scaled` draws at: maki's tallest font eight times over is more than the
+/// screen.
+pub const MAX_SCALE: i32 = 8;
 /// Largest bitmap `blit` takes, each way.
 pub const MAX_BLIT: i32 = 256;
 
@@ -177,14 +180,23 @@ impl Canvas {
     /// Draws `s` with its top left at (x, y), glyph pixels only; returns where the next
     /// character would go.
     pub fn text(&mut self, x: i32, y: i32, s: &str, style: Style, color: Color) -> i32 {
+        self.text_scaled(x, y, s, style, 1, color)
+    }
+
+    /// `text` with each pixel of the font a `scale` by `scale` square (1 to `MAX_SCALE`; others
+    /// are clamped to it): big text from maki's own fonts, for a name tag or a number read
+    /// across a room. `text_width` times `scale` is how wide it is.
+    pub fn text_scaled(&mut self, x: i32, y: i32, s: &str, style: Style, scale: i32, color: Color) -> i32 {
+        let scale = scale.clamp(1, MAX_SCALE);
         let mut pen = x.clamp(-REACH, REACH);
         let y = y.clamp(-REACH, REACH);
         for c in s.chars().take(MAX_CHARS) {
             let Some(g) = style.glyph(c) else { continue };
-            if pen < WIDTH as i32 && pen + 32 > 0 && y < HEIGHT as i32 && y + 32 > 0 {
-                self.glyph(pen, y, &g, color);
+            let reach = 32 * scale;
+            if pen < WIDTH as i32 && pen + reach > 0 && y < HEIGHT as i32 && y + reach > 0 {
+                self.glyph(pen, y, &g, scale, color);
             }
-            pen += (g.wide + g.kern) as i32;
+            pen += (g.wide + g.kern) as i32 * scale;
         }
         pen
     }
@@ -200,13 +212,20 @@ impl Canvas {
         if w > 0 { w - 1 } else { 0 }
     }
 
-    fn glyph(&mut self, x: i32, y: i32, g: &GlyphSprite, color: Color) {
+    fn glyph(&mut self, x: i32, y: i32, g: &GlyphSprite, scale: i32, color: Color) {
+        let dot = |canvas: &mut Canvas, col: i32, row: i32| {
+            if scale == 1 {
+                canvas.put(x + col, y + row, color);
+            } else {
+                canvas.rect(x + col * scale, y + row * scale, scale, scale, color, true);
+            }
+        };
         if g.large {
             // a word a row, 32 pixels wide
             for (row, bits) in g.glyph.iter().enumerate().take(g.high as usize) {
                 for col in 0..32 {
                     if bits & (1 << col) != 0 {
-                        self.put(x + col, y + row as i32, color);
+                        dot(self, col, row as i32);
                     }
                 }
             }
@@ -216,7 +235,7 @@ impl Canvas {
                 let bits = (g.glyph[row >> 1] >> ((row & 1) * 16)) & 0xffff;
                 for col in 0..16 {
                     if bits & (1 << col) != 0 {
-                        self.put(x + col, y + row as i32, color);
+                        dot(self, col, row as i32);
                     }
                 }
             }

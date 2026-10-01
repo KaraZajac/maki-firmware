@@ -314,3 +314,100 @@ fn ed25519_as_slip10_has_it() {
         );
     }
 }
+
+/// BIP-85's test vectors (bitcoin/bips, bip-0085.mediawiki), from its master key: the key each
+/// path derives, the entropy BIP-85 makes of it, and for BIP39, the words.
+#[test]
+fn bip85_child_seeds_as_the_bip_has_them() {
+    use std::str::FromStr;
+    let secp = Secp256k1::new();
+    let master = Xpriv::from_str(
+        "xprv9s21ZrQH143K2LBWUUQRFXhucrQqBpKdRRxNVq2zBqsx8HVqFk2uYo8kmbaLLHRdqtQpUm98uKfu3vca1LqdGhUtyoFnCNkfmXRyPXLjbKb",
+    )
+    .unwrap();
+    let k = |path: &str| -> [u8; 32] {
+        master
+            .derive_priv(&secp, &path.parse::<DerivationPath>().unwrap())
+            .unwrap()
+            .private_key
+            .secret_bytes()
+    };
+    for (path, key, entropy) in [
+        (
+            "m/83696968'/0'/0'",
+            "cca20ccb0e9a90feb0912870c3323b24874b0ca3d8018c4b96d0b97c0e82ded0",
+            "efecfbccffea313214232d29e71563d941229afb4338c21f9517c41aaa0d16f00b83d2a09ef747e7a64e8e2bd5a14869e693da66ce94ac2da570ab7ee48618f7",
+        ),
+        (
+            "m/83696968'/0'/1'",
+            "503776919131758bb7de7beb6c0ae24894f4ec042c26032890c29359216e21ba",
+            "70c6e3e8ebee8dc4c0dbba66076819bb8c09672527c4277ca8729532ad711872218f826919f6b67218adde99018a6df9095ab2b58d803b5b93ec9802085a690e",
+        ),
+    ] {
+        assert_eq!(hex(&k(path)), key, "{path}");
+        assert_eq!(hex(&maki_hd::seed::bip85_entropy(&k(path))), entropy, "{path}");
+    }
+    for (words, entropy, phrase) in [
+        (
+            12,
+            "6250b68daf746d12a24d58b4787a714b",
+            "girl mad pet galaxy egg matter matrix prison refuse sense ordinary nose",
+        ),
+        (
+            18,
+            "938033ed8b12698449d4bbca3c853c66b293ea1b1ce9d9dc",
+            "near account window bike charge season chef number sketch tomorrow excuse sniff circle vital hockey outdoor supply token",
+        ),
+        (
+            24,
+            "ae131e2312cdc61331542efe0d1077bac5ea803adf24b313a4f0e48e9c51f37f",
+            "puppy ocean match cereal symbol another shed magic wrap hammer bulb intact gadget divorce twin tonight reason outdoor destroy simple truth cigar social volcano",
+        ),
+    ] {
+        let path = format!("m/83696968'/39'/0'/{words}'/0'");
+        let made = maki_hd::seed::bip85_entropy(&k(&path));
+        let n = entropy.len() / 2;
+        assert_eq!(hex(&made[..n]), entropy, "{path}");
+        assert_eq!(maki_seed::to_words(&made[..n]).join(" "), phrase, "{path}");
+        assert_eq!(maki_hd::child_seed(&parse_path(&path).unwrap()), Some((words, 0)));
+    }
+}
+
+#[test]
+fn bip85_child_seeds_from_the_phrase_and_nowhere_else() {
+    use maki_hd::{op, seed::answer};
+    let ours = SeedKeys::from_seed(&seed()).unwrap();
+    // the phrase's own child seeds, as the BIP's steps make them from rust-bitcoin's keys
+    for (words, index) in [(12, 0), (18, 1), (24, 7), (12, 2_147_483_647)] {
+        let path = format!("m/83696968'/39'/0'/{words}'/{index}'");
+        let k = theirs(&path).private_key.secret_bytes();
+        let entropy = maki_hd::seed::bip85_entropy(&k);
+        let phrase = maki_seed::to_words(&entropy[..words as usize * 4 / 3]).join(" ");
+        let p = parse_path(&path).unwrap();
+        assert_eq!(maki_hd::words_op(&p), op::BIP85_WORDS);
+        let made = String::from_utf8(answer(&ours, op::BIP85_WORDS, &p, &[], &[0; 32]).unwrap()).unwrap();
+        assert_eq!(made, phrase, "{path}");
+        assert_eq!(made.split(' ').count(), words as usize);
+        // a real phrase: its checksum holds
+        assert!(maki_seed::to_entropy(&made.split(' ').collect::<Vec<_>>()).is_ok());
+    }
+    // every other path is refused: another language or app, a length BIP39 hasn't, a step not
+    // hardened, too short or too long; and a Monero account's words aren't a child seed's
+    for path in [
+        "m/83696968'/39'/1'/12'/0'",
+        "m/83696968'/2'/0'/12'/0'",
+        "m/83696968'/39'/0'/15'/0'",
+        "m/83696968'/39'/0'/12'/0",
+        "m/83696968'/39'/0'/12",
+        "m/83696968'/39'/0'/12'/0'/0'",
+        "m/83696968'/39/0'/12'/0'",
+        "m/84'/39'/0'/12'/0'",
+        "m/44'/128'/0'/0/0",
+    ] {
+        let p = parse_path(path).unwrap();
+        assert_eq!(maki_hd::child_seed(&p), None, "{path}");
+        assert!(answer(&ours, op::BIP85_WORDS, &p, &[], &[0; 32]).is_err(), "{path}");
+    }
+    assert_eq!(maki_hd::words_op(&parse_path("m/44'/128'/0'/0/0").unwrap()), op::MONERO_WORDS);
+    assert_eq!(maki_hd::coin(&parse_path("m/83696968'/39'/0'").unwrap()), Some("child seeds"));
+}

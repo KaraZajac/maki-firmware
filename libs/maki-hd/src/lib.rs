@@ -133,6 +133,34 @@ pub mod op {
     /// An Ed25519 signature (RFC 8032, 64 bytes) with that key. The digest is the whole message:
     /// Ed25519 hashes what it signs itself, so maki has all of it.
     pub const ED25519_SIGN: u8 = 14;
+    /// A BIP-85 child seed's BIP39 words (UTF-8, a space between each), at a path `child_seed`
+    /// reads: a phrase of its own for another wallet, made from maki's, for maki to show its
+    /// owner itself: never an app's.
+    pub const BIP85_WORDS: u8 = 15;
+}
+
+/// The words maki shows its owner for a wallet's backup, from the path's own kind: a BIP-85
+/// child seed's (`op::BIP85_WORDS`) or a Monero account's (`op::MONERO_WORDS`).
+pub fn words_op(path: &[u32]) -> u8 {
+    if child_seed(path).is_some() { op::BIP85_WORDS } else { op::MONERO_WORDS }
+}
+
+/// BIP-85's purpose: keys under `m/83696968'` make entropy for other wallets (child seeds), and
+/// sign nothing.
+pub const BIP85: u32 = 83696968 | HARDENED;
+
+/// A BIP-85 child seed's path, `m/83696968'/39'/0'/{words}'/{index}'` (a BIP39 phrase, in
+/// English): its words (12, 18 or 24) and index. None for any other path.
+pub fn child_seed(path: &[u32]) -> Option<(u32, u32)> {
+    match *path {
+        [BIP85, app, language, words, index]
+            if app == 39 | HARDENED && language == HARDENED && index >= HARDENED =>
+        {
+            let words = words.checked_sub(HARDENED)?;
+            matches!(words, 12 | 18 | 24).then_some((words, index - HARDENED))
+        }
+        _ => None,
+    }
 }
 
 /// A path as people write it, `m/84'/0'/0'` (or `84h/0h/0h`, with or without the `m/`), as
@@ -185,8 +213,12 @@ pub fn prefix_ok(prefix: &[u32]) -> bool {
     prefix.len() >= 2 && prefix.len() <= MAX_DEPTH && prefix[0] >= HARDENED && prefix[1] >= HARDENED
 }
 
-/// The coin a path's coin type (SLIP-44) names, as an install screen says it.
+/// The coin a path's coin type (SLIP-44) names, as an install screen says it (or BIP-85's child
+/// seeds, which aren't a coin).
 pub fn coin(prefix: &[u32]) -> Option<&'static str> {
+    if prefix.first() == Some(&BIP85) {
+        return Some("child seeds");
+    }
     let coin_type = *prefix.get(1)?;
     if coin_type < HARDENED {
         return None;

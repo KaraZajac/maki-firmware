@@ -9,7 +9,7 @@ license = "MIT"
 default = []
 # The keys themselves, from a seed: maki-keys, the fake maki, the simulator and tests. Without
 # it, only the trait and paths, for apps (which get their keys through maki).
-seed = ["dep:k256", "dep:hmac", "dep:sha2", "dep:ripemd", "dep:zeroize", "dep:maki-xmr", "dep:ed25519-dalek"]
+seed = ["dep:k256", "dep:hmac", "dep:sha2", "dep:ripemd", "dep:zeroize", "dep:maki-xmr", "dep:ed25519-dalek", "dep:maki-seed"]
 
 [dependencies]
 k256 = { version = "0.13", default-features = false, features = ["ecdsa", "arithmetic", "sha256", "alloc", "schnorr"], optional = true }
@@ -19,6 +19,8 @@ ripemd = { version = "0.1", default-features = false, optional = true }
 zeroize = { version = "1.8.1", optional = true }
 # Monero's keys, from the key at m/44'/128'/account'/0/0
 maki-xmr = { path = "../maki-xmr", features = ["keys"], optional = true }
+# BIP39's words, for BIP-85's child seeds
+maki-seed = { path = "../maki-seed", optional = true }
 # Ed25519 keys (SLIP-10), for Solana: the Baochip build the app host's Ed25519 keys use
 ed25519-dalek = { package = "ed25519-dalek-compat", path = "../../bao1x-boot/ed25519-dalek-compat", default-features = false, features = ["zeroize"], optional = true }
 
