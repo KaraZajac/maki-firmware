@@ -700,6 +700,13 @@ fn keyboard_service() {
                                 }
                             }
                         } else if key_down != KeyPress::Invalid && key_down != KeyPress::None {
+                            // maki: a left or right still waiting for the other side goes first:
+                            // a key pressed after it mustn't overtake it (left, then the centre
+                            // within CHORD_MS, would pick what was chosen before the left)
+                            if let Some((k, _)) = side_waiting.take() {
+                                kc.push(key_tracker.map_keypress(k));
+                                side_pending.set(false);
+                            }
                             key_tracker.register_key_down(key_down, now);
                             kc.push(key_tracker.map_keypress(key_down))
                         }
