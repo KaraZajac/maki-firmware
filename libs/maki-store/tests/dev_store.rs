@@ -40,6 +40,8 @@ fn the_development_store_checks_out() {
 
     let list = SignedRevocations::decode(&file("revocations.bin")).unwrap();
     list.replaces(&root, Some(NOW), None).unwrap();
+    // the SDK's Tally, which is version 2, and those before it
     assert!(list.list.check("com.leviathan.maki.tally", 1, &[0; 32]).is_some());
-    assert!(list.list.check("com.leviathan.maki.tally", 2, &[0; 32]).is_none());
+    assert!(list.list.check("com.leviathan.maki.tally", 2, &[0; 32]).is_some());
+    assert!(list.list.check("com.leviathan.maki.tally", 3, &[0; 32]).is_none());
 }

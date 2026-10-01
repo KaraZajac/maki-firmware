@@ -1,4 +1,4 @@
 # The development store's revocation list (make.sh signs it). Tally isn't in the store, but a
 # revocation covers an app wherever it came from: the emulator's demo installs Tally
 # sideloaded, then hands maki this list, and maki warns before opening it.
-up-to com.leviathan.maki.tally 1 A test entry: the development store revokes Tally 1.
+up-to com.leviathan.maki.tally 2 A test entry: the development store revokes Tally 2 and older.
