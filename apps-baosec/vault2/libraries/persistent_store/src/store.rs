@@ -185,11 +185,27 @@ pub struct Store<S: Storage> {
     pddb: pddb::Pddb,
     entries: Option<Vec::<String>>,
 }
+/// maki: the store's keys, as the PDDB lists them: Some(empty) for a dictionary that isn't there
+/// yet, None if they couldn't be listed. The PDDB lists one dictionary at a time for the whole
+/// system and turns a second listing away (the vault asking which sites have passkeys, say), so a
+/// listing is tried again a few times before it's given up.
+fn list_keys_retrying(pddb: &pddb::Pddb) -> Option<Vec<String>> {
+    for i in 0..20u64 {
+        match pddb.list_keys(crate::store::OPENSK2_DICT, None) {
+            Ok(keys) => return Some(keys),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Some(Vec::new()),
+            Err(_) => std::thread::sleep(std::time::Duration::from_millis(5 + 5 * i)),
+        }
+    }
+    log::warn!("couldn't list the passkey store's keys");
+    None
+}
+
 impl<S: Storage + Clone> Clone for Store<S> {
     fn clone(&self) -> Self {
         Store {
             storage: self.storage.clone(),
-            entries: self.pddb.list_keys(crate::store::OPENSK2_DICT, None).ok(),
+            entries: list_keys_retrying(&self.pddb),
             pddb: pddb::Pddb::new(),
         }
     }
@@ -210,7 +226,7 @@ impl<S: Storage> Store<S> {
         let pddb = pddb::Pddb::new();
         Ok(Store {
             storage,
-            entries: pddb.list_keys(crate::store::OPENSK2_DICT, None).ok(),
+            entries: list_keys_retrying(&pddb),
             pddb,
         })
     }
@@ -327,7 +343,7 @@ impl<S: Storage> Store<S> {
                 }
             }
         }
-        self.entries = self.pddb.list_keys(crate::store::OPENSK2_DICT, None).ok();
+        self.entries = list_keys_retrying(&self.pddb).or_else(|| self.entries.take());
         Ok(())
     }
 
@@ -336,8 +352,7 @@ impl<S: Storage> Store<S> {
     /// Entries with a key larger or equal to `min_key` are deleted.
     pub fn clear(&mut self, min_key: usize) -> StoreResult<()> {
         let mut to_delete = Vec::new();
-        let keys = self.pddb.list_keys(crate::store::OPENSK2_DICT, None)
-            .map_err(|_| StoreError::StorageError)?;
+        let keys = list_keys_retrying(&self.pddb).ok_or(StoreError::StorageError)?;
         for key in keys {
             if let Ok(key_as_usize) = usize::from_str_radix(&key, 10) {
                 if key_as_usize >= min_key {
@@ -362,7 +377,7 @@ impl<S: Storage> Store<S> {
                 },
             }
         }
-        self.entries = self.pddb.list_keys(crate::store::OPENSK2_DICT, None).ok();
+        self.entries = list_keys_retrying(&self.pddb).or_else(|| self.entries.take());
         Ok(())
     }
 
@@ -405,19 +420,7 @@ impl<S: Storage> Store<S> {
     /// Returns a handle to an entry given its key.
     pub fn find_handle(&self, key: usize) -> StoreResult<Option<StoreHandle>> {
         log::debug!("listing all keys to find_handle {}", key);
-        let keys = match self.pddb.list_keys(
-            crate::store::OPENSK2_DICT,
-            None
-        ) {
-            Ok(k) => k,
-            Err(e) => match e.kind() {
-                std::io::ErrorKind::NotFound => {
-                    log::debug!("Dictionary does not exist, returning empty list");
-                    Vec::new()
-                },
-                _ => return Err(StoreError::StorageError)
-            }
-        };
+        let keys = list_keys_retrying(&self.pddb).ok_or(StoreError::StorageError)?;
         log::debug!("keylist: {:?}", keys);
         if keys.contains(&key.to_string()) {
             log::debug!("find_handle found: {}", key);

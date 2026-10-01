@@ -658,7 +658,11 @@ impl XousEnv {
                     log::debug!("Sending a KEEPALIVE packet timed out");
                     // TODO: abort user presence test?
                 }
-                Err(_) => panic!("Error sending KEEPALIVE packet"),
+                // maki: the host's gone (USB reset or unplugged): the question goes, not the vault
+                Err(_) => {
+                    log::error!("couldn't send a KEEPALIVE packet: taking the question back");
+                    return Err(UserPresenceError::Canceled);
+                }
                 Ok(SendOrRecvStatus::Sent) => {
                     log::trace!("Sent KEEPALIVE packet");
                 }
@@ -754,8 +758,25 @@ impl UserPresence for XousEnv {
             let over = if Instant::now() >= expiration {
                 Some(UserPresenceError::Timeout)
             } else {
-                // delay, and keepalive
-                self.send_keepalive_up_needed(KEEPALIVE_DELAY, cid).err()
+                // keepalive, then the host's next packet if one comes before the next keepalive
+                // is due: a cancel on this channel takes the question back (the browser's
+                // dialog dismissed, or another key chosen)
+                self.send_keepalive_up_needed(KEEPALIVE_DELAY, cid).err().or_else(|| {
+                    let mut pkt = [0u8; 64];
+                    match self.main_connection.recv_with_timeout(&mut pkt, KEEPALIVE_DELAY) {
+                        SendOrRecvStatus::Received => match CtapHid::process_single_packet(&pkt) {
+                            (received, ProcessedPacket::InitPacket { cmd, .. })
+                                if received == cid && cmd == CtapHidCommand::Cancel as u8 =>
+                            {
+                                log::info!("the computer cancelled: taking the question back");
+                                Some(UserPresenceError::Canceled)
+                            }
+                            // anything else waits: the host asks again once this is answered
+                            _ => None,
+                        },
+                        _ => None,
+                    }
+                })
             };
             if let Some(e) = over {
                 // the ask goes, waiting or on screen: an answer now would answer nothing
@@ -768,7 +789,6 @@ impl UserPresence for XousEnv {
                 }
                 return Err(e);
             }
-            std::thread::sleep(KEEPALIVE_DELAY);
         }
     }
 

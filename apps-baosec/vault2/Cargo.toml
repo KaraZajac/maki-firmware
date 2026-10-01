@@ -105,9 +105,10 @@ osk-upgrade = [
 xous = [
 ] # marks xous-specific code segments deep inside the CTAP crate. Mostly to help evaluate if a patch is even feasible in the future.
 ed25519 = ["ed25519-compact"]
+# maki: no "vault-testing": its "Generate test vectors" isn't for anyone's maki. ("with_ctap1"
+# stays compiled in, but maki answers no U2F message: see `ctap1_refused` in ctap/hid/mod.rs.)
 default = [
     "with_ctap1",
     "ed25519",
     "xous",
-    "vault-testing", # testing removed for release tag
 ]

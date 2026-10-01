@@ -23,7 +23,9 @@ mod credential_management;
 pub mod crypto_wrapper;
 #[cfg(not(feature="vault-testing"))]
 mod crypto_wrapper;
+// maki: compiled in, but no U2F message reaches it (main_hid.rs)
 #[cfg(feature = "with_ctap1")]
+#[allow(dead_code)]
 mod ctap1;
 pub mod data_formats;
 pub mod hid;
@@ -1285,7 +1287,14 @@ impl CtapState {
         if options.up {
             #[cfg(feature="xous")]
             {
-                let who = credential.user_name.as_deref().or(credential.user_display_name.as_deref());
+                // maki: with more than one account here, this yes lets the computer have each
+                // (getNextAssertion asks nothing more), so say so rather than name one
+                let accounts = format!("{} accounts", next_credential_keys.len() + 1);
+                let who = if next_credential_keys.is_empty() {
+                    credential.user_name.as_deref().or(credential.user_display_name.as_deref())
+                } else {
+                    Some(accounts.as_str())
+                };
                 check_user_presence(env, channel, Some(question(&rp_id, "Sign in?", who)))?;
             }
             #[cfg(not(feature="xous"))]
@@ -1335,15 +1344,13 @@ impl CtapState {
 
     fn process_get_info(&self, env: &mut impl Env) -> Result<ResponseData, Ctap2StatusCode> {
         let has_always_uv = storage::has_always_uv(env)?;
-        #[cfg_attr(not(feature = "with_ctap1"), allow(unused_mut))]
-        let mut versions = vec![
+        let versions = vec![
             String::from(FIDO2_VERSION_STRING),
             String::from(FIDO2_1_VERSION_STRING),
         ];
+        // maki: no U2F_V2, as maki answers no U2F message (see main_hid.rs)
         #[cfg(feature = "with_ctap1")]
-        if !has_always_uv {
-            versions.insert(0, String::from(U2F_VERSION_STRING))
-        }
+        let _ = has_always_uv;
         let mut options = vec![];
         if env.customization().enterprise_attestation_mode().is_some() {
             options.push((String::from("ep"), storage::enterprise_attestation(env)?));

@@ -204,7 +204,7 @@ impl CtapHid {
 
     pub const CAPABILITY_WINK: u8 = 0x01;
     pub const CAPABILITY_CBOR: u8 = 0x04;
-    #[cfg(any(not(feature = "with_ctap1"), feature = "vendor_hid"))]
+    // maki: always, as maki answers no U2F message (main_hid.rs)
     pub const CAPABILITY_NMSG: u8 = 0x08;
 
     // TODO: Is this timeout duration specified?

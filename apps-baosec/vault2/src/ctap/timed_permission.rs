@@ -97,6 +97,7 @@ impl U2fUserPresenceState {
 
     // This marks user presence as needed or uses it up if already granted. Also cleans up.
     #[cfg(feature="xous")]
+    #[allow(dead_code)] // maki: U2F's, which maki doesn't answer
     pub fn consume_up(&mut self, env: &mut impl Env, reason: String, app_id: [u8; 32]) -> bool {
         env.user_presence().poll_approval_ctap1(String::from(reason), app_id)
     }

@@ -91,7 +91,21 @@ impl Manager {
     /// is for a site that covers `site`, as a saved login covers it. The authenticator keeps
     /// them in a dictionary of its own (see maki-fido).
     pub fn has_passkey(&self, site: &str) -> bool {
-        let Ok(keys) = self.pddb.list_keys(maki_fido::DICT, None) else {
+        // the PDDB lists one dictionary at a time for the whole system, and turns a second
+        // listing away (the authenticator's own, after a sign-in): try again a few times; if it
+        // still can't, say no, and the password is offered as before
+        let mut listed = None;
+        for i in 0..10u64 {
+            match self.pddb.list_keys(maki_fido::DICT, None) {
+                Ok(keys) => {
+                    listed = Some(keys);
+                    break;
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => return false,
+                Err(_) => std::thread::sleep(std::time::Duration::from_millis(5 + 5 * i)),
+            }
+        }
+        let Some(keys) = listed else {
             return false;
         };
         keys.iter().filter(|k| k.parse::<usize>().is_ok_and(|n| maki_fido::CREDENTIALS.contains(&n))).any(

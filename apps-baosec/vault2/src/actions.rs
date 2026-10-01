@@ -14,7 +14,7 @@ use std::{fs::File, io, io::BufRead};
 use bao1x_emu::trng::Trng;
 #[cfg(feature = "board-baosec")]
 use bao1x_hal_service::api::TimeOp;
-#[cfg(feature = "board-baosec")]
+#[cfg(all(feature = "board-baosec", feature = "vault-testing"))]
 use bao1x_hal_service::trng::Trng;
 #[cfg(feature = "board-baosec")]
 use chrono::{DateTime, Utc};
@@ -1339,8 +1339,10 @@ impl ActionManager {
                                         "pass" => {
                                             if let Some(time_pos) = rest.rfind("?time=") {
                                                 let url = &rest[..time_pos];
-                                                let time_str = &rest[time_pos + 6..];
-                                                self.set_time(time_str);
+                                                // maki: the time in the code isn't set. maki's
+                                                // clock is set through Roughtime, and marked
+                                                // verified so; a code anyone can show it mustn't
+                                                // move a clock that TOTP codes trust
                                                 log::info!("URL: {}", url);
                                                 // now try to lookup the password; if it does not exist, offer
                                                 // to create a password
@@ -1483,6 +1485,8 @@ impl ActionManager {
         self.storage.borrow_mut().update(&storage::ContentKind::Password, guid, pw).unwrap();
     }
 
+    // maki: unused, as QR codes no longer set the clock (see "pwauth" above)
+    #[allow(dead_code)]
     pub(crate) fn set_time(&self, _time_str: &str) {
         #[cfg(feature = "board-baosec")]
         match DateTime::parse_from_rfc3339(_time_str) {

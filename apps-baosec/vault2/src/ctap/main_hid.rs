@@ -41,9 +41,7 @@ impl MainHid {
 
     /// Instantiates a HID handler for CTAP1, CTAP2 and Wink.
     pub fn new() -> Self {
-        #[cfg(feature = "with_ctap1")]
-        let capabilities = CtapHid::CAPABILITY_WINK | CtapHid::CAPABILITY_CBOR;
-        #[cfg(not(feature = "with_ctap1"))]
+        // maki: no U2F (CTAPHID_MSG), with or without with_ctap1: see `Msg` below
         let capabilities =
             CtapHid::CAPABILITY_WINK | CtapHid::CAPABILITY_CBOR | CtapHid::CAPABILITY_NMSG;
 
@@ -95,17 +93,11 @@ impl MainHid {
         let cid = message.cid;
         match message.cmd {
             // CTAP 2.1 from 2021-06-15, section 11.2.9.1.1.
-            CtapHidCommand::Msg => {
-                // If we don't have CTAP1 backward compatibilty, this command is invalid.
-                #[cfg(not(feature = "with_ctap1"))]
-                return CtapHid::error_message(cid, CtapHidError::InvalidCmd);
-
-                #[cfg(feature = "with_ctap1")]
-                match ctap1::Ctap1Command::process_command(env, &message.payload, ctap_state, now) {
-                    Ok(payload) => MainHid::ctap1_success_message(cid, &payload),
-                    Err(ctap1_status_code) => MainHid::ctap1_error_message(cid, ctap1_status_code),
-                }
-            }
+            // maki: U2F (CTAP1) is refused, as if it weren't built in. Its approvals went through
+            // Xous's notification, which took any key but the dial's down as a yes, under
+            // whatever else was on screen. maki's passkeys are CTAP2, which browsers use with any
+            // key that has it, and nothing registered through U2F was ever on maki.
+            CtapHidCommand::Msg => CtapHid::error_message(cid, CtapHidError::InvalidCmd),
             // CTAP 2.1 from 2021-06-15, section 11.2.9.1.2.
             CtapHidCommand::Cbor => {
                 // Each transaction is atomic, so we process the command directly here and
@@ -146,6 +138,7 @@ impl MainHid {
     }
 
     #[cfg(feature = "with_ctap1")]
+    #[allow(dead_code)] // maki: no U2F message is answered
     fn ctap1_error_message(cid: ChannelID, error_code: ctap1::Ctap1StatusCode) -> Message {
         let code: u16 = error_code.into();
         Message {
@@ -156,6 +149,7 @@ impl MainHid {
     }
 
     #[cfg(feature = "with_ctap1")]
+    #[allow(dead_code)] // maki: no U2F message is answered
     fn ctap1_success_message(cid: ChannelID, payload: &[u8]) -> Message {
         let mut response = payload.to_vec();
         let code: u16 = ctap1::Ctap1StatusCode::SW_SUCCESS.into();
