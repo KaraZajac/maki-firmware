@@ -1442,12 +1442,9 @@ impl ActionManager {
                                             }
                                         }
                                         "new" => {
-                                            if let Some(pass_pos) = rest.find("?pass=") {
-                                                let url = &rest[..pass_pos];
-                                                let password = &rest[pass_pos + 6..];
-                                                log::info!("URL: {}", url);
-                                                log::info!("Password: {}", password);
-                                            }
+                                            // maki: not taken (and never logged: it held the password
+                                            // in the clear)
+                                            log::info!("a code to add a login: not supported");
                                         }
                                         _ => log::error!("Unknown pwauth operation: {}", op_type),
                                     }
