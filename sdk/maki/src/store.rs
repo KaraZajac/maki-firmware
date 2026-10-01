@@ -297,10 +297,128 @@ fn about(dir: &Path, id: &str) -> Result<Option<About>, String> {
     Ok(Some(about))
 }
 
+/// The newest of maki's firmware and of maki desktop, as maki desktop updates them: what the
+/// store's `releases.toml` says, signed into the index (`--releases`), so maki desktop takes a
+/// file only if it's what the store signed for.
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Releases {
+    firmware: Option<Release>,
+    desktop: Option<Release>,
+}
+
+#[derive(serde::Deserialize, serde::Serialize)]
+#[serde(deny_unknown_fields)]
+struct Release {
+    /// As the release is tagged: `preview-2026-10-01`, `0.1.2`.
+    name: String,
+    /// The commit it's built from, in full.
+    commit: String,
+    /// When it was made, YYYY-MM-DD.
+    date: String,
+    /// Where it's described, https.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    notes: Option<String>,
+    files: Vec<ReleaseFile>,
+}
+
+#[derive(serde::Deserialize, serde::Serialize)]
+#[serde(deny_unknown_fields)]
+struct ReleaseFile {
+    name: String,
+    /// What it runs on, for files that run (`linux-x86_64`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    platform: Option<String>,
+    /// Where it's fetched from, https.
+    url: String,
+    bytes: u64,
+    sha256: String,
+}
+
+/// The biggest file a release may have: maki desktop's AppImage is over a hundred megabytes.
+const MAX_RELEASE_FILE: u64 = 512 * 1024 * 1024;
+
+/// `releases.toml`, checked: every name plain, every address https, every hash whole, and
+/// the firmware's three files exactly.
+fn releases(path: &str) -> Result<serde_json::Value, String> {
+    let text = std::fs::read_to_string(path).map_err(|e| format!("{path}: {e}"))?;
+    let r: Releases = toml::from_str(&text).map_err(|e| format!("{path}: {e}"))?;
+    let plain = |s: &str| {
+        !s.is_empty()
+            && s.len() <= 64
+            && !s.starts_with('.')
+            && s.bytes().all(|b| b.is_ascii_alphanumeric() || b"._-".contains(&b))
+    };
+    let lower_hex = |s: &str, n: usize| {
+        s.len() == n && s.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+    };
+    let check = |what: &str, rel: &Release| -> Result<(), String> {
+        let bad = |why: &str| Err(format!("{path}: {what}: {why}"));
+        if !plain(&rel.name) {
+            return bad("its name is letters, digits, dots, dashes and underscores");
+        }
+        if !lower_hex(&rel.commit, 40) {
+            return bad("its commit is a whole commit ID, 40 lowercase hex digits");
+        }
+        let d = rel.date.as_bytes();
+        if !(d.len() == 10
+            && d[4] == b'-'
+            && d[7] == b'-'
+            && rel.date.replace('-', "").bytes().all(|b| b.is_ascii_digit()))
+        {
+            return bad("its date is YYYY-MM-DD");
+        }
+        if rel.notes.as_ref().is_some_and(|n| !n.starts_with("https://")) {
+            return bad("its notes are an https address");
+        }
+        if rel.files.is_empty() {
+            return bad("it has no files");
+        }
+        for f in &rel.files {
+            if !plain(&f.name) || f.platform.as_deref().is_some_and(|p| !plain(p)) {
+                return bad(&format!("{}: a file's name and platform are plain words", f.name));
+            }
+            if !f.url.starts_with("https://") {
+                return bad(&format!("{}: its address is https", f.name));
+            }
+            if f.bytes == 0 || f.bytes > MAX_RELEASE_FILE {
+                return bad(&format!("{}: its size is 1 byte to 512 MiB", f.name));
+            }
+            if !lower_hex(&f.sha256, 64) {
+                return bad(&format!("{}: its SHA-256 is 64 lowercase hex digits", f.name));
+            }
+        }
+        Ok(())
+    };
+    let mut out = serde_json::Map::new();
+    if let Some(fw) = &r.firmware {
+        check("firmware", fw)?;
+        let mut names: Vec<&str> = fw.files.iter().map(|f| f.name.as_str()).collect();
+        names.sort();
+        if names != ["loader.uf2", "swap.uf2", "xous.uf2"] {
+            return Err(format!("{path}: firmware: its files are loader.uf2, xous.uf2 and swap.uf2"));
+        }
+        out.insert("firmware".into(), serde_json::to_value(fw).map_err(|e| e.to_string())?);
+    }
+    if let Some(desktop) = &r.desktop {
+        check("desktop", desktop)?;
+        out.insert("desktop".into(), serde_json::to_value(desktop).map_err(|e| e.to_string())?);
+    }
+    Ok(serde_json::Value::Object(out))
+}
+
 /// The store's index: its newest stamped bundle of each app under `dir`/apps, every stamp
 /// checked against the store's newest root, signed by the catalogue key that root names. With
-/// each, what its `app.toml` says, if it has one.
-pub fn index(dir: &Path, catalogue: &Key, version: Option<u32>, expires_days: u64) -> Result<(), String> {
+/// each, what its `app.toml` says, if it has one; and with `releases`, the newest firmware and
+/// maki desktop (`releases.toml`).
+pub fn index(
+    dir: &Path,
+    catalogue: &Key,
+    version: Option<u32>,
+    expires_days: u64,
+    releases_file: Option<&str>,
+) -> Result<(), String> {
+    let releases = releases_file.map(releases).transpose()?;
     let root = latest_root(dir)?;
     if catalogue.verifying_key().to_bytes() != root.catalogue {
         return Err(format!(
@@ -368,13 +486,16 @@ pub fn index(dir: &Path, catalogue: &Key, version: Option<u32>, expires_days: u6
             .unwrap_or(1),
     };
     let n = newest.len();
-    let index = serde_json::json!({
+    let mut index = serde_json::json!({
         "format": 1,
         "version": version,
         "expires": now + expires_days * 86400,
         "root": root.version,
         "apps": newest.into_values().map(|(_, e)| e).collect::<Vec<_>>(),
     });
+    if let Some(releases) = releases {
+        index["releases"] = releases;
+    }
     let mut text = serde_json::to_string_pretty(&index).map_err(|e| e.to_string())?;
     text.push('\n');
     let signature = maki_store::sign_index(text.as_bytes(), catalogue);
@@ -393,5 +514,66 @@ pub fn add(dir: &Path, bundle: &str, catalogue: &Key, expires_days: u64) -> Resu
     std::fs::create_dir_all(&app_dir).map_err(|e| format!("{}: {e}", app_dir.display()))?;
     let out = app_dir.join(format!("{}.maki", b.manifest.version));
     stamp(bundle, catalogue, &out.to_string_lossy())?;
-    index(dir, catalogue, None, expires_days)
+    index(dir, catalogue, None, expires_days, None)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const FILE: &str = "url = \"https://example.com/f\"\nbytes = 10\nsha256 = \"\
+                        0000000000000000000000000000000000000000000000000000000000000000\"\n";
+
+    fn firmware(names: &[&str]) -> String {
+        let mut t = String::from(
+            "[firmware]\nname = \"preview-2026-10-01\"\ncommit = \"0123456789abcdef0123456789abcdef01234567\"\n\
+             date = \"2026-10-01\"\n",
+        );
+        for n in names {
+            t.push_str(&format!("[[firmware.files]]\nname = \"{n}\"\n{FILE}"));
+        }
+        t
+    }
+
+    fn parsed(text: &str) -> Result<serde_json::Value, String> {
+        let dir = std::env::temp_dir().join(format!("maki-releases-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join(format!("{:x}.toml", Sha256::digest(text.as_bytes())[0]));
+        std::fs::write(&path, text).unwrap();
+        releases(path.to_str().unwrap())
+    }
+
+    #[test]
+    fn firmware_is_its_three_files() {
+        let r = parsed(&firmware(&["loader.uf2", "xous.uf2", "swap.uf2"])).unwrap();
+        assert_eq!(r["firmware"]["name"], "preview-2026-10-01");
+        assert_eq!(r["firmware"]["files"].as_array().unwrap().len(), 3);
+        assert!(r.get("desktop").is_none());
+        assert!(parsed(&firmware(&["loader.uf2", "xous.uf2"])).is_err());
+        assert!(parsed(&firmware(&["loader.uf2", "xous.uf2", "swap.uf2", "extra.uf2"])).is_err());
+    }
+
+    #[test]
+    fn names_addresses_and_hashes_are_checked() {
+        let good = firmware(&["loader.uf2", "xous.uf2", "swap.uf2"]);
+        assert!(parsed(&good.replace("https://example.com/f", "http://example.com/f")).is_err());
+        assert!(parsed(&good.replace("bytes = 10", "bytes = 0")).is_err());
+        assert!(parsed(&good.replace("\"0000000000", "\"ABCDEF0000")).is_err());
+        assert!(parsed(&good.replace("preview-2026-10-01\"", "../up\"")).is_err());
+        assert!(parsed(&good.replace("2026-10-01\"\n", "1 Oct\"\n")).is_err());
+        assert!(parsed(&good.replace("0123456789abcdef0123456789abcdef01234567", "0123456")).is_err());
+        assert!(parsed(&format!("{good}surprise = 1\n")).is_err(), "nothing unknown");
+    }
+
+    #[test]
+    fn desktop_files_say_what_they_run_on() {
+        let text = format!(
+            "[desktop]\nname = \"0.1.2\"\ncommit = \"0123456789abcdef0123456789abcdef01234567\"\n\
+             date = \"2026-10-01\"\n[[desktop.files]]\nname = \"maki-desktop-0.1.2-x86_64.AppImage\"\n\
+             platform = \"linux-x86_64\"\n{FILE}"
+        );
+        let r = parsed(&text).unwrap();
+        assert_eq!(r["desktop"]["files"][0]["platform"], "linux-x86_64");
+        assert!(parsed(&text.replace("linux-x86_64", "linux x86")).is_err());
+    }
 }

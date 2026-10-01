@@ -88,6 +88,7 @@ impl Args {
             "--sign",
             "--version",
             "--list",
+            "--releases",
         ];
         let mut positional = Vec::new();
         let mut flags = Vec::new();
@@ -1010,14 +1011,14 @@ fn store_command(args: &Args) -> Result<(), String> {
             store::show(arg(2, "which file")?)
         }
         Some("index") => {
-            args.only(&["--catalogue", "--version", "--expires-days"])?;
+            args.only(&["--catalogue", "--version", "--expires-days", "--releases"])?;
             let dir = arg(2, "which store directory")?;
             let catalogue =
                 store::load(args.value("--catalogue").ok_or("--catalogue: the catalogue key file")?)?;
             let version =
                 if args.value("--version").is_some() { Some(num("--version")? as u32) } else { None };
             let days = if args.value("--expires-days").is_some() { num("--expires-days")? } else { 30 };
-            store::index(std::path::Path::new(dir), &catalogue, version, days)
+            store::index(std::path::Path::new(dir), &catalogue, version, days, args.value("--releases"))
         }
         Some("add") => {
             args.only(&["--catalogue", "--expires-days"])?;
@@ -1053,11 +1054,13 @@ signs stamps and revocation lists.
       What a root, a revocation list or a bundle's stamp says.
   maki store add DIR BUNDLE.maki --catalogue FILE [--expires-days 30]
       Stamps the bundle into the store in DIR (apps/ID/VERSION.maki) and signs a new index.
-  maki store index DIR --catalogue FILE [--version N] [--expires-days 30]
+  maki store index DIR --catalogue FILE [--version N] [--expires-days 30] [--releases FILE]
       Signs the index of the store in DIR: the newest stamped bundle of each app, every stamp
       checked against the newest root in roots/, with what apps/ID/app.toml says of it (its
       category, and the source it was built from). maki desktop shows it, and won't use it
-      once it has expired.
+      once it has expired. --releases signs in the newest firmware and maki desktop, from a
+      releases.toml ([firmware] and [desktop]: name, commit, date, notes, and [[...files]] with
+      name, url, bytes and sha256), for maki desktop to update them by.
 
   A store is a directory of files to publish anywhere maki desktop can fetch them:
   roots/1.bin, roots/2.bin, ... (each root signed to replace the one before), revocations.bin,
