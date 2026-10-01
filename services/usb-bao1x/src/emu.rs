@@ -1,3 +1,4 @@
+// Added for maki (a fork of Xous: github.com/KaraZajac/maki-firmware) in 2026, under its crate's license.
 //! maki: USB in the emulator. Baomulator's model of the USB controller has a paravirtual pipe at
 //! the end of its registers (0x5020_4F00), where the real controller has nothing: a build of this service
 //! made with MAKI_EMU_USB, on an emulator that has the pipe, carries its serial port, its FIDO

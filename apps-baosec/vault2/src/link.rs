@@ -1,3 +1,4 @@
+// Added for maki (a fork of Xous: github.com/KaraZajac/maki-firmware) in 2026, under its crate's license.
 //! Browser requests, by way of maki desktop and maki-link: find what's saved for a site, ask the
 //! owner on screen, answer. The launcher draws the question over whatever is in front, so this
 //! works whether the vault is open or not. Every secret that leaves goes past the owner, with the

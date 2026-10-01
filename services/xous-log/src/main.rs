@@ -1,3 +1,4 @@
+// Changed for maki (a fork of Xous: github.com/KaraZajac/maki-firmware) in 2026; its git history says what.
 #![cfg_attr(target_os = "none", no_std)]
 #![cfg_attr(target_os = "none", no_main)]
 

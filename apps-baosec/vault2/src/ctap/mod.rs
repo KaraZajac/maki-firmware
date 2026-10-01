@@ -1,3 +1,4 @@
+// Changed for maki (a fork of Xous: github.com/KaraZajac/maki-firmware) in 2026; its git history says what.
 #![cfg_attr(rustfmt, rustfmt_skip)]
 // Copyright2019-2021 Google LLC
 //

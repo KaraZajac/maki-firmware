@@ -18,7 +18,8 @@ License 1.1).
 **Files of Xous that maki changed** say so at their top: "Changed for maki (a fork of Xous:
 github.com/KaraZajac/maki-firmware) in 2026". This repository's history says what changed. Two
 changed files can't carry the note: `Cargo.lock`, which cargo writes, and
-`apps-baosec/vault2/locales/i18n.json`, whose format has no comments.
+`apps-baosec/vault2/locales/i18n.json`, whose format has no comments. Files maki added to one
+of Xous's crates say "Added for maki" at their top, and are under that crate's license.
 
 ## maki: MIT License
 
