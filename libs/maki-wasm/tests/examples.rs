@@ -174,7 +174,7 @@ impl Platform for Script {
         let answer = r.answers.pop_front().unwrap_or(Answer::NoAnswer);
         if answer == Answer::Yes {
             let keys = maki_hd::seed::SeedKeys::from_seed(&test_seed()).unwrap();
-            let words = maki_hd::seed::answer(&keys, maki_hd::op::MONERO_WORDS, path, &[], &[0; 32])
+            let words = maki_hd::seed::answer(&keys, maki_hd::words_op(path), path, &[], &[0; 32])
                 .map_err(|_| NOT_FOUND)?;
             r.backups.push(String::from_utf8(words).unwrap());
         }
@@ -2083,7 +2083,9 @@ fn kept_2048(tiles: [[u8; 4]; 4], score: u32, won: bool) -> BTreeMap<String, Vec
 }
 
 /// What the tiles add up to.
-fn worth_2048(tiles: &[[u8; 4]; 4]) -> u32 { tiles.iter().flatten().map(|&t| if t == 0 { 0 } else { 1 << t }).sum() }
+fn worth_2048(tiles: &[[u8; 4]; 4]) -> u32 {
+    tiles.iter().flatten().map(|&t| if t == 0 { 0 } else { 1 << t }).sum()
+}
 
 #[test]
 fn twenty48_starts_with_two_tiles_and_keeps_the_game() {
@@ -2102,14 +2104,16 @@ fn twenty48_starts_with_two_tiles_and_keeps_the_game() {
 fn twenty48_slides_joins_scores_and_adds_a_tile() {
     use Event::*;
     // two 2s and two 4s: left makes a 4 and an 8, 12 points, and a new 2 or 4 comes
-    let (_, r) = run_fixture("twenty48", &[Left], kept_2048([[1, 1, 2, 2], [0; 4], [0; 4], [0; 4]], 0, false));
+    let (_, r) =
+        run_fixture("twenty48", &[Left], kept_2048([[1, 1, 2, 2], [0; 4], [0; 4], [0; 4]], 0, false));
     let (tiles, score, _) = game_2048(&r.storage);
     assert_eq!((&tiles[0][..2], score), (&[2u8, 3][..], 12));
     let added = worth_2048(&tiles) - 12;
     assert!(added == 2 || added == 4, "the new tile: {added}");
     assert_eq!(r.storage.get("best").map(|b| u32::from_le_bytes(b[..4].try_into().unwrap())), Some(12));
     // a tile joins once a move: three 2s make a 4 and a 2, not an 8
-    let (_, r) = run_fixture("twenty48", &[Left], kept_2048([[1, 1, 1, 0], [0; 4], [0; 4], [0; 4]], 0, false));
+    let (_, r) =
+        run_fixture("twenty48", &[Left], kept_2048([[1, 1, 1, 0], [0; 4], [0; 4], [0; 4]], 0, false));
     assert_eq!(&game_2048(&r.storage).0[0][..2], &[2, 1]);
     // a move that moves nothing adds nothing
     let packed = [[1, 2, 0, 0], [3, 0, 0, 0], [0; 4], [0; 4]];
@@ -2121,7 +2125,8 @@ fn twenty48_slides_joins_scores_and_adds_a_tile() {
     assert_eq!(game_2048(&r.storage).0[0][0], 2);
     let (_, r) = run_fixture("twenty48", &[Down], kept_2048(column, 0, false));
     assert_eq!(game_2048(&r.storage).0[3][0], 2);
-    let (_, r) = run_fixture("twenty48", &[Right], kept_2048([[1, 0, 0, 1], [0; 4], [0; 4], [0; 4]], 0, false));
+    let (_, r) =
+        run_fixture("twenty48", &[Right], kept_2048([[1, 0, 0, 1], [0; 4], [0; 4], [0; 4]], 0, false));
     assert_eq!(game_2048(&r.storage).0[0][3], 2);
 }
 
@@ -2129,7 +2134,11 @@ fn twenty48_slides_joins_scores_and_adds_a_tile() {
 fn twenty48_says_2048_once_and_game_over_when_stuck() {
     use Event::*;
     // two 1024s meet: 2048, and a note that waits for the centre (a slide under it isn't one)
-    let (_, r) = run_fixture("twenty48", &[Left, Right, Centre], kept_2048([[10, 10, 0, 0], [0; 4], [0; 4], [0; 4]], 0, false));
+    let (_, r) = run_fixture(
+        "twenty48",
+        &[Left, Right, Centre],
+        kept_2048([[10, 10, 0, 0], [0; 4], [0; 4], [0; 4]], 0, false),
+    );
     let (tiles, score, won) = game_2048(&r.storage);
     assert_eq!((tiles[0][0], score, won), (11, 2048, true));
     // stuck: no move moves anything, so it's over, and the centre starts again
@@ -3308,4 +3317,310 @@ fn solana_signs_what_the_owner_read_as_web3js_signs_it() {
         );
         assert_eq!(r.replies[0], [&[0u8][..], &signature].concat(), "{}", f["name"]);
     }
+}
+
+/// Minesweeper's game as storage keeps it: the 80 squares (1 a mine, 2 open, 4 flagged), the
+/// cursor, the state (0 before the first step, 1 playing, 2 lost, 3 won) and the seconds played.
+fn game_mines(storage: &BTreeMap<String, Vec<u8>>) -> ([u8; 80], usize, u8, u32) {
+    let b = &storage["game"];
+    assert_eq!(b.len(), 86);
+    (b[..80].try_into().unwrap(), b[80] as usize, b[81], u32::from_le_bytes(b[82..86].try_into().unwrap()))
+}
+
+fn kept_mines(cells: [u8; 80], cursor: usize, state: u8, seconds: u32) -> BTreeMap<String, Vec<u8>> {
+    let mut b = cells.to_vec();
+    b.push(cursor as u8);
+    b.push(state);
+    b.extend(seconds.to_le_bytes());
+    BTreeMap::from([("game".to_string(), b)])
+}
+
+/// The squares around square `i` of Minesweeper's ten by eight.
+fn around_mines(i: usize) -> Vec<usize> {
+    let (r, c) = ((i / 10) as i32, (i % 10) as i32);
+    let mut out = vec![];
+    for (dr, dc) in (-1..=1).flat_map(|dr| (-1..=1).map(move |dc| (dr, dc))) {
+        let (rr, cc) = (r + dr, c + dc);
+        if (dr, dc) != (0, 0) && (0..8).contains(&rr) && (0..10).contains(&cc) {
+            out.push((rr * 10 + cc) as usize);
+        }
+    }
+    out
+}
+
+/// A field with twelve mines, nothing open: square 35 (where a game starts) touches one, 44.
+fn field_mines() -> [u8; 80] {
+    let mut cells = [0u8; 80];
+    for i in [0, 9, 70, 79, 4, 44, 47, 22, 27, 55, 61, 66] {
+        cells[i] = 1;
+    }
+    cells
+}
+
+#[test]
+fn minesweeper_first_step_is_safe_and_opens_the_field_around_it() {
+    let (stop, r) = run_fixture("minesweeper", &[Event::Centre], BTreeMap::new());
+    assert_eq!(stop, Stop::Finished);
+    assert_eq!(r.menu, ["Flag", "New game"]);
+    let (cells, cursor, state, _) = game_mines(&r.storage);
+    assert_eq!((cursor, state), (35, 1));
+    assert_eq!(cells.iter().filter(|&&c| c & 1 != 0).count(), 12, "twelve mines");
+    // the step and the squares around it have none, so they open, and the opening spreads
+    assert!(std::iter::once(35).chain(around_mines(35)).all(|i| cells[i] == 2), "{cells:?}");
+    assert!(cells.iter().filter(|&&c| c & 2 != 0).count() > 9);
+    for i in 0..80 {
+        if cells[i] & 2 != 0 {
+            assert_eq!(cells[i] & 1, 0, "{i} is open, and a mine");
+            // an open square with no mines around has every square around it open
+            if around_mines(i).iter().all(|&n| cells[n] & 1 == 0) {
+                assert!(around_mines(i).iter().all(|&n| cells[n] & 2 != 0), "around {i}");
+            }
+        }
+    }
+}
+
+#[test]
+fn minesweeper_a_mine_stepped_on_ends_the_game_and_the_centre_starts_another() {
+    use Event::*;
+    // from 35, down and left: 44, a mine
+    let (_, r) = run_fixture("minesweeper", &[Down, Left, Centre], kept_mines(field_mines(), 35, 1, 7));
+    let (cells, cursor, state, seconds) = game_mines(&r.storage);
+    assert_eq!((cursor, state, seconds), (44, 2, 7));
+    assert_eq!(cells, field_mines(), "nothing opened");
+    assert_ne!(r.frames[2], r.frames[3], "the field shown with its mines");
+    // a lost game stays lost, and the centre starts a new one: no mines until its first step
+    let (_, r) = run_fixture("minesweeper", &[Left, Centre], r.storage);
+    let (cells, cursor, state, seconds) = game_mines(&r.storage);
+    assert_eq!((cells, cursor, state, seconds), ([0; 80], 35, 0, 0));
+}
+
+#[test]
+fn minesweeper_flags_and_steps_around_a_number() {
+    use Event::*;
+    let mut cells = field_mines();
+    cells[35] = 2;
+    // 44 flagged from the menu, then a step on 35: its one mine is flagged, so the rest open
+    let (_, r) =
+        run_fixture("minesweeper", &[Down, Left, Menu(0), Up, Right, Centre], kept_mines(cells, 35, 1, 0));
+    let (after, cursor, state, _) = game_mines(&r.storage);
+    assert_eq!((cursor, state), (35, 1));
+    assert_eq!(after[44], 1 | 4, "flagged, not opened");
+    assert!(around_mines(35).iter().filter(|&&n| n != 44).all(|&n| after[n] == 2), "{after:?}");
+    assert!((0..80).all(|i| after[i] & 3 != 3), "no mine opened");
+    // a flag on an open square does nothing; a flag again takes it away
+    let (_, r) =
+        run_fixture("minesweeper", &[Menu(0), Down, Left, Menu(0), Menu(0)], kept_mines(cells, 35, 1, 0));
+    let (after, ..) = game_mines(&r.storage);
+    assert_eq!((after[35], after[44]), (2, 1));
+    // the wrong square flagged: the step around the number finds the mine
+    let (_, r) = run_fixture("minesweeper", &[Down, Menu(0), Up, Centre], kept_mines(cells, 35, 1, 0));
+    let (after, _, state, _) = game_mines(&r.storage);
+    assert_eq!((after[45], state), (4, 2), "45 flagged, and 44 stepped on");
+}
+
+#[test]
+fn minesweeper_clearing_the_field_wins_and_keeps_the_best_time() {
+    let mut cells = field_mines();
+    for c in cells.iter_mut().filter(|c| **c == 0) {
+        *c = 2;
+    }
+    // all but 35 open: stepping on it wins, with every mine flagged
+    cells[35] = 0;
+    let (_, r) = run_fixture("minesweeper", &[Event::Centre], kept_mines(cells, 35, 1, 41));
+    let (after, _, state, seconds) = game_mines(&r.storage);
+    assert_eq!((state, seconds), (3, 41));
+    assert!((0..80).all(|i| if field_mines()[i] == 1 { after[i] == 1 | 4 } else { after[i] == 2 }));
+    let best = |r: &Record| r.storage.get("best").map(|b| u32::from_le_bytes(b[..4].try_into().unwrap()));
+    assert_eq!(best(&r), Some(41));
+    // a slower win keeps the best; a faster one takes its place
+    for (was, now) in [(30, 30), (50, 41)] {
+        let mut storage = kept_mines(cells, 35, 1, 41);
+        storage.insert("best".into(), (was as u32).to_le_bytes().to_vec());
+        let (_, r) = run_fixture("minesweeper", &[Event::Centre], storage);
+        assert_eq!(best(&r), Some(now));
+    }
+}
+
+#[test]
+fn minesweeper_moves_around_the_edges_and_its_clock_stops_while_away() {
+    use Event::*;
+    let at = |events: &[Event], from: usize| {
+        let (_, r) = run_fixture("minesweeper", events, kept_mines(field_mines(), from, 1, 0));
+        game_mines(&r.storage).1
+    };
+    // left and right go along the rows, the dial up and down the columns, round the edges
+    assert_eq!(at(&[Left], 0), 79);
+    assert_eq!(at(&[Right], 79), 0);
+    assert_eq!(at(&[Up], 5), 75);
+    assert_eq!(at(&[Down], 75), 5);
+    // the clock: two seconds, away a while, back for one more
+    let (_, r) = run_record(
+        "minesweeper",
+        Record {
+            events: [Centre, Timeout, Timeout, Hidden, Timeout, Shown, Timeout].into(),
+            clock: true,
+            ..Default::default()
+        },
+    );
+    assert_eq!(game_mines(&r.storage).3, 3);
+}
+
+/// Where an app lit pixels: the leftmost, topmost, rightmost and bottommost.
+fn lit_box(c: &Canvas) -> Option<(i32, i32, i32, i32)> {
+    let lit: Vec<(i32, i32)> = (0..HEIGHT as i32)
+        .flat_map(|y| (0..WIDTH as i32).map(move |x| (x, y)))
+        .filter(|&(x, y)| c.get(x, y))
+        .collect();
+    let xs = || lit.iter().map(|p| p.0);
+    let ys = || lit.iter().map(|p| p.1);
+    Some((xs().min()?, ys().min()?, xs().max()?, ys().max()?))
+}
+
+fn tag(text: &str) -> BTreeMap<String, Vec<u8>> {
+    BTreeMap::from([("tag".to_string(), text.as_bytes().to_vec())])
+}
+
+#[test]
+fn nametag_reads_your_tag_from_a_qr_code_and_keeps_it() {
+    use Event::*;
+    let text = "Kara Zajac\nmaki's maker\nhttps://maki.netslum.io";
+    let (stop, r) = run_record(
+        "nametag",
+        Record { events: [Menu(0)].into(), qr: Some(text.into()), ..Default::default() },
+    );
+    assert_eq!(stop, Stop::Finished);
+    assert_eq!(r.menu, ["Scan your tag", "Clear"]);
+    assert_eq!(r.storage["tag"], text.as_bytes());
+    // how to make one, then the name
+    assert_ne!(r.frames[0], r.frames[1]);
+    let (_, again) = run_fixture("nametag", &[], r.storage.clone());
+    assert_eq!(again.frames[0], r.frames[1]);
+    // more than a tag holds is refused, an empty code too, and a cancelled scan changes nothing
+    for scanned in ["x".repeat(201), " ".into()] {
+        let (_, r) = run_record(
+            "nametag",
+            Record { events: [Menu(0)].into(), qr: Some(scanned), storage: tag(text), ..Default::default() },
+        );
+        assert_eq!(r.storage["tag"], text.as_bytes());
+        assert_ne!(r.frames[0], r.frames[1], "a note says why");
+    }
+    let (_, r) = run_fixture("nametag", &[Menu(0)], tag(text));
+    assert_eq!((r.storage["tag"].as_slice(), &r.frames[0]), (text.as_bytes(), &r.frames[1]));
+    // cleared, it says how to make one again
+    let (_, cleared) = run_fixture("nametag", &[Menu(1)], tag(text));
+    assert!(!cleared.storage.contains_key("tag"));
+    assert_eq!(cleared.frames[1], run_fixture("nametag", &[], BTreeMap::new()).1.frames[0]);
+}
+
+#[test]
+fn nametag_shows_a_name_as_big_as_it_fits() {
+    let shown = |text: &str| run_fixture("nametag", &[], tag(text)).1.frames[0].clone();
+    let size = |c: &Canvas| lit_box(c).map(|(l, t, r, b)| (r - l + 1, b - t + 1)).unwrap();
+    // a short name: maki's bold font four times over
+    let mut bold = Canvas::default();
+    bold.text(0, 0, "Al", Style::Bold, Color::Light);
+    let (w, h) = size(&bold);
+    assert_eq!(size(&shown("Al")), (4 * w, 4 * h));
+    // two words on two lines, three times over, with the line under it as without
+    let mut zajac = Canvas::default();
+    zajac.text(0, 0, "Zajac", Style::Bold, Color::Light);
+    for tag in ["Kara Zajac", "Kara Zajac\nmaki's maker"] {
+        let (l, _, r, _) = lit_box(&shown(tag)).unwrap();
+        assert_eq!(r - l + 1, 3 * size(&zajac).0, "{tag}");
+    }
+    // long names get smaller, and stay on the screen; every one is centred. One too long for
+    // any size is broken where it must be
+    for name in
+        ["Alexandria Ocasio-Cortez", "Hubert Blaine Wolfeschlegelsteinhausenbergerdorff", &"W".repeat(100)]
+    {
+        let (l, _, r, _) = lit_box(&shown(name)).unwrap();
+        assert!(l > 0 && r < WIDTH as i32 - 1 && (l - (WIDTH as i32 - 1 - r)).abs() <= 3, "{name}: {l}..{r}");
+    }
+    // the line under it, under it
+    let (_, t, _, b) = lit_box(&shown("Al")).unwrap();
+    let (_, top, _, bottom) = lit_box(&shown("Al\nhacker")).unwrap();
+    assert!(bottom - top > b - t + 12, "the line's below the name");
+}
+
+#[test]
+fn nametag_turns_to_its_link_as_a_qr_code_and_back() {
+    use Event::*;
+    let link = "https://maki.netslum.io";
+    let (_, r) = run_fixture("nametag", &[Centre, Right, Left], tag(&format!("Kara\nmaki's maker\n{link}")));
+    assert_eq!(read_qr(&r.frames[0]), None);
+    assert_eq!(read_qr(&r.frames[1]).as_deref(), Some(link));
+    assert_eq!(r.frames[2], r.frames[0], "and back");
+    assert_eq!(r.frames[3], r.frames[1]);
+    // a | between the lines does too, for QR code makers without new lines
+    let (_, r) = run_fixture("nametag", &[Centre], tag(&format!("Kara | maki's maker | {link}")));
+    assert_eq!(read_qr(&r.frames[1]).as_deref(), Some(link));
+    // with no link, the centre leaves the name be; with only a link, it's all there is
+    let (_, r) = run_fixture("nametag", &[Centre], tag("Kara\nmaki's maker"));
+    assert_eq!(r.frames[1], r.frames[0]);
+    let (_, r) = run_fixture("nametag", &[Centre], tag(&format!("\n\n{link}")));
+    assert_eq!(read_qr(&r.frames[0]).as_deref(), Some(link));
+    assert_eq!(read_qr(&r.frames[1]).as_deref(), Some(link));
+}
+
+/// The test phrase's BIP-85 child seed of `words` words, number `index`, as maki makes it.
+fn child_seed(words: u32, index: u32) -> String {
+    use maki_hd::HARDENED;
+    let keys = maki_hd::seed::SeedKeys::from_seed(&test_seed()).unwrap();
+    let path = [maki_hd::BIP85, 39 | HARDENED, HARDENED, words | HARDENED, index | HARDENED];
+    String::from_utf8(maki_hd::seed::answer(&keys, maki_hd::op::BIP85_WORDS, &path, &[], &[0; 32]).unwrap())
+        .unwrap()
+}
+
+#[test]
+fn childseeds_has_maki_show_the_child_seed_chosen() {
+    use Event::*;
+    let (stop, r) = run_answering("childseeds", &[Right, Right, Centre], BTreeMap::new(), &[Answer::Yes]);
+    assert_eq!(stop, Stop::Finished);
+    assert_eq!(r.menu, ["12 words", "18 words", "24 words", "Number 0"]);
+    // maki showed them (here, noted), never the app: number 2, 12 words
+    assert_eq!(
+        r.backups,
+        ["comfort onion auto dizzy upgrade mutual banner announce section poet point pudding"]
+    );
+    assert_eq!(r.backups[0], child_seed(12, 2));
+    // the dial chooses the length, and so does the menu; left stops at 0
+    let (_, r) = run_answering(
+        "childseeds",
+        &[Down, Centre, Menu(2), Left, Centre, Up, Up, Centre],
+        BTreeMap::new(),
+        &[Answer::Yes; 3],
+    );
+    assert_eq!(r.backups, [child_seed(18, 0), child_seed(24, 0), child_seed(12, 0)]);
+    assert_eq!(r.backups.iter().map(|b| b.split(' ').count()).collect::<Vec<_>>(), [18, 24, 12]);
+}
+
+#[test]
+fn childseeds_keeps_the_choice_and_which_were_seen() {
+    use Event::*;
+    // number 3 shown; then number 4, not wanted
+    let (_, r) = run_answering(
+        "childseeds",
+        &[Right, Right, Right, Centre, Right, Centre],
+        BTreeMap::new(),
+        &[Answer::Yes, Answer::No],
+    );
+    assert_eq!(r.backups.len(), 1);
+    let kept = &r.storage["choice"];
+    assert_eq!((kept[0], u32::from_le_bytes(kept[1..5].try_into().unwrap())), (0, 4));
+    assert_eq!(u64::from_le_bytes(kept[5..13].try_into().unwrap()), 1 << 3, "only 3 was seen");
+    // opened again where it was left; 3 says it was seen, 4 doesn't
+    let (_, again) = run_fixture("childseeds", &[Left], r.storage.clone());
+    assert_eq!(again.frames[0], *r.frames.last().unwrap());
+    let mut forgotten = r.storage.clone();
+    forgotten.get_mut("choice").unwrap()[5..].fill(0);
+    let (_, unseen) = run_fixture("childseeds", &[Left], forgotten);
+    assert_eq!(again.frames[0], unseen.frames[0], "4 wasn't seen");
+    assert_ne!(again.frames[1], unseen.frames[1], "3 says it was seen before");
+    // locked: maki says so, and shows nothing
+    let (_, locked) = run_record(
+        "childseeds",
+        Record { events: [Centre].into(), answers: [Answer::Yes].into(), locked: true, ..Default::default() },
+    );
+    assert!(locked.backups.is_empty());
+    assert_ne!(locked.frames[0], locked.frames[1], "a note says why");
 }

@@ -55,6 +55,12 @@ the `maki` tool that packs, signs, checks and simulates them. The examples:
   computer (camera and keyboard); text that would press Enter or Tab waits for the centre first.
 - **Snake**: the game, steered the way it's to go with the jog dial and left and right, timed
   with `wait`.
+- **2048** and **Minesweeper**: the games, with the jog dial for up and down. Minesweeper's
+  first step is always safe, its clock stops while you're away, and both keep the game you left
+  and your best.
+- **Name Tag**: your name as big as it fits (host API 9's `text_scaled`), on as many lines as
+  that takes, with a line under it and a link of yours as a QR code people can scan, all read
+  from a QR code you make.
 - **Instruments**: the accelerometer as a racing g-meter (a ball in a ring, its trail and peaks,
   calibrated by keeping still and pulling away), a pilot's horizon and slip ball, and a spirit
   level to a tenth of a degree (host API 8's `motion::range` for rides; std for its angles).
@@ -89,6 +95,9 @@ the `maki` tool that packs, signs, checks and simulates them. The examples:
   is a QR-code wallet for MetaMask (Keystone's protocol, ERC-4527): its account as a UR
   `crypto-hdkey` for MetaMask to add, and MetaMask's `eth-sign-request`s read off its screen, gone
   through on maki and answered with an `eth-signature`.
+- **Child Seeds**: new recovery phrases made from maki's by BIP-85, each a wallet of its own:
+  a number and a length chosen here, and the words shown by maki itself (`show_backup` on a
+  child seed's path, host API 9), never the app.
 - **Monero**: the Monero wallet Ledger's Monero app makes from the same phrase (host APIs 4
   and 5): its address and subaddresses as QR codes; from its menu, the 25 words that restore it
   in any Monero wallet, which maki shows its owner itself; the view key, for maki desktop or the
@@ -193,7 +202,10 @@ The app draws, then waits for the next event, and returns from `main` when told 
   (`Toward::Top` for someone across the table): the app draws them itself, so they're in every
   maki. Host API 8's `screen::dark(true)` has the whole screen dark, maki's bar and all, for an
   app that watches through the night: presses still reach it, maki lights the screen to show it's
-  typing, and maki's own screens show over it.
+  typing, and maki's own screens show over it. Host API 9's `screen::text_scaled(x, y, text,
+  style, scale, colour)` draws maki's fonts bigger, each pixel a square of 1 to 8
+  (`text_scaled_width` is how wide), for a name tag or a number read across a room
+  (WebAssembly apps).
 - **Events** from `wait(timeout)`: `Left`, `Right`, `Centre`, `Menu(i)` for the app's own menu
   items (`menu(&[...])`, up to six), `Hidden` and `Shown` when something else takes the screen
   for a while (an ask, the menu), `Timeout`, and `Exit`: save anything worth saving and return.
@@ -276,7 +288,10 @@ function whose permission it didn't ask for):
   spend and view keys, `wallet::subaddress(path, account, index)`, a subaddress's (with
   `maki-xmr` to make the addresses), and `wallet::show_backup(path)`, which has maki show its
   owner the account's 25 words on its own screens once they've said they want them: the app
-  hears whether they were shown, never the words. Host API 5 spends Monero:
+  hears whether they were shown, never the words. From host API 9, `show_backup` also shows a
+  BIP-85 child seed (`m/83696968'/39'/0'/{words}'/{index}'`, 12, 18 or 24 words in English): a
+  phrase of its own for another wallet, made from maki's, which maki makes again from the same
+  phrase; the manifest names `m/83696968'/39'/0'` as Child Seeds does. Host API 5 spends Monero:
   `wallet::monero_view_key(path)` (after a yes, one of what it allows) for a computer to watch
   the wallet, `wallet::monero_key_image(path, tx_key, index, account, subaddress, key)` for an
   output's key image and its proof, and `wallet::monero_sign(path, &request)`, where the request

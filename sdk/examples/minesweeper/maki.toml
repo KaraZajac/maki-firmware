@@ -1,0 +1,9 @@
+id = "com.leviathan.maki.minesweeper"
+name = "Minesweeper"
+version = 1
+label = "1.0"
+api = 8
+storage = 1
+memory = 64
+backup = true
+description = "Clear the field without stepping on any of its twelve mines: left and right and the jog dial on maki's side move, the centre steps, and each number says how many mines touch it. Flag a mine from the menu. The first step is always safe; your best time is kept."

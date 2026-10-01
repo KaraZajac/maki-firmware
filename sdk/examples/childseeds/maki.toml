@@ -1,0 +1,15 @@
+id = "com.leviathan.maki.childseeds"
+name = "Child Seeds"
+version = 1
+label = "1.0"
+api = 9
+storage = 1
+memory = 128
+backup = true
+description = "New recovery phrases made from maki's (BIP-85), each a wallet of its own: a phone's hot wallet, a family member's, a test. Choose a number and 12, 18 or 24 words, and maki shows the words itself: this app never sees them. Restore maki from its phrase, and each number gives the same words again."
+
+[permissions]
+wallet = "To have maki show you child seeds, phrases made from yours (BIP-85). The app never sees them."
+
+[wallet]
+paths = ["m/83696968'/39'/0'"]

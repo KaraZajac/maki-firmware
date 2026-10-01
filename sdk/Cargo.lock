@@ -184,6 +184,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "childseeds"
+version = "0.1.0"
+dependencies = [
+ "maki-app",
+]
+
+[[package]]
 name = "cipher"
 version = "0.4.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -894,6 +901,13 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cf8baf1c55e62ffcace7a9f06f4bd9cd3f0c4beb022d3b367256b91b87513d98"
 
 [[package]]
+name = "minesweeper"
+version = "0.1.0"
+dependencies = [
+ "maki-app",
+]
+
+[[package]]
 name = "minicbor"
 version = "0.19.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -985,6 +999,13 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.119",
+]
+
+[[package]]
+name = "nametag"
+version = "0.1.0"
+dependencies = [
+ "maki-app",
 ]
 
 [[package]]

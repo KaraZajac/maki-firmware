@@ -1,0 +1,12 @@
+id = "com.leviathan.maki.nametag"
+name = "Name Tag"
+version = 1
+label = "1.0"
+api = 9
+storage = 1
+memory = 64
+backup = true
+description = "Your name on maki's screen, as big as it fits, with a line under it, and a link of yours as a QR code people can scan (your site, Signal, Mastodon): the centre turns between them. Make a QR code of three lines, your name, the line under it and the link, and scan it from the menu."
+
+[permissions]
+camera = "To read your name tag from a QR code you make: your name, a line under it, and a link."

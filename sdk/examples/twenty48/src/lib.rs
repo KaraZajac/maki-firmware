@@ -178,7 +178,13 @@ fn tile(x: i32, y: i32, t: u8) {
         Color::Light
     };
     let w = screen::text_width(label.as_str(), Style::Small);
-    screen::text(x + (TILE - w) / 2, y + (TILE - Style::Small.height()) / 2, label.as_str(), Style::Small, ink);
+    screen::text(
+        x + (TILE - w) / 2,
+        y + (TILE - Style::Small.height()) / 2,
+        label.as_str(),
+        Style::Small,
+        ink,
+    );
 }
 
 /// A note over the middle of the grid, two lines.
@@ -218,7 +224,8 @@ fn main() {
     let _ = menu(&["New game", "Reset best"]);
     let mut best = storage::get_u32("best", 0);
     let mut g = Game::load();
-    let mut shown: Option<(&str, &str)> = if g.board.can_move() { None } else { Some(("Game over", "centre: again")) };
+    let mut shown: Option<(&str, &str)> =
+        if g.board.can_move() { None } else { Some(("Game over", "centre: again")) };
     loop {
         draw(&g, best, shown);
         let way = match wait(None) {
@@ -275,4 +282,3 @@ fn main() {
 }
 
 maki_app::main!(main);
-
