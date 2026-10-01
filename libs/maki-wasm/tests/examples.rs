@@ -2064,6 +2064,86 @@ fn snake_goes_the_way_pressed_but_never_straight_back() {
     assert!(!cell(8, 13) && !cell(13, 13) && (4..=13).all(|x| !cell(x, 12)));
 }
 
+/// 2048's game as it keeps it: the tiles (powers of two, 0 none), the score, whether 2048's been
+/// seen.
+fn game_2048(storage: &BTreeMap<String, Vec<u8>>) -> ([[u8; 4]; 4], u32, bool) {
+    let b = &storage["game"];
+    let mut tiles = [[0u8; 4]; 4];
+    for (k, &t) in b[..16].iter().enumerate() {
+        tiles[k / 4][k % 4] = t;
+    }
+    (tiles, u32::from_le_bytes(b[16..20].try_into().unwrap()), b[20] != 0)
+}
+
+fn kept_2048(tiles: [[u8; 4]; 4], score: u32, won: bool) -> BTreeMap<String, Vec<u8>> {
+    let mut b: Vec<u8> = tiles.iter().flatten().copied().collect();
+    b.extend(score.to_le_bytes());
+    b.push(won as u8);
+    BTreeMap::from([("game".to_string(), b)])
+}
+
+/// What the tiles add up to.
+fn worth_2048(tiles: &[[u8; 4]; 4]) -> u32 { tiles.iter().flatten().map(|&t| if t == 0 { 0 } else { 1 << t }).sum() }
+
+#[test]
+fn twenty48_starts_with_two_tiles_and_keeps_the_game() {
+    let (_, r) = run_fixture("twenty48", &[], BTreeMap::new());
+    let (tiles, score, won) = game_2048(&r.storage);
+    let placed: Vec<u8> = tiles.iter().flatten().copied().filter(|&t| t != 0).collect();
+    assert_eq!(placed.len(), 2);
+    assert!(placed.iter().all(|&t| t == 1 || t == 2), "a 2 or a 4 each: {placed:?}");
+    assert_eq!((score, won), (0, false));
+    // opened again, it's the same game
+    let (_, again) = run_fixture("twenty48", &[], r.storage.clone());
+    assert_eq!(game_2048(&again.storage).0, tiles);
+}
+
+#[test]
+fn twenty48_slides_joins_scores_and_adds_a_tile() {
+    use Event::*;
+    // two 2s and two 4s: left makes a 4 and an 8, 12 points, and a new 2 or 4 comes
+    let (_, r) = run_fixture("twenty48", &[Left], kept_2048([[1, 1, 2, 2], [0; 4], [0; 4], [0; 4]], 0, false));
+    let (tiles, score, _) = game_2048(&r.storage);
+    assert_eq!((&tiles[0][..2], score), (&[2u8, 3][..], 12));
+    let added = worth_2048(&tiles) - 12;
+    assert!(added == 2 || added == 4, "the new tile: {added}");
+    assert_eq!(r.storage.get("best").map(|b| u32::from_le_bytes(b[..4].try_into().unwrap())), Some(12));
+    // a tile joins once a move: three 2s make a 4 and a 2, not an 8
+    let (_, r) = run_fixture("twenty48", &[Left], kept_2048([[1, 1, 1, 0], [0; 4], [0; 4], [0; 4]], 0, false));
+    assert_eq!(&game_2048(&r.storage).0[0][..2], &[2, 1]);
+    // a move that moves nothing adds nothing
+    let packed = [[1, 2, 0, 0], [3, 0, 0, 0], [0; 4], [0; 4]];
+    let (_, r) = run_fixture("twenty48", &[Left], kept_2048(packed, 5, false));
+    assert_eq!((game_2048(&r.storage).0, game_2048(&r.storage).1), (packed, 5));
+    // the dial slides up and down, and right goes right
+    let column = [[0; 4], [1, 0, 0, 0], [0; 4], [1, 0, 0, 0]];
+    let (_, r) = run_fixture("twenty48", &[Up], kept_2048(column, 0, false));
+    assert_eq!(game_2048(&r.storage).0[0][0], 2);
+    let (_, r) = run_fixture("twenty48", &[Down], kept_2048(column, 0, false));
+    assert_eq!(game_2048(&r.storage).0[3][0], 2);
+    let (_, r) = run_fixture("twenty48", &[Right], kept_2048([[1, 0, 0, 1], [0; 4], [0; 4], [0; 4]], 0, false));
+    assert_eq!(game_2048(&r.storage).0[0][3], 2);
+}
+
+#[test]
+fn twenty48_says_2048_once_and_game_over_when_stuck() {
+    use Event::*;
+    // two 1024s meet: 2048, and a note that waits for the centre (a slide under it isn't one)
+    let (_, r) = run_fixture("twenty48", &[Left, Right, Centre], kept_2048([[10, 10, 0, 0], [0; 4], [0; 4], [0; 4]], 0, false));
+    let (tiles, score, won) = game_2048(&r.storage);
+    assert_eq!((tiles[0][0], score, won), (11, 2048, true));
+    // stuck: no move moves anything, so it's over, and the centre starts again
+    let stuck = [[1, 2, 1, 2], [2, 1, 2, 1], [1, 2, 1, 2], [2, 1, 2, 1]];
+    let (_, r) = run_fixture("twenty48", &[Left, Centre], kept_2048(stuck, 100, false));
+    let (tiles, score, won) = game_2048(&r.storage);
+    assert_eq!((tiles.iter().flatten().filter(|&&t| t != 0).count(), score, won), (2, 0, false));
+    // its menu: a new game, and the best score forgotten
+    let mut kept = kept_2048([[3, 0, 0, 0], [0; 4], [0; 4], [0; 4]], 40, false);
+    kept.insert("best".to_string(), 40u32.to_le_bytes().to_vec());
+    let (_, r) = run_fixture("twenty48", &[Menu(0), Menu(1)], kept);
+    assert_eq!((game_2048(&r.storage).1, r.storage.get("best")), (0, None));
+}
+
 #[test]
 fn status_shows_what_the_computer_says_and_says_what_it_shows() {
     let msg = |s: &str| s.as_bytes().to_vec();

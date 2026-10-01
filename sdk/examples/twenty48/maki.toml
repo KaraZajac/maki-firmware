@@ -1,0 +1,9 @@
+id = "com.leviathan.maki.2048"
+name = "2048"
+version = 1
+label = "1.0"
+api = 8
+storage = 1
+memory = 64
+backup = true
+description = "Slide the tiles with left and right and the jog dial on maki's side: two of a kind that meet become one, worth both. Reach 2048, and keep going. The game waits for you when you leave, and keeps your best score."
