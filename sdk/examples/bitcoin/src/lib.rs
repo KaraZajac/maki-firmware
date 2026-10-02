@@ -224,6 +224,8 @@ fn share(m: &[u8]) -> Answer {
     let which = match k {
         Kind::Segwit => display::network_name(net).to_string(),
         Kind::Taproot => format!("{} taproot", display::network_name(net)),
+        // only Dogecoin's and Bitcoin Cash's apps ask for these: this one never does
+        Kind::Legacy => format!("{} legacy", display::network_name(net)),
     };
     let asked = Review::new("Share account?")
         .detail(&format!("{which}, view only"))
