@@ -1,0 +1,15 @@
+[package]
+name = "maki-apt"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "maki's Aptos account: its addresses, and what it signs, read strictly and shown first"
+
+[dependencies]
+# an address (the key's authentication key), and the signing message's prefix: SHA3-256
+sha3 = { version = "0.10.8", default-features = false }
+
+[dev-dependencies]
+maki-hd = { path = "../maki-hd", features = ["seed"] }
+maki-seed = { path = "../maki-seed" }
+serde_json = "1"

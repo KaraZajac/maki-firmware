@@ -40,6 +40,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "aptos"
+version = "0.1.0"
+dependencies = [
+ "maki-app",
+ "maki-apt",
+]
+
+[[package]]
 name = "autocfg"
 version = "1.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -833,6 +841,13 @@ dependencies = [
  "maki-hd",
  "maki-native",
  "xous",
+]
+
+[[package]]
+name = "maki-apt"
+version = "0.1.0"
+dependencies = [
+ "sha3",
 ]
 
 [[package]]

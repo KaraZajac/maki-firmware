@@ -74,3 +74,5 @@ maki-xrp = { path = "../maki-xrp" }
 maki-kas = { path = "../maki-kas" }
 # Stellar: what its app shows, checked against its library
 maki-xlm = { path = "../maki-xlm" }
+# Aptos: what its app shows, checked against its library
+maki-apt = { path = "../maki-apt" }

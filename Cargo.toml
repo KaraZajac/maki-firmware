@@ -145,6 +145,7 @@ members = [
   "libs/maki-xrp",
   "libs/maki-kas",
   "libs/maki-xlm",
+  "libs/maki-apt",
   "libs/maki-bundle",
   "libs/maki-store",
   "libs/maki-native",

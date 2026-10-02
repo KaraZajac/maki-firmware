@@ -1,0 +1,18 @@
+id = "com.leviathan.maki.aptos"
+name = "Aptos"
+version = 1
+label = "1.0"
+api = 6
+storage = 0
+memory = 256
+backup = true
+icon = "icon.pbm"
+description = "Your Aptos account, from maki's recovery phrase, as Petra and Ledger make it: for maki desktop's wallet. Every APT, coin and asset payment, every stake and the most the fee can be are shown on maki before it signs, and nothing that would hand the account to another is signed at all."
+
+[permissions]
+link = "So maki desktop can ask for your account and signatures."
+wallet = "To sign the transactions you approve on maki's screen, and nothing else."
+
+[wallet]
+curve = "ed25519"
+paths = ["m/44'/637'"]
