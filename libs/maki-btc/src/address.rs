@@ -12,17 +12,24 @@ pub enum Network {
     Bitcoin,
     /// testnet and signet: the same addresses
     Testnet,
+    /// Litecoin: Bitcoin's transactions, signatures and PSBTs, with addresses of its own
+    /// (`ltc1…`, `L…`, `M…`).
+    Litecoin,
+    /// Litecoin's test network (`tltc1…`).
+    LitecoinTest,
 }
 
 impl Network {
-    /// BIP44 coin type: 0 for bitcoin, 1 for the test networks.
+    /// BIP44 coin type: 0 for bitcoin, 2 for litecoin, 1 for the test networks.
     pub fn coin_type(self) -> u32 {
         match self {
             Network::Bitcoin => 0,
-            Network::Testnet => 1,
+            Network::Testnet | Network::LitecoinTest => 1,
+            Network::Litecoin => 2,
         }
     }
 
+    /// Bitcoin's network for a coin type: 0, or 1 for its test networks.
     pub fn from_coin_type(coin: u32) -> Option<Network> {
         match coin {
             0 => Some(Network::Bitcoin),
@@ -35,22 +42,50 @@ impl Network {
         match self {
             Network::Bitcoin => bech32::hrp::BC,
             Network::Testnet => bech32::hrp::TB,
+            Network::Litecoin => bech32::Hrp::parse_unchecked("ltc"),
+            Network::LitecoinTest => bech32::Hrp::parse_unchecked("tltc"),
         }
     }
 
-    /// The version bytes of a BIP84 account key: zpub, or vpub on test networks.
+    /// Whether it's a test network, whose coins are worth nothing.
+    pub fn is_test(self) -> bool { matches!(self, Network::Testnet | Network::LitecoinTest) }
+
+    /// The version bytes of a BIP84 account key: zpub, or vpub on test networks. Litecoin's
+    /// wallets (Litecoin Core, Electrum-LTC) take Bitcoin's.
     pub fn zpub_version(self) -> [u8; 4] {
-        match self {
-            Network::Bitcoin => [0x04, 0xb2, 0x47, 0x46],
-            Network::Testnet => [0x04, 0x5f, 0x1c, 0xf6],
-        }
+        if self.is_test() { [0x04, 0x5f, 0x1c, 0xf6] } else { [0x04, 0xb2, 0x47, 0x46] }
     }
 
     /// The version bytes of an account key as descriptors write it: xpub, or tpub.
     pub fn xpub_version(self) -> [u8; 4] {
+        if self.is_test() { [0x04, 0x35, 0x87, 0xcf] } else { [0x04, 0x88, 0xb2, 0x1e] }
+    }
+
+    /// A pay-to-public-key-hash address's version byte (base58check).
+    fn p2pkh_version(self) -> u8 {
         match self {
-            Network::Bitcoin => [0x04, 0x88, 0xb2, 0x1e],
-            Network::Testnet => [0x04, 0x35, 0x87, 0xcf],
+            Network::Bitcoin => 0x00,
+            Network::Testnet | Network::LitecoinTest => 0x6f,
+            Network::Litecoin => 0x30,
+        }
+    }
+
+    /// A pay-to-script-hash address's version byte: Litecoin's own (`M…`, `Q…`), as its wallets
+    /// show them, rather than the Bitcoin ones it also takes.
+    fn p2sh_version(self) -> u8 {
+        match self {
+            Network::Bitcoin => 0x05,
+            Network::Testnet => 0xc4,
+            Network::Litecoin => 0x32,
+            Network::LitecoinTest => 0x3a,
+        }
+    }
+
+    /// The most there will ever be of its coin, in its smallest unit: no amount can be larger.
+    pub fn max_money(self) -> u64 {
+        match self {
+            Network::Bitcoin | Network::Testnet => 21_000_000 * 100_000_000,
+            Network::Litecoin | Network::LitecoinTest => 84_000_000 * 100_000_000,
         }
     }
 }
@@ -89,13 +124,11 @@ pub fn address(script: &[u8], network: Network) -> Option<String> {
         }
         // P2PKH
         [0x76, 0xa9, 0x14, hash @ .., 0x88, 0xac] if hash.len() == 20 => {
-            let version = if network == Network::Bitcoin { 0x00 } else { 0x6f };
-            Some(base58check(&[&[version][..], hash].concat()))
+            Some(base58check(&[&[network.p2pkh_version()][..], hash].concat()))
         }
         // P2SH
         [0xa9, 0x14, hash @ .., 0x87] if hash.len() == 20 => {
-            let version = if network == Network::Bitcoin { 0x05 } else { 0xc4 };
-            Some(base58check(&[&[version][..], hash].concat()))
+            Some(base58check(&[&[network.p2sh_version()][..], hash].concat()))
         }
         _ => None,
     }

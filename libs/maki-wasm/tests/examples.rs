@@ -2726,6 +2726,63 @@ fn bitcoin_signs_what_the_owner_reviewed_as_maki_always_has() {
     assert!(texts(&r.replies[0])[0].starts_with("not a PSBT maki can read"));
 }
 
+#[test]
+fn litecoin_shares_its_account_and_compares_addresses_once_asked() {
+    // the test phrase's account at coin type 2, as Litecoin Core and Electrum-LTC take it (Bitcoin's
+    // version bytes), and BIP84's first address on Litecoin, as wallets publish it
+    let r = run_wallet(
+        "litecoin",
+        vec![vec![b'A', 0, 0], vec![b'D', 0, 0, 0, 0, 0, 0, 0], vec![b'D', 1, 1, 1, 1, 0, 0, 0]],
+        vec![Answer::Yes, Answer::Yes, Answer::Yes],
+        false,
+    );
+    let [zpub, descriptor] = <[String; 2]>::try_from(texts(&r.replies[0])).unwrap();
+    assert!(zpub.starts_with("zpub"), "{zpub}");
+    assert!(
+        descriptor.starts_with(
+            "wpkh([73c5da0a/84h/2h/0h]xpub6CjGURuDpczf6uNrCCwfhVizn5J3hsWcvZ2m6GAdmAjZnoWJPrx6TFPjGSftc2o5fvox6ubQjSXmjjaHZjwYMH7SGFpHHb9Jg24zBf66mbE/<0;1>/*)#"
+        ),
+        "{descriptor}"
+    );
+    assert_eq!(r.reviews[0].detail, "litecoin, view only");
+    assert_eq!(texts(&r.replies[1]), ["ltc1qjmxnz78nmc8nq77wuxh25n2es7rzm5c2rkk4wh"]);
+    assert_eq!(r.reviews[1].pages[0].value, "litecoin");
+    // the test network's taproot change #1, as bitcoinjs-lib makes it with Litecoin's parameters
+    assert_eq!(texts(&r.replies[2]), ["tltc1pwhn9lzpaukrjwvwe365x7hcgvtcfywwsaxcq7j04jgrfcxzdq23qgpll35"]);
+    let r = run_wallet("litecoin", vec![vec![b'A', 0, 0]], vec![Answer::Yes], true);
+    assert_eq!(r.replies[0], [3]);
+    // and nothing of the Bitcoin app's that it hasn't: no multisig
+    let r = run_wallet("litecoin", vec![vec![b'K', 0], vec![b'W']], vec![], false);
+    assert_eq!((r.replies[0].as_slice(), r.replies[1].as_slice()), (&[4u8][..], &[4u8][..]));
+}
+
+#[test]
+fn litecoin_signs_what_the_owner_reviewed_in_litecoin() {
+    let psbt = std::fs::read(format!("{BTC_FIXTURES}/litecoin-unsigned.psbt")).unwrap();
+    let expected = std::fs::read(format!("{BTC_FIXTURES}/litecoin-signed.psbt")).unwrap();
+    let r = run_wallet("litecoin", psbt_messages(0, &psbt, 1), vec![Answer::Yes], false);
+    assert_eq!(r.replies[0][0], 0);
+    // a native SegWit and a taproot coin, signed as rust-bitcoin signs them
+    assert_eq!(fetched(&r.replies[1..]), expected);
+    let review = &r.reviews[0];
+    assert_eq!((review.question.as_str(), review.detail.as_str()), ("Sign and spend", "0.00075 LTC"));
+    let pages: Vec<(&str, &str)> =
+        review.pages.iter().map(|p| (p.heading.as_str(), p.value.as_str())).collect();
+    assert!(pages.contains(&("Change", "0.00025 LTC")), "{pages:?}");
+    assert!(review.pages.iter().any(|p| p.mono.replace('\n', "").starts_with('L')), "the payee's L address");
+    // a coin of Litecoin's isn't one of the test network's accounts
+    let r = run_wallet("litecoin", psbt_messages(1, &psbt, 0), vec![Answer::Yes], false);
+    assert_eq!(r.replies[0][0], 5);
+    assert!(r.reviews.is_empty());
+}
+
+#[test]
+fn litecoin_shows_an_address_to_receive_at() {
+    let r = run_wallet_with("litecoin", vec![Event::Right], vec![], vec![], false);
+    // receiving address #1, in capitals: a smaller code, which every wallet reads
+    assert_eq!(read_qr(r.frames.last().unwrap()).unwrap(), "LTC1QWLEZPR3890HCP6VVA9TWQH27MR6EDADREQVHNN");
+}
+
 /// A string16, as the Bitcoin app's messages have them.
 fn str16(out: &mut Vec<u8>, s: &str) {
     out.extend_from_slice(&(s.len() as u16).to_le_bytes());

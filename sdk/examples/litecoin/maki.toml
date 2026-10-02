@@ -1,0 +1,17 @@
+id = "com.leviathan.maki.litecoin"
+name = "Litecoin"
+version = 1
+label = "1.0"
+api = 3
+storage = 0
+memory = 1024
+backup = true
+icon = "icon.pbm"
+description = "Your Litecoin wallet, from maki's recovery phrase: the native SegWit and taproot accounts Litecoin Core, Electrum-LTC and Ledger make from it, for maki desktop's wallet. Every payment, the change and the fee shown on maki before it signs."
+
+[permissions]
+link = "So maki desktop can ask for your account, addresses and signatures."
+wallet = "To sign the transactions you approve on maki's screen, and nothing else."
+
+[wallet]
+paths = ["m/84'/2'", "m/86'/2'", "m/84'/1'", "m/86'/1'"]

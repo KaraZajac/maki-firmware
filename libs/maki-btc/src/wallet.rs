@@ -32,7 +32,8 @@ pub enum Error {
     ScriptPath(usize),
     /// The outputs pay more than the inputs hold.
     NegativeFee,
-    /// An amount beyond the 21 million bitcoin there will ever be.
+    /// An amount beyond all the coins there will ever be (21 million bitcoin, 84 million
+    /// litecoin).
     Amount,
     /// A multisig wallet maki won't take, and why.
     Multisig(&'static str),
@@ -63,19 +64,19 @@ impl core::fmt::Display for Error {
                 write!(f, "input {} spends a taproot script, and maki signs with its key alone", i)
             }
             Error::NegativeFee => write!(f, "the outputs pay more than the inputs hold"),
-            Error::Amount => write!(f, "an amount is beyond 21 million bitcoin"),
+            Error::Amount => write!(f, "an amount is beyond all the coins there will ever be"),
             Error::Multisig(why) => write!(f, "{}", why),
         }
     }
 }
 
-/// Satoshis in 21 million bitcoin: no amount can be larger.
+/// Satoshis in 21 million bitcoin: no amount can be larger (on bitcoin: `Network::max_money`).
 pub const MAX_MONEY: u64 = 21_000_000 * 100_000_000;
 
-pub(crate) fn total(mut amounts: impl Iterator<Item = u64>) -> Result<u64, Error> {
-    amounts
-        .try_fold(0u64, |sum, a| sum.checked_add(a).filter(|&s| a <= MAX_MONEY && s <= MAX_MONEY))
-        .ok_or(Error::Amount)
+/// The amounts added up, each and the sum no more than the network's coin will ever have.
+pub(crate) fn total(network: Network, mut amounts: impl Iterator<Item = u64>) -> Result<u64, Error> {
+    let max = network.max_money();
+    amounts.try_fold(0u64, |sum, a| sum.checked_add(a).filter(|&s| a <= max && s <= max)).ok_or(Error::Amount)
 }
 
 /// Which of maki's accounts: native SegWit (BIP84, P2WPKH), or taproot (BIP86, P2TR, spent with
@@ -407,8 +408,8 @@ fn check(psbt: &Psbt, accounts: &[Account]) -> Result<(Review, Vec<Spend>), Erro
     }
     let network = accounts.first().ok_or(Error::Key)?.network;
     let spends = spends(psbt, accounts)?;
-    let total_in = total(spends.iter().map(|s| s.spent.value))?;
-    let total_out = total(psbt.tx.outputs.iter().map(|o| o.value))?;
+    let total_in = total(network, spends.iter().map(|s| s.spent.value))?;
+    let total_out = total(network, psbt.tx.outputs.iter().map(|o| o.value))?;
     let fee = total_in.checked_sub(total_out).ok_or(Error::NegativeFee)?;
     let outputs = psbt
         .tx

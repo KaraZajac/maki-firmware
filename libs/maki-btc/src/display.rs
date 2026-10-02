@@ -24,6 +24,8 @@ pub fn unit(network: Network) -> &'static str {
     match network {
         Network::Bitcoin => "BTC",
         Network::Testnet => "tBTC",
+        Network::Litecoin => "LTC",
+        Network::LitecoinTest => "tLTC",
     }
 }
 
@@ -32,10 +34,12 @@ pub fn network_name(network: Network) -> &'static str {
     match network {
         Network::Bitcoin => "bitcoin",
         Network::Testnet => "testnet",
+        Network::Litecoin => "litecoin",
+        Network::LitecoinTest => "litecoin testnet",
     }
 }
 
-/// An amount, exactly, in bitcoin without trailing zeros: `0.0007 BTC`, `1 BTC`.
+/// An amount, exactly, in whole coins without trailing zeros: `0.0007 BTC`, `1 LTC`.
 pub fn amount(sats: u64, network: Network) -> String {
     let whole = sats / 100_000_000;
     let frac = sats % 100_000_000;

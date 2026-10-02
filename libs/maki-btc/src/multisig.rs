@@ -467,8 +467,8 @@ impl<'k> Signer<'k> {
             return Err(Error::Psbt("a transaction needs inputs and outputs"));
         }
         let spends = self.spends(psbt)?;
-        let total_in = total(spends.iter().map(|s| s.spent.value))?;
-        let total_out = total(psbt.tx.outputs.iter().map(|o| o.value))?;
+        let total_in = total(self.wallet.network, spends.iter().map(|s| s.spent.value))?;
+        let total_out = total(self.wallet.network, psbt.tx.outputs.iter().map(|o| o.value))?;
         let fee = total_in.checked_sub(total_out).ok_or(Error::NegativeFee)?;
         let outputs = psbt
             .tx

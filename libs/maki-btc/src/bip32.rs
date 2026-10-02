@@ -101,10 +101,7 @@ const PUBLIC_VERSIONS: [([u8; 4], crate::Network); 10] = {
 /// The version bytes of a P2WSH multisig key as SLIP-132 writes it, which Sparrow and Coldcard
 /// take a cosigner's key in: Zpub, or Vpub on test networks.
 pub fn multisig_version(network: crate::Network) -> [u8; 4] {
-    match network {
-        crate::Network::Bitcoin => [0x02, 0xaa, 0x7e, 0xd3],
-        crate::Network::Testnet => [0x02, 0x57, 0x54, 0x83],
-    }
+    if network.is_test() { [0x02, 0x57, 0x54, 0x83] } else { [0x02, 0xaa, 0x7e, 0xd3] }
 }
 
 /// An extended public key, someone else's: an account of another wallet's, as its xpub says it.
