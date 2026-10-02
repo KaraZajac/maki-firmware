@@ -68,3 +68,5 @@ serde_json = "1"
 sha1_smol = "1"
 # Tron: what its app shows, checked against its library
 maki-trx = { path = "../maki-trx" }
+# XRP: what its app shows, checked against its library
+maki-xrp = { path = "../maki-xrp" }

@@ -1,0 +1,17 @@
+id = "com.leviathan.maki.xrp"
+name = "XRP"
+version = 1
+label = "1.0"
+api = 3
+storage = 0
+memory = 256
+backup = true
+icon = "icon.pbm"
+description = "Your XRP Ledger account, from maki's recovery phrase, as Ledger, Xaman and Trust Wallet make it: for maki desktop's wallet. Every payment, its destination tag, any token and the fee are shown on maki before it signs; anything that hands the account over or deletes it is said loudly."
+
+[permissions]
+link = "So maki desktop can ask for your account, show you its address, and ask for signatures."
+wallet = "To sign the XRP Ledger transactions you approve on maki's screen, and nothing else."
+
+[wallet]
+paths = ["m/44'/144'"]

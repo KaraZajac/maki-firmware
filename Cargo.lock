@@ -5614,6 +5614,7 @@ dependencies = [
  "maki-sol",
  "maki-trx",
  "maki-xmr",
+ "maki-xrp",
  "minicbor",
  "qrcode",
  "rqrr",
@@ -5643,6 +5644,17 @@ dependencies = [
  "sha3 0.10.8",
  "subtle",
  "zeroize",
+]
+
+[[package]]
+name = "maki-xrp"
+version = "0.1.0"
+dependencies = [
+ "maki-hd",
+ "maki-seed",
+ "ripemd",
+ "serde_json",
+ "sha2 0.10.8",
 ]
 
 [[package]]

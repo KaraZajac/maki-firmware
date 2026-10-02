@@ -1,0 +1,15 @@
+[package]
+name = "xrp"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+# std, for an allocator: the account's code (maki-xrp) works in Vecs and Strings
+maki-app = { path = "../../maki-app", default-features = false, features = ["std", "wallet"] }
+# transactions, read strictly and shown before they're signed; maki holds the key
+maki-xrp = { path = "../../../libs/maki-xrp" }
