@@ -1,0 +1,17 @@
+[package]
+name = "digibyte"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+# std, for an allocator: the wallet's code (maki-btc) works in Vecs and Strings
+maki-app = { path = "../../maki-app", default-features = false, features = ["std", "wallet"] }
+# the wallet: Bitcoin's, on DigiByte's networks; maki holds the keys
+maki-btc = { path = "../../../libs/maki-btc" }
+# what maki's keys say when they can't
+maki-hd = { path = "../../../libs/maki-hd" }

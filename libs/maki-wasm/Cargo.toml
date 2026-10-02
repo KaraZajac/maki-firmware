@@ -86,3 +86,5 @@ maki-sui = { path = "../maki-sui" }
 maki-atom = { path = "../maki-atom" }
 # TON: what its app shows, checked against its library
 maki-ton = { path = "../maki-ton" }
+# Zcash: its transactions, signed with the app's signatures, checked against its library
+maki-zec = { path = "../maki-zec" }

@@ -39,6 +39,16 @@ impl core::fmt::Display for ParseError {
 /// could exhaust its memory.
 const MAX_COUNT: u64 = 10_000;
 const MAX_SCRIPT: u64 = 10_000;
+/// The most payload a Dash special transaction carries (Dash Core's `MAX_TX_EXTRA_PAYLOAD`).
+const MAX_DASH_PAYLOAD: u64 = 10_000;
+
+/// A Dash transaction's version (DIP-2): the low 16 bits of its version field, signed, as Dash
+/// Core reads them.
+pub fn dash_version(field: i32) -> i16 { field as u32 as u16 as i16 }
+
+/// A Dash transaction's special transaction type (DIP-2): the top 16 bits of its version field; 0
+/// for a plain transaction.
+pub fn dash_type(field: i32) -> u16 { (field as u32 >> 16) as u16 }
 
 pub(crate) struct Cursor<'a> {
     data: &'a [u8],
@@ -168,6 +178,47 @@ impl Tx {
             return Err(ParseError("bytes after the transaction"));
         }
         Ok(Tx { version, inputs, outputs, lock_time })
+    }
+
+    /// A transaction as Dash writes it (DIP-2): Bitcoin's without SegWit, which Dash never took,
+    /// its version field's low 16 bits the version and the top 16 a special transaction's type,
+    /// and, from version 3, a special transaction's payload after the lock time. The transaction
+    /// (its version the whole field) and the payload, empty for a plain transaction. Some special
+    /// transactions have no inputs (a withdrawal from Dash Platform) or no outputs; a plain one
+    /// has both. With no witnesses, the txid is the hash of the bytes as they are.
+    pub fn parse_dash(bytes: &[u8]) -> Result<(Tx, &[u8]), ParseError> {
+        let mut c = Cursor::new(bytes);
+        let version = c.u32()? as i32;
+        let special = dash_version(version) >= 3 && dash_type(version) != 0;
+        let n_in = c.varint()?;
+        if (n_in == 0 && !special) || n_in > MAX_COUNT {
+            return Err(ParseError("input count"));
+        }
+        let mut inputs = Vec::with_capacity(n_in as usize);
+        for _ in 0..n_in {
+            let mut prev_txid = [0u8; 32];
+            prev_txid.copy_from_slice(c.take(32)?);
+            let prev_vout = c.u32()?;
+            let script_sig = c.bytes(MAX_SCRIPT)?.to_vec();
+            let sequence = c.u32()?;
+            inputs.push(TxIn { prev_txid, prev_vout, script_sig, sequence });
+        }
+        let n_out = c.varint()?;
+        if (n_out == 0 && !special) || n_out > MAX_COUNT {
+            return Err(ParseError("output count"));
+        }
+        let mut outputs = Vec::with_capacity(n_out as usize);
+        for _ in 0..n_out {
+            let value = c.u64()?;
+            let script_pubkey = c.bytes(MAX_SCRIPT)?.to_vec();
+            outputs.push(TxOut { value, script_pubkey });
+        }
+        let lock_time = c.u32()?;
+        let payload = if special { c.bytes(MAX_DASH_PAYLOAD)? } else { &[] };
+        if !c.done() {
+            return Err(ParseError("bytes after the transaction"));
+        }
+        Ok((Tx { version, inputs, outputs, lock_time }, payload))
     }
 
     /// Serialized without witnesses: what the txid hashes, and what a PSBT carries.

@@ -1,14 +1,15 @@
 //! maki's Bitcoin wallet: keys from the recovery phrase, addresses, and PSBTs reviewed on maki's
 //! screen before they're signed (ARCHITECTURE.md, "Order of work"). And the coins whose
-//! transactions are Bitcoin's: Litecoin's (SegWit and taproot, at coin type 2), and, from before
-//! SegWit, Dogecoin's and Bitcoin Cash's (pay-to-key-hash, BIP44; Bitcoin Cash's signatures with its
-//! fork ID), each on its own `Network`.
+//! transactions are Bitcoin's: Litecoin's (SegWit and taproot, at coin type 2) and DigiByte's (at
+//! coin type 20, its legacy accounts too), and, from before SegWit, Dogecoin's, Bitcoin Cash's and
+//! Dash's (pay-to-key-hash, BIP44; Bitcoin Cash's signatures with its fork ID; Dash's special
+//! transactions read, and refused), each on its own `Network`.
 //!
 //! Two accounts, the standard ones, so the phrase also works in Sparrow, Electrum and the rest:
 //! native SegWit (BIP84, `m/84'/0'/0'`) and taproot (BIP86, `m/86'/0'/0'`, spent with the key
 //! alone); on the networks without SegWit, the one: pay-to-key-hash (BIP44, `m/44'/3'/0'` for
-//! Dogecoin). Transactions come in as PSBTs (BIP174, and BIP371 for taproot). The rules that keep a
-//! lying computer from getting a signature the owner didn't mean to give:
+//! Dogecoin); on DigiByte, all three. Transactions come in as PSBTs (BIP174, and BIP371 for taproot).
+//! The rules that keep a lying computer from getting a signature the owner didn't mean to give:
 //!
 //! - every input must be this wallet's, proven by deriving its key; a native SegWit or pay-to-key-hash one
 //!   must come with the whole transaction it spends, which must hash to the outpoint: an amount the computer

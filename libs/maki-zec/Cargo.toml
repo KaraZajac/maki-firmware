@@ -1,0 +1,22 @@
+[package]
+name = "maki-zec"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "maki's Zcash transparent account: its t-addresses, and what it signs, read strictly and shown first"
+
+[dependencies]
+# the account's keys, through maki: public keys and ECDSA signatures by path (`maki_hd::Keys`)
+maki-hd = { path = "../maki-hd" }
+# ZIP-244's digests: BLAKE2b-256, personalized with what each one hashes
+blake2 = { version = "0.10.6", default-features = false }
+# t-addresses: base58check's double SHA-256, and a key's HASH160
+sha2 = { version = "0.10.8", default-features = false }
+ripemd = { version = "0.1", default-features = false }
+# TEX addresses (ZIP-320): bech32m
+bech32 = { version = "0.11", default-features = false, features = ["alloc"] }
+
+[dev-dependencies]
+maki-hd = { path = "../maki-hd", features = ["seed"] }
+maki-seed = { path = "../maki-seed" }
+serde_json = "1"

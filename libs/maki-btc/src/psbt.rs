@@ -3,6 +3,7 @@
 
 use alloc::vec::Vec;
 
+use crate::address::Network;
 use crate::tx::{Cursor, ParseError, Tx, write_varint};
 
 pub const MAGIC: &[u8; 5] = b"psbt\xff";
@@ -75,7 +76,20 @@ fn write_map(out: &mut Vec<u8>, pairs: &[Pair]) {
 }
 
 impl Psbt {
-    pub fn parse(bytes: &[u8]) -> Result<Psbt, ParseError> {
+    pub fn parse(bytes: &[u8]) -> Result<Psbt, ParseError> { Psbt::parse_with(bytes, Tx::parse) }
+
+    /// A PSBT whose transaction is written as `network` writes one: Dash's (DIP-2, which Dash
+    /// Core's PSBTs carry) on Dash's networks, Bitcoin's elsewhere. A Dash special transaction
+    /// reads, for maki to say what it is before refusing it.
+    pub fn parse_on(bytes: &[u8], network: Network) -> Result<Psbt, ParseError> {
+        if network.is_dash() {
+            Psbt::parse_with(bytes, |b| Tx::parse_dash(b).map(|(tx, _)| tx))
+        } else {
+            Psbt::parse(bytes)
+        }
+    }
+
+    fn parse_with(bytes: &[u8], parse_tx: fn(&[u8]) -> Result<Tx, ParseError>) -> Result<Psbt, ParseError> {
         if bytes.len() > MAX_PSBT {
             return Err(ParseError("too big"));
         }
@@ -91,7 +105,7 @@ impl Psbt {
         }
         let tx_pair =
             global.iter().find(|p| p.key == [GLOBAL_UNSIGNED_TX]).ok_or(ParseError("no transaction"))?;
-        let tx = Tx::parse(&tx_pair.value)?;
+        let tx = parse_tx(&tx_pair.value)?;
         if tx.inputs.iter().any(|i| !i.script_sig.is_empty()) {
             return Err(ParseError("transaction already has signatures"));
         }

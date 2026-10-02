@@ -1,0 +1,17 @@
+id = "com.leviathan.maki.zcash"
+name = "Zcash"
+version = 1
+label = "1.0"
+api = 3
+storage = 0
+memory = 256
+backup = true
+icon = "icon.pbm"
+description = "Your Zcash transparent wallet, from maki's recovery phrase: the t-address account Ledger, Zashi and zcashd make from it, for maki desktop's wallet. Every payment, the change and the fee shown on maki before it signs; shielded transactions refused, since maki can't see into them."
+
+[permissions]
+link = "So maki desktop can ask for your account, addresses and signatures."
+wallet = "To sign the transactions you approve on maki's screen, and nothing else."
+
+[wallet]
+paths = ["m/44'/133'", "m/44'/1'"]

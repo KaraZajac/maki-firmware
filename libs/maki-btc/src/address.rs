@@ -27,17 +27,35 @@ pub enum Network {
     BitcoinCash,
     /// Bitcoin Cash's test network (`bchtest:q…`).
     BitcoinCashTest,
+    /// Dash: Bitcoin's transactions before SegWit, which it never took, with special transactions
+    /// of its own (DIP-2: masternodes, Dash Platform): pay-to-key-hash addresses (`X…`, P2SH
+    /// `7…`), signed the old way.
+    Dash,
+    /// Dash's test network (`y…`).
+    DashTest,
+    /// DigiByte: Bitcoin's transactions, SegWit and taproot among them, with addresses of its own
+    /// (`dgb1…`, `D…`, P2SH `S…`), and DigiDollar's (2026), which maki can't show.
+    DigiByte,
+    /// DigiByte's test network (`dgbt1…`, `s…`).
+    DigiByteTest,
 }
 
 impl Network {
-    /// BIP44 coin type: 0 for bitcoin, 2 for litecoin, 3 for dogecoin, 145 for bitcoin cash, 1
-    /// for the test networks.
+    /// BIP44 coin type: 0 for bitcoin, 2 for litecoin, 3 for dogecoin, 5 for dash, 20 for
+    /// digibyte, 145 for bitcoin cash, 1 for the test networks.
     pub fn coin_type(self) -> u32 {
         match self {
             Network::Bitcoin => 0,
-            Network::Testnet | Network::LitecoinTest | Network::DogecoinTest | Network::BitcoinCashTest => 1,
+            Network::Testnet
+            | Network::LitecoinTest
+            | Network::DogecoinTest
+            | Network::BitcoinCashTest
+            | Network::DashTest
+            | Network::DigiByteTest => 1,
             Network::Litecoin => 2,
             Network::Dogecoin => 3,
+            Network::Dash => 5,
+            Network::DigiByte => 20,
             Network::BitcoinCash => 145,
         }
     }
@@ -58,6 +76,8 @@ impl Network {
             Network::Testnet => Some(bech32::hrp::TB),
             Network::Litecoin => Some(bech32::Hrp::parse_unchecked("ltc")),
             Network::LitecoinTest => Some(bech32::Hrp::parse_unchecked("tltc")),
+            Network::DigiByte => Some(bech32::Hrp::parse_unchecked("dgb")),
+            Network::DigiByteTest => Some(bech32::Hrp::parse_unchecked("dgbt")),
             _ => None,
         }
     }
@@ -66,16 +86,28 @@ impl Network {
     pub fn is_test(self) -> bool {
         matches!(
             self,
-            Network::Testnet | Network::LitecoinTest | Network::DogecoinTest | Network::BitcoinCashTest
+            Network::Testnet
+                | Network::LitecoinTest
+                | Network::DogecoinTest
+                | Network::BitcoinCashTest
+                | Network::DashTest
+                | Network::DigiByteTest
         )
     }
 
-    /// Whether its coins are spent with SegWit and taproot (Bitcoin, Litecoin), or the old way,
-    /// to a key's hash (Dogecoin, Bitcoin Cash).
+    /// Whether its coins are spent with SegWit and taproot (Bitcoin, Litecoin, DigiByte), or the
+    /// old way, to a key's hash (Dogecoin, Bitcoin Cash, Dash).
     pub fn has_segwit(self) -> bool { self.hrp().is_some() }
 
     /// Whether it's Bitcoin Cash's, whose signatures carry its fork ID (SIGHASH_FORKID).
     pub fn is_bitcoin_cash(self) -> bool { matches!(self, Network::BitcoinCash | Network::BitcoinCashTest) }
+
+    /// Whether it's Dash's, whose transactions are its own (DIP-2): a version's top 16 bits are
+    /// a special transaction's type, and from version 3 a special transaction carries a payload.
+    pub fn is_dash(self) -> bool { matches!(self, Network::Dash | Network::DashTest) }
+
+    /// Whether it's DigiByte's, which has DigiDollar's transactions beside Bitcoin's.
+    pub fn is_digibyte(self) -> bool { matches!(self, Network::DigiByte | Network::DigiByteTest) }
 
     /// The version bytes of a BIP84 account key: zpub, or vpub on test networks. Litecoin's
     /// wallets (Litecoin Core, Electrum-LTC) take Bitcoin's.
@@ -95,13 +127,16 @@ impl Network {
             Network::Bitcoin | Network::BitcoinCash => 0x00,
             Network::Testnet | Network::LitecoinTest | Network::BitcoinCashTest => 0x6f,
             Network::Litecoin => 0x30,
-            Network::Dogecoin => 0x1e,
+            Network::Dogecoin | Network::DigiByte => 0x1e,
             Network::DogecoinTest => 0x71,
+            Network::Dash => 0x4c,
+            Network::DashTest => 0x8c,
+            Network::DigiByteTest => 0x7e,
         }
     }
 
-    /// A pay-to-script-hash address's version byte: Litecoin's own (`M…`, `Q…`), as its wallets
-    /// show them, rather than the Bitcoin ones it also takes.
+    /// A pay-to-script-hash address's version byte: Litecoin's own (`M…`, `Q…`) and DigiByte's
+    /// (`S…`), as their wallets show them, rather than the Bitcoin ones they also take.
     fn p2sh_version(self) -> u8 {
         match self {
             Network::Bitcoin | Network::BitcoinCash => 0x05,
@@ -109,6 +144,10 @@ impl Network {
             Network::Litecoin => 0x32,
             Network::LitecoinTest => 0x3a,
             Network::Dogecoin => 0x16,
+            Network::Dash => 0x10,
+            Network::DashTest => 0x13,
+            Network::DigiByte => 0x3f,
+            Network::DigiByteTest => 0x8c,
         }
     }
 
@@ -122,20 +161,25 @@ impl Network {
     }
 
     /// The most there will ever be of its coin, in its smallest unit: no amount can be larger.
-    /// Dogecoin has no cap; Dogecoin Core's sanity limit is ten billion.
+    /// Dogecoin has no cap; Dogecoin Core's sanity limit is ten billion. Dash Core's is Bitcoin's
+    /// 21 million (Dash's own supply stops short of it), DigiByte's 21 billion.
     pub fn max_money(self) -> u64 {
         match self {
-            Network::Bitcoin | Network::Testnet | Network::BitcoinCash | Network::BitcoinCashTest => {
-                21_000_000 * 100_000_000
-            }
+            Network::Bitcoin
+            | Network::Testnet
+            | Network::BitcoinCash
+            | Network::BitcoinCashTest
+            | Network::Dash
+            | Network::DashTest => 21_000_000 * 100_000_000,
             Network::Litecoin | Network::LitecoinTest => 84_000_000 * 100_000_000,
             Network::Dogecoin | Network::DogecoinTest => 10_000_000_000 * 100_000_000,
+            Network::DigiByte | Network::DigiByteTest => 21_000_000_000 * 100_000_000,
         }
     }
 }
 
-/// The output script that pays a public key's hash (P2PKH), as Dogecoin and Bitcoin Cash pay
-/// their accounts.
+/// The output script that pays a public key's hash (P2PKH), as Dogecoin, Bitcoin Cash and Dash
+/// pay their accounts (and DigiByte its legacy one).
 pub fn p2pkh_script(public_key: &[u8; 33]) -> Vec<u8> {
     let mut s = Vec::with_capacity(25);
     s.extend_from_slice(&[0x76, 0xa9, 0x14]);
@@ -205,7 +249,8 @@ pub fn p2wpkh_script(public_key: &[u8; 33]) -> Vec<u8> {
     s
 }
 
-/// A key's native SegWit address, on a network with SegWit (none on Dogecoin or Bitcoin Cash).
+/// A key's native SegWit address, on a network with SegWit (none on Dogecoin, Bitcoin Cash or
+/// Dash).
 pub fn p2wpkh_address(public_key: &[u8; 33], network: Network) -> Option<String> {
     address(&p2wpkh_script(public_key), network)
 }

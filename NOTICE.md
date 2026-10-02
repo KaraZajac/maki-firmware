@@ -47,6 +47,9 @@ with it contains `maki-app`, whose MIT notice goes with it.
   Rusnak, Aaron Voisine, Sean Bowe: `LICENSE-bip39`).
 - `libs/maki-kas`: its signature hash is ported from rusty-kaspa v2.1.0 (ISC, Copyright (c)
   2022-2024 Kaspa developers: `LICENSE-rusty-kaspa`).
+- `libs/maki-zec`: its tests use zcash-test-vectors' ZIP-244 and ZIP-320 vectors, unchanged
+  (MIT, Copyright (c) 2018-2021 The Electric Coin Company), with their license beside them
+  (`tests/fixtures/LICENSE-zcash-test-vectors`).
 - `apps-baosec/maki-spawn/build.rs` is adapted from cortex-m's (MIT, Copyright (c) 2016 Jorge
   Aparicio and The Embedded Devices Working Group Developers).
 - `sdk/examples/passphrase` uses the EFF's Long Wordlist, under the Creative Commons Attribution

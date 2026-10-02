@@ -11,7 +11,7 @@ use crate::bip32::xpub;
 use crate::hash::{sha256, sha256d, tagged};
 use crate::psbt::{self, Psbt, parse_derivation, parse_tap_derivation};
 use crate::taproot;
-use crate::tx::{Cursor, Tx, TxOut, write_varint};
+use crate::tx::{self, Cursor, Tx, TxOut, write_varint};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Error {
@@ -104,8 +104,11 @@ impl Kind {
     }
 
     /// Whether a network's wallet has this kind of account: SegWit and taproot where there's
-    /// SegWit, pay-to-key-hash where there isn't.
-    pub fn on(self, network: Network) -> bool { (self == Kind::Legacy) != network.has_segwit() }
+    /// SegWit, pay-to-key-hash where there isn't; on DigiByte all three, its wallets having made
+    /// legacy accounts (`D…`) as long as SegWit ones.
+    pub fn on(self, network: Network) -> bool {
+        network.is_digibyte() || (self == Kind::Legacy) != network.has_segwit()
+    }
 }
 
 /// Bitcoin Cash's fork ID, in the signature hash type of every signature it takes (BIP143's digest
@@ -115,6 +118,41 @@ pub const SIGHASH_ALL_FORKID: u8 = 0x41;
 /// CashTokens' prefix (Bitcoin Cash, 2023): an output's locking bytecode that starts with it
 /// carries tokens, which maki can't show, so won't spend or make.
 const PREFIX_TOKEN: u8 = 0xef;
+
+/// DigiDollar's marker (DigiByte, 2026): a transaction whose version's low 16 bits are this
+/// mints, sends or redeems DigiDollars, which maki can't show. Their tokens sit in outputs of no
+/// DGB, their amounts in the transaction's data; a transaction without the marker that spends
+/// one passes DigiByte's checks and destroys the tokens.
+const DIGIDOLLAR: u32 = 0x0770;
+
+/// Why maki won't sign a Dash special transaction (DIP-2), by its type: anything but a payment
+/// does what maki's pages can't show.
+fn dash_special(kind: u16) -> &'static str {
+    match kind {
+        1 => "a Dash masternode's registration (ProRegTx): maki signs payments only",
+        2 => "a Dash masternode's service update (ProUpServTx): maki signs payments only",
+        3 => "a Dash masternode's registrar update (ProUpRegTx): maki signs payments only",
+        4 => "a Dash masternode's revocation (ProUpRevTx): maki signs payments only",
+        5 => "a Dash coinbase (CbTx): maki signs payments only",
+        6 => "a Dash quorum commitment (QcTx): maki signs payments only",
+        7 => "a Dash masternode's hard fork signal (MnHfTx): maki signs payments only",
+        8 => "a Dash asset lock (credit for Dash Platform): maki signs payments only",
+        9 => "a Dash asset unlock (a withdrawal from Dash Platform): maki signs payments only",
+        _ => "a Dash special transaction of a type Dash doesn't have",
+    }
+}
+
+/// Whether Dash takes a transaction of this version to sign: a plain one (type 0, DIP-2), of a
+/// version Dash relays (1 to 3).
+fn dash_signable(version: i32) -> Result<(), Error> {
+    let (v, kind) = (tx::dash_version(version), tx::dash_type(version));
+    match kind {
+        0 if (1..=3).contains(&v) => Ok(()),
+        0 => Err(Error::Unsupported("a transaction version Dash doesn't relay (it relays 1 to 3)")),
+        _ if v >= 3 => Err(Error::Unsupported(dash_special(kind))),
+        _ => Err(Error::Unsupported("a special transaction type below version 3, which Dash refuses")),
+    }
+}
 
 /// A key of an account's: where it is, and its public key.
 #[derive(Clone)]
@@ -297,6 +335,20 @@ pub(crate) fn previous_output(bytes: &[u8], txid: &[u8; 32], vout: u32) -> Optio
     prev.outputs.get(vout as usize).cloned()
 }
 
+/// The same, the transaction read as `network` writes one: on Dash's, as Dash does, a special
+/// transaction with its payload (a withdrawal from Dash Platform, a coinbase), whose txid hashes
+/// its bytes as they are.
+fn previous_output_on(bytes: &[u8], txid: &[u8; 32], vout: u32, network: Network) -> Option<TxOut> {
+    if !network.is_dash() {
+        return previous_output(bytes, txid, vout);
+    }
+    let (prev, _) = Tx::parse_dash(bytes).ok()?;
+    if sha256d(bytes) != *txid {
+        return None;
+    }
+    prev.outputs.get(vout as usize).cloned()
+}
+
 /// A witness UTXO (an amount, then a script).
 pub(crate) fn witness_utxo(bytes: &[u8]) -> Option<TxOut> {
     let mut c = Cursor::new(bytes);
@@ -324,13 +376,14 @@ fn is_taproot(pairs: &[psbt::Pair]) -> bool {
 
 /// Check every input, and work out what each one spends.
 fn spends(psbt: &Psbt, accounts: &[Account]) -> Result<Vec<Spend>, Error> {
+    let network = accounts.first().ok_or(Error::Key)?.network;
     let mut out = Vec::with_capacity(psbt.tx.inputs.len());
     for (i, input) in psbt.tx.inputs.iter().enumerate() {
         let pairs = &psbt.inputs[i];
         let prev = psbt.input(i, psbt::IN_NON_WITNESS_UTXO);
         let from_prev = match prev {
             Some(bytes) => Some(
-                previous_output(bytes, &input.prev_txid, input.prev_vout)
+                previous_output_on(bytes, &input.prev_txid, input.prev_vout, network)
                     .ok_or(Error::PreviousTxMismatch(i))?,
             ),
             None => None,
@@ -388,7 +441,6 @@ fn spends(psbt: &Psbt, accounts: &[Account]) -> Result<Vec<Spend>, Error> {
             // Cash's do, still lets two transactions that each lie about another input's add up
             // to a fee nobody saw)
             let spent = from_prev.ok_or(Error::NoPreviousTx(i))?;
-            let network = accounts.first().ok_or(Error::Key)?.network;
             let hash_type = if network.is_bitcoin_cash() { SIGHASH_ALL_FORKID } else { 1 };
             if sighash.is_some_and(|t| t != [hash_type, 0, 0, 0]) {
                 return Err(Error::Sighash(i));
@@ -411,6 +463,11 @@ fn spends(psbt: &Psbt, accounts: &[Account]) -> Result<Vec<Spend>, Error> {
             }
             Spend { key, account, spent, kind: accounts[account].kind, hash_type }
         };
+        // a DigiDollar token's coin holds no DGB: spent by anything but DigiDollar's own
+        // transactions, the tokens are gone
+        if network.is_digibyte() && spend.spent.value == 0 {
+            return Err(Error::Unsupported("a coin of no DGB: a DigiDollar token's, which maki can't show"));
+        }
         out.push(spend);
     }
     Ok(out)
@@ -451,6 +508,12 @@ fn check(psbt: &Psbt, accounts: &[Account]) -> Result<(Review, Vec<Spend>), Erro
     }
     if psbt.tx.outputs.iter().any(|o| o.script_pubkey.first() == Some(&PREFIX_TOKEN)) {
         return Err(Error::Unsupported("an output carrying CashTokens, which maki can't show"));
+    }
+    if network.is_dash() {
+        dash_signable(psbt.tx.version)?;
+    }
+    if network.is_digibyte() && psbt.tx.version as u32 & 0xffff == DIGIDOLLAR {
+        return Err(Error::Unsupported("a DigiDollar transaction, which maki can't show"));
     }
     let spends = spends(psbt, accounts)?;
     let total_in = total(network, spends.iter().map(|s| s.spent.value))?;

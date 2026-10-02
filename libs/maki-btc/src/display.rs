@@ -30,6 +30,10 @@ pub fn unit(network: Network) -> &'static str {
         Network::DogecoinTest => "tDOGE",
         Network::BitcoinCash => "BCH",
         Network::BitcoinCashTest => "tBCH",
+        Network::Dash => "DASH",
+        Network::DashTest => "tDASH",
+        Network::DigiByte => "DGB",
+        Network::DigiByteTest => "tDGB",
     }
 }
 
@@ -44,8 +48,16 @@ pub fn network_name(network: Network) -> &'static str {
         Network::DogecoinTest => "dogecoin testnet",
         Network::BitcoinCash => "bitcoin cash",
         Network::BitcoinCashTest => "bitcoin cash testnet",
+        Network::Dash => "dash",
+        Network::DashTest => "dash testnet",
+        Network::DigiByte => "digibyte",
+        Network::DigiByteTest => "digibyte testnet",
     }
 }
+
+/// How a fee rate is written: satoshis (or the network's smallest unit) per virtual byte; Dash's
+/// wallets write it in duffs a byte, its transactions having no witnesses to discount.
+pub fn fee_rate_unit(network: Network) -> &'static str { if network.is_dash() { "duff/B" } else { "sat/vB" } }
 
 /// An amount, exactly, in whole coins without trailing zeros: `0.0007 BTC`, `1 LTC`.
 pub fn amount(sats: u64, network: Network) -> String {
@@ -106,7 +118,7 @@ impl Review {
         pages.push(Page {
             heading: String::from(if self.fee_is_high() { "High fee!" } else { "Fee" }),
             value: amount(self.fee, self.network),
-            mono: format!("{} sat/vB", self.fee_rate()),
+            mono: format!("{} {}", self.fee_rate(), fee_rate_unit(self.network)),
             prose: String::new(),
         });
         pages

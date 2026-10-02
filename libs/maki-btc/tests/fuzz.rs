@@ -88,3 +88,45 @@ fn nothing_the_computer_sends_panics_the_wallet() {
     // the mutations reach the review, not only the parser's first checks
     assert!(parsed > 1000 && reviewed > 10, "parsed {parsed}, reviewed {reviewed}");
 }
+
+#[test]
+fn nothing_the_computer_sends_panics_dashs_or_digibytes_wallet() {
+    let words: Vec<&str> =
+        "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about"
+            .split(' ')
+            .collect();
+    let keys = keys(&maki_seed::seed(&words, ""));
+    let dash = [Account::new(keys, Network::Dash, wallet::Kind::Legacy).unwrap()];
+    let digibyte: Vec<Account> = [wallet::Kind::Segwit, wallet::Kind::Taproot, wallet::Kind::Legacy]
+        .into_iter()
+        .map(|k| Account::new(keys, Network::DigiByte, k).unwrap())
+        .collect();
+    let read = |name: &str| std::fs::read(format!("{FIXTURES}/{name}.psbt")).unwrap();
+    let bases =
+        [read("dash-unsigned"), read("dash-signed"), read("digibyte-unsigned"), read("digibyte-signed")];
+    let mut rng = Rng(0x5eed_da5b_d16b_7e00);
+    let (mut parsed, mut reviewed) = (0, 0);
+    for i in 0..12_000 {
+        let base = i % 4;
+        let input = if i % 16 == 0 {
+            (0..rng.below(300)).map(|_| rng.next() as u8).collect()
+        } else {
+            mutate(&mut rng, &bases[base])
+        };
+        let (network, accounts) =
+            if base < 2 { (Network::Dash, &dash[..]) } else { (Network::DigiByte, &digibyte[..]) };
+        let outcome = catch_unwind(AssertUnwindSafe(|| {
+            let _ = Tx::parse_dash(&input);
+            if let Ok(mut psbt) = Psbt::parse_on(&input, network) {
+                parsed += 1;
+                let _ = psbt.serialize();
+                if wallet::review(&psbt, accounts).is_ok() {
+                    reviewed += 1;
+                }
+                let _ = wallet::sign(&mut psbt, accounts);
+            }
+        }));
+        assert!(outcome.is_ok(), "panicked on {:02x?}", input);
+    }
+    assert!(parsed > 1000 && reviewed > 10, "parsed {parsed}, reviewed {reviewed}");
+}
