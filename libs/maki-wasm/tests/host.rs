@@ -757,6 +757,39 @@ fn qr_codes_fit_or_say_so() {
     assert_eq!(c.qr(0, 0, &[b'x'; 3000], 110), None);
 }
 
+/// A QR code on the canvas, read as maki's camera reads one (rqrr, as bao-video has it).
+fn read_canvas_qr(c: &Canvas) -> Option<String> {
+    let (scale, margin) = (4, 16);
+    let (w, h) = (WIDTH * scale + 2 * margin, HEIGHT * scale + 2 * margin);
+    let mut img = rqrr::PreparedImage::prepare_from_greyscale(w, h, |x, y| {
+        let (x, y) = (x as i32 - margin as i32, y as i32 - margin as i32);
+        let inside = x >= 0 && y >= 0 && x < (WIDTH * scale) as i32 && y < (HEIGHT * scale) as i32;
+        if !inside || c.get(x / scale as i32, y / scale as i32) { 255 } else { 0 }
+    });
+    img.detect_grids().first()?.decode().ok().map(|(_, text)| text)
+}
+
+#[test]
+fn qr_codes_hold_any_text_as_its_bytes() {
+    use qrcode::optimize::Parser;
+    use qrcode::types::Mode;
+    // UTF-8 the qrcode crate's own encoder writes partly in Kanji mode (its parser takes two bytes
+    // in Shift JIS's ranges for a Kanji character), which phones read back as other characters
+    for text in ["日本語のテキストです", "ΑΒΓΔΕΖΗΘ", "→→→ ★★★", "Grüße, ça va? 你好，世界"]
+    {
+        assert!(Parser::new(text.as_bytes()).any(|s| s.mode == Mode::Kanji), "{text}");
+        let mut c = Canvas::default();
+        assert!(c.qr(0, 0, text.as_bytes(), 110).is_some(), "{text}");
+        assert_eq!(read_canvas_qr(&c).as_deref(), Some(text), "{text}");
+    }
+    // and plain text as ever: a link, and digits, which take numeric mode
+    for text in ["https://maki.netslum.io/docs/", "0123456789012345678901234567890123456789"] {
+        let mut c = Canvas::default();
+        assert!(c.qr(0, 0, text.as_bytes(), 110).is_some());
+        assert_eq!(read_canvas_qr(&c).as_deref(), Some(text));
+    }
+}
+
 #[test]
 fn admit_says_what_maki_takes() {
     use maki_bundle::{Kind, Manifest};

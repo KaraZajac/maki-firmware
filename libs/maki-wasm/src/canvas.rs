@@ -261,7 +261,7 @@ impl Canvas {
     /// dark modules on light, with a quiet zone. Returns the side drawn, or None if it doesn't
     /// fit or is too much for a QR code.
     pub fn qr(&mut self, x: i32, y: i32, data: &[u8], size: i32) -> Option<i32> {
-        let code = qrcode::QrCode::with_error_correction_level(data, qrcode::EcLevel::L).ok()?;
+        let code = qrcode::QrCode::with_bits(qr_bits(data)?, qrcode::EcLevel::L).ok()?;
         let modules = code.width() as i32;
         // two modules of quiet zone, as maki's own codes have
         let quiet = 2;
@@ -291,4 +291,34 @@ impl Canvas {
 
     /// Rows of pixels as bits, a set bit light: for simulators and screenshots.
     pub fn words(&self) -> &[u32; WORDS * HEIGHT] { &self.bits }
+}
+
+/// `data` as a QR code's bits at error correction L, in the smallest version that holds it, as the
+/// qrcode crate's own `encode_auto` makes them but never in Kanji mode. Its parser takes any two
+/// bytes in Shift JIS's double-byte ranges for a Kanji character, and UTF-8 text is full of such
+/// pairs (Japanese, Greek capitals, arrows and stars): written as Kanji, a phone reads them back as
+/// other characters. Those bytes go in byte mode instead, which a phone reads back as they were.
+fn qr_bits(data: &[u8]) -> Option<qrcode::bits::Bits> {
+    use qrcode::bits::Bits;
+    use qrcode::optimize::{Optimizer, Parser, Segment, total_encoded_len};
+    use qrcode::types::Mode;
+    use qrcode::{EcLevel, Version};
+    let segments: Vec<Segment> = Parser::new(data)
+        .map(|s| if s.mode == Mode::Kanji { Segment { mode: Mode::Byte, ..s } } else { s })
+        .collect();
+    // the length fields' sizes change at versions 10 and 27: segments are joined once for each
+    for (first, last) in [(1, 9), (10, 26), (27, 40)] {
+        let optimized: Vec<Segment> =
+            Optimizer::new(segments.iter().cloned(), Version::Normal(last)).collect();
+        let len = total_encoded_len(&optimized, Version::Normal(last));
+        for v in first..=last {
+            let mut bits = Bits::new(Version::Normal(v));
+            if len <= bits.max_len(EcLevel::L).ok()? {
+                bits.push_segments(data, optimized.into_iter()).ok()?;
+                bits.push_terminator(EcLevel::L).ok()?;
+                return Some(bits);
+            }
+        }
+    }
+    None
 }
