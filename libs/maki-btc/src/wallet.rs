@@ -6,9 +6,9 @@ use alloc::vec::Vec;
 
 use maki_hd::{HARDENED, Keys, Public, Tweak};
 
-use crate::address::{Network, address, describe, p2tr_script, p2wpkh_script};
+use crate::address::{Network, address, describe, p2pkh_script, p2tr_script, p2wpkh_script};
 use crate::bip32::xpub;
-use crate::hash::{hash160, sha256, sha256d, tagged};
+use crate::hash::{sha256, sha256d, tagged};
 use crate::psbt::{self, Psbt, parse_derivation, parse_tap_derivation};
 use crate::taproot;
 use crate::tx::{Cursor, Tx, TxOut, write_varint};
@@ -37,6 +37,9 @@ pub enum Error {
     Amount,
     /// A multisig wallet maki won't take, and why.
     Multisig(&'static str),
+    /// Something this network's wallet doesn't do (an account kind it hasn't, CashTokens), and
+    /// what.
+    Unsupported(&'static str),
 }
 
 impl core::fmt::Display for Error {
@@ -66,6 +69,7 @@ impl core::fmt::Display for Error {
             Error::NegativeFee => write!(f, "the outputs pay more than the inputs hold"),
             Error::Amount => write!(f, "an amount is beyond all the coins there will ever be"),
             Error::Multisig(why) => write!(f, "{}", why),
+            Error::Unsupported(what) => write!(f, "{}", what),
         }
     }
 }
@@ -79,23 +83,38 @@ pub(crate) fn total(network: Network, mut amounts: impl Iterator<Item = u64>) ->
     amounts.try_fold(0u64, |sum, a| sum.checked_add(a).filter(|&s| a <= max && s <= max)).ok_or(Error::Amount)
 }
 
-/// Which of maki's accounts: native SegWit (BIP84, P2WPKH), or taproot (BIP86, P2TR, spent with
-/// the key alone).
+/// Which of maki's accounts: native SegWit (BIP84, P2WPKH), taproot (BIP86, P2TR, spent with the
+/// key alone), or, on the networks without SegWit (Dogecoin, Bitcoin Cash), pay-to-key-hash
+/// (BIP44, P2PKH).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Kind {
     Segwit,
     Taproot,
+    Legacy,
 }
 
 impl Kind {
-    /// BIP43's purpose: 84 or 86.
+    /// BIP43's purpose: 84, 86 or 44.
     pub fn purpose(self) -> u32 {
         match self {
             Kind::Segwit => 84,
             Kind::Taproot => 86,
+            Kind::Legacy => 44,
         }
     }
+
+    /// Whether a network's wallet has this kind of account: SegWit and taproot where there's
+    /// SegWit, pay-to-key-hash where there isn't.
+    pub fn on(self, network: Network) -> bool { (self == Kind::Legacy) != network.has_segwit() }
 }
+
+/// Bitcoin Cash's fork ID, in the signature hash type of every signature it takes (BIP143's digest
+/// with SIGHASH_FORKID, its fork ID zero): SIGHASH_ALL | SIGHASH_FORKID.
+pub const SIGHASH_ALL_FORKID: u8 = 0x41;
+
+/// CashTokens' prefix (Bitcoin Cash, 2023): an output's locking bytecode that starts with it
+/// carries tokens, which maki can't show, so won't spend or make.
+const PREFIX_TOKEN: u8 = 0xef;
 
 /// A key of an account's: where it is, and its public key.
 #[derive(Clone)]
@@ -123,6 +142,13 @@ impl<'k> Account<'k> {
     }
 
     pub fn new(keys: &'k dyn Keys, network: Network, kind: Kind) -> Result<Account<'k>, Error> {
+        if !kind.on(network) {
+            return Err(Error::Unsupported(if network.has_segwit() {
+                "this network's accounts are native SegWit and taproot"
+            } else {
+                "this network's accounts pay to a key's hash (BIP44): it has no SegWit"
+            }));
+        }
         let path = [kind.purpose() | HARDENED, network.coin_type() | HARDENED, HARDENED];
         let master_fingerprint = keys.fingerprint().map_err(Error::Keys)?;
         let public = keys.public(&path).map_err(Error::Keys)?;
@@ -142,11 +168,13 @@ impl<'k> Account<'k> {
         Ok(Key { path, public: self.keys.public(&path).map_err(Error::Keys)?.key })
     }
 
-    /// The output script a key of this account's pays to: P2WPKH, or P2TR with the key tweaked.
+    /// The output script a key of this account's pays to: P2WPKH, P2TR with the key tweaked, or
+    /// P2PKH.
     fn script_of(&self, key: &Key) -> Result<Vec<u8>, Error> {
         match self.kind {
             Kind::Segwit => Ok(p2wpkh_script(&key.public)),
             Kind::Taproot => Ok(p2tr_script(&self.keys.taproot_output(&key.path).map_err(Error::Keys)?)),
+            Kind::Legacy => Ok(p2pkh_script(&key.public)),
         }
     }
 
@@ -157,11 +185,11 @@ impl<'k> Account<'k> {
     }
 
     /// The account key as wallets take it: for native SegWit, a zpub (vpub on test networks), as
-    /// BIP84 wallets want it; taproot has no such form, so an xpub (tpub).
+    /// BIP84 wallets want it; taproot and pay-to-key-hash have no such form, so an xpub (tpub).
     pub fn zpub(&self) -> String {
         match self.kind {
             Kind::Segwit => self.xpub(self.network.zpub_version()),
-            Kind::Taproot => self.xpub(self.network.xpub_version()),
+            Kind::Taproot | Kind::Legacy => self.xpub(self.network.xpub_version()),
         }
     }
 
@@ -172,6 +200,7 @@ impl<'k> Account<'k> {
         let function = match self.kind {
             Kind::Segwit => "wpkh",
             Kind::Taproot => "tr",
+            Kind::Legacy => "pkh",
         };
         let body = format!(
             "{}([{}/{}h/{}h/0h]{}/<0;1>/*)",
@@ -195,9 +224,10 @@ impl<'k> Account<'k> {
         self.key_at(path[3] == 1, path[4]).ok()
     }
 
-    /// A native SegWit derivation (BIP174): ours if its key is the one we'd make.
+    /// A native SegWit or pay-to-key-hash derivation (BIP174): ours if its key is the one we'd
+    /// make.
     fn ours(&self, derivation: &[u8], public_key: &[u8]) -> Option<Key> {
-        if self.kind != Kind::Segwit {
+        if self.kind == Kind::Taproot {
             return None;
         }
         let (fp, path) = parse_derivation(derivation)?;
@@ -253,7 +283,8 @@ struct Spend {
     account: usize,
     spent: TxOut,
     kind: Kind,
-    /// taproot: 0 (the default) or 1 (SIGHASH_ALL, written out); native SegWit: always 1
+    /// taproot: 0 (the default) or 1 (SIGHASH_ALL, written out); native SegWit and Dogecoin's
+    /// pay-to-key-hash: always 1; Bitcoin Cash's: always SIGHASH_ALL | SIGHASH_FORKID
     hash_type: u8,
 }
 
@@ -352,10 +383,18 @@ fn spends(psbt: &Psbt, accounts: &[Account]) -> Result<Vec<Spend>, Error> {
             }
             Spend { key, account, spent, kind: Kind::Taproot, hash_type }
         } else {
-            // the whole previous transaction: amounts are never taken on the PSBT's word
+            // the whole previous transaction: amounts are never taken on the PSBT's word (a
+            // signature that commits to its own input's amount alone, as BIP143's and Bitcoin
+            // Cash's do, still lets two transactions that each lie about another input's add up
+            // to a fee nobody saw)
             let spent = from_prev.ok_or(Error::NoPreviousTx(i))?;
-            if sighash.is_some_and(|t| t != [1, 0, 0, 0]) {
+            let network = accounts.first().ok_or(Error::Key)?.network;
+            let hash_type = if network.is_bitcoin_cash() { SIGHASH_ALL_FORKID } else { 1 };
+            if sighash.is_some_and(|t| t != [hash_type, 0, 0, 0]) {
                 return Err(Error::Sighash(i));
+            }
+            if spent.script_pubkey.first() == Some(&PREFIX_TOKEN) {
+                return Err(Error::Unsupported("a coin carrying CashTokens, which maki can't show"));
             }
             let (account, key) = pairs
                 .iter()
@@ -367,10 +406,10 @@ fn spends(psbt: &Psbt, accounts: &[Account]) -> Result<Vec<Spend>, Error> {
                         .find_map(|(n, a)| a.ours(&p.value, &p.key[1..]).map(|k| (n, k)))
                 })
                 .ok_or(Error::NotOurs(i))?;
-            if p2wpkh_script(&key.public) != spent.script_pubkey {
+            if accounts[account].script_of(&key)? != spent.script_pubkey {
                 return Err(Error::NotOurs(i));
             }
-            Spend { key, account, spent, kind: Kind::Segwit, hash_type: 1 }
+            Spend { key, account, spent, kind: accounts[account].kind, hash_type }
         };
         out.push(spend);
     }
@@ -407,6 +446,12 @@ fn check(psbt: &Psbt, accounts: &[Account]) -> Result<(Review, Vec<Spend>), Erro
         return Err(Error::Psbt("a transaction needs inputs and outputs"));
     }
     let network = accounts.first().ok_or(Error::Key)?.network;
+    if accounts.iter().any(|a| a.network != network) {
+        return Err(Error::Key);
+    }
+    if psbt.tx.outputs.iter().any(|o| o.script_pubkey.first() == Some(&PREFIX_TOKEN)) {
+        return Err(Error::Unsupported("an output carrying CashTokens, which maki can't show"));
+    }
     let spends = spends(psbt, accounts)?;
     let total_in = total(network, spends.iter().map(|s| s.spent.value))?;
     let total_out = total(network, psbt.tx.outputs.iter().map(|o| o.value))?;
@@ -423,15 +468,19 @@ fn check(psbt: &Psbt, accounts: &[Account]) -> Result<(Review, Vec<Spend>), Erro
         .collect();
     // signed size: the transaction, plus marker, flag and a witness per input: P2WPKH's (the
     // largest a low-S signature makes it), or a taproot key's signature (a byte more for an
-    // explicit SIGHASH_ALL)
+    // explicit SIGHASH_ALL); a pay-to-key-hash input's signature and key are in its script, which
+    // counts in full
     let witnesses: u64 = spends
         .iter()
         .map(|s| match s.kind {
             Kind::Segwit => 1 + 1 + 72 + 1 + 33,
-            Kind::Taproot => 1 + 1 + 64 + s.hash_type as u64,
+            Kind::Taproot => 1 + 1 + 64 + (s.hash_type != 0) as u64,
+            Kind::Legacy => 0,
         })
         .sum();
-    let weight = psbt.tx.serialize().len() as u64 * 4 + 2 + witnesses;
+    let scripts: u64 = spends.iter().filter(|s| s.kind == Kind::Legacy).map(|_| 1 + 72 + 1 + 33).sum();
+    let marker = if witnesses > 0 { 2 } else { 0 };
+    let weight = (psbt.tx.serialize().len() as u64 + scripts) * 4 + marker + witnesses;
     let review =
         Review { network, wallet: None, outputs, fee, vbytes: weight.div_ceil(4), inputs: spends.len() };
     Ok((review, spends))
@@ -474,16 +523,43 @@ fn taproot_sighash(tx: &Tx, i: usize, spent: &[TxOut], hash_type: u8) -> [u8; 32
 
 /// BIP143: the digest a P2WPKH input signs, SIGHASH_ALL.
 fn sighash(tx: &Tx, i: usize, public_key: &[u8; 33], amount: u64) -> [u8; 32] {
-    let mut script_code = Vec::with_capacity(25);
-    script_code.extend_from_slice(&[0x76, 0xa9, 0x14]);
-    script_code.extend_from_slice(&hash160(public_key));
-    script_code.extend_from_slice(&[0x88, 0xac]);
-    segwit_sighash(tx, i, &script_code, amount)
+    segwit_sighash(tx, i, &p2pkh_script(public_key), amount)
 }
 
 /// BIP143's digest, SIGHASH_ALL, for an input whose script code is `script_code`: P2WPKH's
 /// pay-to-key-hash, or a P2WSH input's witness script.
 pub(crate) fn segwit_sighash(tx: &Tx, i: usize, script_code: &[u8], amount: u64) -> [u8; 32] {
+    bip143_sighash(tx, i, script_code, amount, 1)
+}
+
+/// The digest a pay-to-key-hash input signs before SegWit (Dogecoin's), SIGHASH_ALL: the
+/// transaction with that input's script the output it spends and every other input's empty, then
+/// the hash type. It commits to no amount, which is why maki reads amounts from the transactions
+/// spent.
+fn legacy_sighash(tx: &Tx, i: usize, script_code: &[u8]) -> [u8; 32] {
+    let mut pre = Vec::with_capacity(tx.serialize().len() + script_code.len() + 4);
+    pre.extend_from_slice(&(tx.version as u32).to_le_bytes());
+    write_varint(&mut pre, tx.inputs.len() as u64);
+    for (j, input) in tx.inputs.iter().enumerate() {
+        pre.extend_from_slice(&input.prev_txid);
+        pre.extend_from_slice(&input.prev_vout.to_le_bytes());
+        let script: &[u8] = if j == i { script_code } else { &[] };
+        write_varint(&mut pre, script.len() as u64);
+        pre.extend_from_slice(script);
+        pre.extend_from_slice(&input.sequence.to_le_bytes());
+    }
+    write_varint(&mut pre, tx.outputs.len() as u64);
+    for o in &tx.outputs {
+        o.write(&mut pre);
+    }
+    pre.extend_from_slice(&tx.lock_time.to_le_bytes());
+    pre.extend_from_slice(&1u32.to_le_bytes());
+    sha256d(&pre)
+}
+
+/// BIP143's digest with the hash type `hash_type`: SegWit's (SIGHASH_ALL), or Bitcoin Cash's,
+/// which every input signs with SIGHASH_ALL | SIGHASH_FORKID (its fork ID zero).
+fn bip143_sighash(tx: &Tx, i: usize, script_code: &[u8], amount: u64, hash_type: u32) -> [u8; 32] {
     let mut prevouts = Vec::new();
     let mut sequences = Vec::new();
     for input in &tx.inputs {
@@ -508,7 +584,7 @@ pub(crate) fn segwit_sighash(tx: &Tx, i: usize, script_code: &[u8], amount: u64)
     pre.extend_from_slice(&input.sequence.to_le_bytes());
     pre.extend_from_slice(&sha256d(&outputs));
     pre.extend_from_slice(&tx.lock_time.to_le_bytes());
-    pre.extend_from_slice(&1u32.to_le_bytes());
+    pre.extend_from_slice(&hash_type.to_le_bytes());
     sha256d(&pre)
 }
 
@@ -544,21 +620,29 @@ pub fn signatures(psbt: &Psbt, accounts: &[Account]) -> Result<usize, Error> {
 }
 
 /// Sign every input (all are this wallet's; `review` has checked), and return how many it
-/// signed. A native SegWit input gets a partial signature, deterministic (RFC 6979) and low-S; a
-/// taproot one its key's Schnorr signature (BIP340), tweaked for the output key. The keys make
-/// the signatures, and maki checks each one before it goes out: a signature a fault spoiled can
-/// give the key away.
+/// signed. A native SegWit or pay-to-key-hash input gets a partial signature, deterministic (RFC
+/// 6979) and low-S (Dogecoin's over the old digest, Bitcoin Cash's over BIP143's with its fork
+/// ID); a taproot one its key's Schnorr signature (BIP340), tweaked for the output key. The keys
+/// make the signatures, and maki checks each one before it goes out: a signature a fault spoiled
+/// can give the key away.
 pub fn sign(psbt: &mut Psbt, accounts: &[Account]) -> Result<usize, Error> {
     let (_, spends) = check(psbt, accounts)?;
     let spent: Vec<TxOut> = spends.iter().map(|s| s.spent.clone()).collect();
     for (i, s) in spends.iter().enumerate() {
         let keys = accounts[s.account].keys;
         match s.kind {
-            Kind::Segwit => {
-                let digest = sighash(&psbt.tx, i, &s.key.public, s.spent.value);
+            Kind::Segwit | Kind::Legacy => {
+                let script_code = p2pkh_script(&s.key.public);
+                let digest = match s.kind {
+                    Kind::Segwit => sighash(&psbt.tx, i, &s.key.public, s.spent.value),
+                    _ if s.hash_type == SIGHASH_ALL_FORKID => {
+                        bip143_sighash(&psbt.tx, i, &script_code, s.spent.value, SIGHASH_ALL_FORKID as u32)
+                    }
+                    _ => legacy_sighash(&psbt.tx, i, &script_code),
+                };
                 let (sig, _) = keys.sign_ecdsa(&s.key.path, &digest).map_err(Error::Keys)?;
                 let mut value = der(&sig);
-                value.push(0x01); // SIGHASH_ALL
+                value.push(s.hash_type); // SIGHASH_ALL, with Bitcoin Cash's fork ID there
                 let mut key = Vec::with_capacity(34);
                 key.push(psbt::IN_PARTIAL_SIG);
                 key.extend_from_slice(&s.key.public);

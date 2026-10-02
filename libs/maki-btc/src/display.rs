@@ -26,6 +26,10 @@ pub fn unit(network: Network) -> &'static str {
         Network::Testnet => "tBTC",
         Network::Litecoin => "LTC",
         Network::LitecoinTest => "tLTC",
+        Network::Dogecoin => "DOGE",
+        Network::DogecoinTest => "tDOGE",
+        Network::BitcoinCash => "BCH",
+        Network::BitcoinCashTest => "tBCH",
     }
 }
 
@@ -36,6 +40,10 @@ pub fn network_name(network: Network) -> &'static str {
         Network::Testnet => "testnet",
         Network::Litecoin => "litecoin",
         Network::LitecoinTest => "litecoin testnet",
+        Network::Dogecoin => "dogecoin",
+        Network::DogecoinTest => "dogecoin testnet",
+        Network::BitcoinCash => "bitcoin cash",
+        Network::BitcoinCashTest => "bitcoin cash testnet",
     }
 }
 

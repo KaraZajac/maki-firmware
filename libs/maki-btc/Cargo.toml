@@ -19,3 +19,5 @@ maki-hd = { path = "../maki-hd", features = ["seed"] }
 maki-seed = { path = "../maki-seed" }
 bitcoin = { version = "0.32", features = ["bitcoinconsensus"] }
 miniscript = "12"
+# Dogecoin's and Bitcoin Cash's fixtures (tests/fixtures/forks.json)
+serde_json = "1"
