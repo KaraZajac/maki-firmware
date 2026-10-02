@@ -65,6 +65,9 @@ the `maki` tool that packs, signs, checks and simulates them. The examples:
 - **Name Tag**: your name as big as it fits (host API 9's `text_scaled`), on as many lines as
   that takes, with a line under it and a link of yours as a QR code people can scan, all read
   from a QR code you make.
+- **Show QR**: what maki desktop sends, as a QR code for a phone to scan (a link, a Wi-Fi network,
+  an address, a short text), and the text itself a press away; the last five kept. Any text: maki
+  writes it as its bytes.
 - **Instruments**: the accelerometer as a racing g-meter (a ball in a ring, its trail and peaks,
   calibrated by keeping still and pulling away), a pilot's horizon and slip ball, and a spirit
   level to a tenth of a degree (host API 8's `motion::range` for rides; std for its angles).
@@ -80,6 +83,10 @@ the `maki` tool that packs, signs, checks and simulates them. The examples:
   command line (quoted as a shell would take it back), what it's given to run with beyond what
   every command gets, and who asked where, then signs the request with its key (the keys
   permission), which the plugin checks against the key root keeps.
+- **Confirm**: Sudo's yes for any script: maki desktop's `maki-confirm` asks it whether a deploy,
+  a `terraform apply` or a force push goes ahead, with the question, more about it and who asked
+  where, and a yes is signed with its key over the caller's fresh nonce and everything shown, so a
+  script that keeps the key knows it was the owner, on maki.
 - **Tamper Log**: left on a closed laptop, its screen dark (host API 8's `screen::dark`), it logs
   every time maki's moved and every press, until the owner's code, pressed on the dark screen,
   shows what happened: undisturbed, moved, or interrupted.

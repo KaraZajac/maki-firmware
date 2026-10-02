@@ -1,0 +1,15 @@
+id = "com.leviathan.maki.confirm"
+name = "Confirm"
+version = 1
+label = "1.0"
+api = 7
+storage = 1
+memory = 64
+backup = false
+description = "Scripts and programs on your computer ask here before they go ahead: a deploy, terraform apply, a force push. maki shows the question whole, with who asked where, and signs your yes with a key from your recovery phrase, so a script that keeps the key knows it was you, on maki."
+icon = "icon.pbm"
+
+[permissions]
+ask = "To show you what each script asks, and who asked where, and ask you."
+keys = "For the key your yes is signed with, from your recovery phrase, which scripts check it with."
+link = "To hear from maki desktop's maki-confirm, which asks it for scripts and programs."

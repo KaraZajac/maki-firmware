@@ -1,0 +1,13 @@
+id = "com.leviathan.maki.showqr"
+name = "Show QR"
+version = 1
+label = "1.0"
+api = 8
+storage = 4
+memory = 64
+backup = false
+description = "What your computer sends, on maki's screen as a QR code for a phone to scan: a link, a Wi-Fi network, an address, a short text. The centre shows the text; it keeps the last five. It shows the computer's word: for an address to be paid at, use the wallet's own app on maki."
+icon = "icon.pbm"
+
+[permissions]
+link = "So maki desktop, or software through it, can send it things to show and ask what it's showing."
