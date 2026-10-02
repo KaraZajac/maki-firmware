@@ -536,6 +536,18 @@ impl Sim {
         }
         s.seed.unwrap()
     }
+
+    /// The BIP-85 password at `path`, from the test phrase.
+    fn password(&self, path: &[u32]) -> Result<String, i32> {
+        let seed = self.test_seed();
+        let keys = maki_hd::seed::SeedKeys::from_seed(&seed).map_err(|_| maki_wasm::FAILED)?;
+        let password = maki_hd::seed::answer(&keys, maki_hd::op::BIP85_PASSWORD, path, &[], &[0; 32])
+            .map_err(|e| match e {
+                maki_hd::Error::Path => maki_wasm::REFUSED,
+                _ => maki_wasm::FAILED,
+            })?;
+        String::from_utf8(password).map_err(|_| maki_wasm::FAILED)
+    }
 }
 
 impl Platform for Sim {
@@ -733,6 +745,48 @@ impl Platform for Sim {
             eprintln!("  maki shows its owner the backup words (never the app): {words}");
         }
         s.logs.push(format!("backup words shown: {n}"));
+        Ok(Answer::Yes)
+    }
+
+    /// A BIP-85 password from the test phrase, typed as `type_text` types: in the log, as
+    /// `typed password: "…"` (it's the test phrase's: nobody's real password).
+    fn type_password(&mut self, path: &[u32]) -> Result<bool, i32> {
+        let password = self.password(path)?;
+        let mut s = self.0.borrow_mut();
+        s.dark = false;
+        let line = format!("typed password: {password:?}");
+        if !s.interactive {
+            eprintln!("{line}");
+        }
+        s.logs.push(line);
+        Ok(true)
+    }
+
+    /// A BIP-85 password from the test phrase on maki's review screen, as maki shows it: the
+    /// app's name for it, then the password in fixed-width type, until it's closed.
+    fn show_password(&mut self, path: &[u32], label: &str) -> Result<Answer, i32> {
+        let password = self.password(path)?;
+        let (_, len, index) = maki_hd::bip85_password(path).ok_or(maki_wasm::INVALID)?;
+        let shown = Review {
+            question: "Done with it?".into(),
+            detail: label.into(),
+            yes: "done".into(),
+            no: "close".into(),
+            pages: vec![maki_wasm::Page {
+                heading: if label.is_empty() { "Password".into() } else { label.into() },
+                mono: password.clone(),
+                prose: format!("{len} characters, number {index}"),
+                ..Default::default()
+            }],
+            timeout_s: 300,
+        };
+        let mut s = self.0.borrow_mut();
+        if s.interactive {
+            Self::interactive_review(&mut s, &shown);
+        } else {
+            eprintln!("  maki shows its owner a password (never the app): {password}");
+        }
+        s.logs.push(format!("password shown: {label}"));
         Ok(Answer::Yes)
     }
 

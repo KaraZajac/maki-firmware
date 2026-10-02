@@ -1,0 +1,13 @@
+[package]
+name = "passwords"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+# std, for an allocator: the wallet functions need one, and the list of entries
+maki-app = { path = "../../maki-app", default-features = false, features = ["std", "wallet"] }

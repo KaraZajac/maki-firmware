@@ -411,3 +411,85 @@ fn bip85_child_seeds_from_the_phrase_and_nowhere_else() {
     assert_eq!(maki_hd::words_op(&parse_path("m/44'/128'/0'/0/0").unwrap()), op::MONERO_WORDS);
     assert_eq!(maki_hd::coin(&parse_path("m/83696968'/39'/0'").unwrap()), Some("child seeds"));
 }
+
+/// BIP-85's password vectors (bitcoin/bips, bip-0085.mediawiki): base64 (707764') and base85
+/// (707785') from its master key, the entropy and the password each path makes.
+#[test]
+fn bip85_passwords_as_the_bip_has_them() {
+    use std::str::FromStr;
+
+    use maki_hd::{Bip85Password, bip85_password, seed::bip85_password_text};
+    let secp = Secp256k1::new();
+    let master = Xpriv::from_str(
+        "xprv9s21ZrQH143K2LBWUUQRFXhucrQqBpKdRRxNVq2zBqsx8HVqFk2uYo8kmbaLLHRdqtQpUm98uKfu3vca1LqdGhUtyoFnCNkfmXRyPXLjbKb",
+    )
+    .unwrap();
+    for (path, entropy, password, kind) in [
+        (
+            "m/83696968'/707764'/21'/0'",
+            "74a2e87a9ba0cdd549bdd2f9ea880d554c6c355b08ed25088cfa88f3f1c4f74632b652fd4a8f5fda43074c6f6964a3753b08bb5210c8f5e75c07a4c2a20bf6e9",
+            "dKLoepugzdVJvdL56ogNV",
+            Bip85Password::Base64,
+        ),
+        (
+            "m/83696968'/707785'/12'/0'",
+            "f7cfe56f63dca2490f65fcbf9ee63dcd85d18f751b6b5e1c1b8733af6459c904a75e82b4a22efff9b9e69de2144b293aa8714319a054b6cb55826a8e51425209",
+            "_s`{TW89)i4`",
+            Bip85Password::Base85,
+        ),
+    ] {
+        let k = master
+            .derive_priv(&secp, &path.parse::<DerivationPath>().unwrap())
+            .unwrap()
+            .private_key
+            .secret_bytes();
+        let made = maki_hd::seed::bip85_entropy(&k);
+        assert_eq!(hex(&made), entropy, "{path}");
+        let (kind_read, len, index) = bip85_password(&parse_path(path).unwrap()).unwrap();
+        assert_eq!((kind_read, index), (kind, 0));
+        assert_eq!(bip85_password_text(kind, &made, len as usize), password, "{path}");
+    }
+}
+
+#[test]
+fn bip85_passwords_from_the_phrase_and_nowhere_else() {
+    use maki_hd::{Bip85Password, op, seed::answer, seed::bip85_password_text};
+    let ours = SeedKeys::from_seed(&seed()).unwrap();
+    for (path, kind, len) in [
+        ("m/83696968'/707764'/20'/0'", Bip85Password::Base64, 20),
+        ("m/83696968'/707764'/86'/3'", Bip85Password::Base64, 86),
+        ("m/83696968'/707785'/10'/0'", Bip85Password::Base85, 10),
+        ("m/83696968'/707785'/80'/2147483647'", Bip85Password::Base85, 80),
+    ] {
+        let k = theirs(path).private_key.secret_bytes();
+        let want = bip85_password_text(kind, &maki_hd::seed::bip85_entropy(&k), len);
+        let made = String::from_utf8(
+            answer(&ours, op::BIP85_PASSWORD, &parse_path(path).unwrap(), &[], &[0; 32]).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(made, want, "{path}");
+        assert_eq!(made.len(), len, "{path}");
+        // printable ASCII only; base64's never reaches its padding ('=' is one of base85's digits)
+        assert!(made.bytes().all(|b| (0x21..0x7f).contains(&b)), "{path}: {made}");
+        assert!(kind == Bip85Password::Base85 || !made.contains('='), "{path}: {made}");
+    }
+    // every other path is refused: too short or long for its encoding, another application, a
+    // step not hardened, a level missing
+    for path in [
+        "m/83696968'/707764'/19'/0'",
+        "m/83696968'/707764'/87'/0'",
+        "m/83696968'/707785'/9'/0'",
+        "m/83696968'/707785'/81'/0'",
+        "m/83696968'/707765'/20'/0'",
+        "m/83696968'/707764'/20'/0",
+        "m/83696968'/707764'/20'",
+        "m/83696968'/39'/0'/12'/0'",
+    ] {
+        let p = parse_path(path).unwrap();
+        assert_eq!(maki_hd::bip85_password(&p), None, "{path}");
+        assert!(answer(&ours, op::BIP85_PASSWORD, &p, &[], &[0; 32]).is_err(), "{path}");
+    }
+    // and the install screen names them
+    assert_eq!(maki_hd::coin(&parse_path("m/83696968'/707785'").unwrap()), Some("passwords"));
+    assert_eq!(maki_hd::coin(&parse_path("m/83696968'/39'/0'").unwrap()), Some("child seeds"));
+}

@@ -29,8 +29,9 @@ const MAX_TABLE_ELEMENTS: usize = 10_000;
 
 /// The functions this host offers apps. 10 adds `key_chord`: a key pressed with Ctrl, Alt or the
 /// Command/Windows key held, not Shift alone (the keyboard permission). 11 adds Cardano's keys:
-/// BIP32-Ed25519 wallets (`WALLET_CARDANO`, `wallet_sign_cardano`).
-pub const API_VERSION: u16 = 11;
+/// BIP32-Ed25519 wallets (`WALLET_CARDANO`, `wallet_sign_cardano`). 12 adds BIP-85's passwords,
+/// which maki types or shows itself (`wallet_type_password`, `wallet_show_password`).
+pub const API_VERSION: u16 = 12;
 
 /// Host API 11: a wallet on BIP32-Ed25519 (Cardano's, `Curve::Bip32Ed25519`) says this API or
 /// later, so an older maki refuses it for its API, with a reason, before its curve.
@@ -74,6 +75,8 @@ pub const SINCE: &[(&str, u16)] = &[
     ("text_scaled", 9),
     ("key_chord", 10),
     ("wallet_sign_cardano", 11),
+    ("wallet_type_password", 12),
+    ("wallet_show_password", 12),
 ];
 
 /// Keys an app may press beyond text (`key_press`, the keyboard permission), as USB HID usage IDs:
@@ -130,6 +133,9 @@ pub const MAX_LABEL: usize = 32;
 pub const MAX_SIGN: usize = 16 * 1024;
 /// The most an app types at once.
 pub const MAX_TYPE: usize = 1024;
+/// A password's label on maki's screen (`wallet_show_password`): the app's name for it, the
+/// page's heading, as long as a review's.
+pub const MAX_PASSWORD_LABEL: usize = MAX_HEADING;
 /// The biggest message to or from an app over the link.
 pub const MAX_MESSAGE: usize = 4096;
 /// An ask's question, detail and answer labels, in bytes.
@@ -216,6 +222,10 @@ pub const GATED: &[(&str, Permission)] = &[
     ("wallet_monero_sign", Permission::Wallet),
     ("wallet_sign_ed25519", Permission::Wallet),
     ("wallet_sign_cardano", Permission::Wallet),
+    // a password maki types needs both: the wallet's paths, and the keyboard to type with
+    ("wallet_type_password", Permission::Wallet),
+    ("wallet_type_password", Permission::Keyboard),
+    ("wallet_show_password", Permission::Wallet),
 ];
 
 /// What `wait` hands the app.
@@ -385,6 +395,17 @@ pub trait Platform {
     /// the app, which hears only whether they were shown. The session has held the path to the
     /// app's own. `LOCKED` while maki is; `NOT_FOUND` for an account without words of its own.
     fn show_backup(&mut self, _path: &[u32]) -> Result<Answer, i32> { Err(FAILED) }
+    /// Types the BIP-85 password at `path` (host API 12) into the computer, as `type_text` types:
+    /// maki makes it from the phrase and types it itself, so it never reaches the app. The session
+    /// has held the path to a password's of the app's own, and the owner has said yes. Whether it
+    /// typed (only for the app in front, and only when plugged into a computer); `LOCKED` while
+    /// maki is.
+    fn type_password(&mut self, _path: &[u32]) -> Result<bool, i32> { Err(FAILED) }
+    /// Shows the BIP-85 password at `path` on maki's own screen (host API 12), headed with
+    /// `label` (the app's name for it), until the owner closes it: for typing it somewhere maki
+    /// can't. As `type_password`, the password never reaches the app, which hears only whether it
+    /// was shown (`Answer::Yes`) or the screen timed out (`Answer::NoAnswer`).
+    fn show_password(&mut self, _path: &[u32], _label: &str) -> Result<Answer, i32> { Err(FAILED) }
 }
 
 /// Permissions an app has: those its manifest asks for (each of which maki offers).
@@ -1271,6 +1292,33 @@ fn link(linker: &mut Linker<State>) -> Result<(), Error> {
     )?;
     linker.func_wrap(
         M,
+        "wallet_type_password",
+        |mut c: Caller<'_, State>, pptr: i32, plen: i32| -> Result<i32, Error> {
+            permitted(&c, Permission::Wallet, "wallet_type_password")?;
+            permitted(&c, Permission::Keyboard, "wallet_type_password")?;
+            let Some(path) = read_path(&c, pptr, plen, "wallet_type_password")? else { return Ok(INVALID) };
+            Ok(c.data_mut().session.wallet_type_password(&path))
+        },
+    )?;
+    linker.func_wrap(
+        M,
+        "wallet_show_password",
+        |mut c: Caller<'_, State>, pptr: i32, plen: i32, lptr: i32, llen: i32| -> Result<i32, Error> {
+            permitted(&c, Permission::Wallet, "wallet_show_password")?;
+            let Some(path) = read_path(&c, pptr, plen, "wallet_show_password")? else { return Ok(INVALID) };
+            if llen as u32 as usize > MAX_PASSWORD_LABEL {
+                return Ok(TOO_BIG);
+            }
+            let label = read_str(&c, lptr, llen, MAX_PASSWORD_LABEL, "wallet_show_password")?;
+            let shown = c.data_mut().session.wallet_show_password(&path, &label);
+            // the owner's time isn't the app's work
+            let fuel = c.data().session.limits.fuel;
+            c.set_fuel(fuel)?;
+            Ok(shown)
+        },
+    )?;
+    linker.func_wrap(
+        M,
         "type_text",
         |mut c: Caller<'_, State>, ptr: i32, len: i32| -> Result<i32, Error> {
             permitted(&c, Permission::Keyboard, "type_text")?;
@@ -1425,7 +1473,7 @@ fn compile(code: &[u8], limits: Limits, mode: CompilationMode) -> Result<Loaded,
         if import.module() != "maki" {
             return Err(format!("uses {}.{}, which maki doesn't have", import.module(), import.name()));
         }
-        if let Some((name, p)) = GATED.iter().find(|(name, _)| *name == import.name()) {
+        for (name, p) in GATED.iter().filter(|(name, _)| *name == import.name()) {
             if !limits.granted.has(*p) {
                 return Err(format!(
                     "uses maki.{name}, which needs the {} permission, and its manifest doesn't ask for it",

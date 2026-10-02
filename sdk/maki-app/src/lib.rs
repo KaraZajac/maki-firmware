@@ -121,6 +121,10 @@ mod sys {
         #[cfg(feature = "wallet")]
         pub fn wallet_show_backup(pptr: *const u32, plen: usize) -> i32;
         #[cfg(feature = "wallet")]
+        pub fn wallet_type_password(pptr: *const u32, plen: usize) -> i32;
+        #[cfg(feature = "wallet")]
+        pub fn wallet_show_password(pptr: *const u32, plen: usize, lptr: *const u8, llen: usize) -> i32;
+        #[cfg(feature = "wallet")]
         pub fn wallet_monero_view_key(pptr: *const u32, plen: usize, out: *mut u8) -> i32;
         #[cfg(feature = "wallet")]
         pub fn wallet_monero_key_image(pptr: *const u32, plen: usize, optr: *const u8, out: *mut u8) -> i32;
@@ -1095,6 +1099,28 @@ pub mod wallet {
         })
     }
 
+    /// Has maki type a BIP-85 password into the computer (host API 12; the keyboard permission
+    /// too), as `keyboard::type_text` types: the one at `path`,
+    /// `m/83696968'/707764'/{length}'/{index}'` (base64, 20 to 86 characters) or
+    /// `m/83696968'/707785'/{length}'/{index}'` (base85, 10 to 80), which maki makes from the
+    /// phrase as BIP-85 says, so any BIP-85 tool makes the same from it. maki types it itself:
+    /// it never reaches the app. It takes one of what the owner's last yes to a review allows: ask
+    /// first. `Error::Failed` if maki couldn't type (the app isn't in front, or maki isn't
+    /// plugged into a computer).
+    pub fn type_password(path: &[u32]) -> Result<(), Error> {
+        result(unsafe { sys::wallet_type_password(path.as_ptr(), path.len()) }).map(|_| ())
+    }
+
+    /// Has maki show its owner a BIP-85 password (host API 12) on its own screen, under `label`
+    /// (the app's name for it: up to 32 bytes, no control characters), until they close it: for
+    /// typing it somewhere maki can't. The paths are `type_password`'s, and so is the rest: it
+    /// never reaches the app, and it takes one of what the owner's last yes allows.
+    /// `Answer::Yes` once shown, `Answer::NoAnswer` if the screen timed out.
+    pub fn show_password(path: &[u32], label: &str) -> Result<Answer, Error> {
+        result(unsafe { sys::wallet_show_password(path.as_ptr(), path.len(), label.as_ptr(), label.len()) })
+            .map(|a| if a == 0 { Answer::Yes } else { Answer::NoAnswer })
+    }
+
     /// A Monero account's secret view key (host API 5), for the account at `path`: what a computer
     /// finds the account's outputs with, and can't spend them. It takes one of what the owner's
     /// last yes to a review allows: ask first.
@@ -1279,7 +1305,8 @@ pub mod wallet {
             self
         }
 
-        /// How many signatures a yes allows (1 if not given).
+        /// How many signatures a yes allows (1 if not given): or passwords maki types or shows
+        /// (host API 12), or Monero view keys; 0 for a review that allows none.
         pub fn signatures(self, signatures: u32) -> Review { Review { signatures, ..self } }
 
         /// How long the owner has, 5 to 300 seconds (120 if not given).

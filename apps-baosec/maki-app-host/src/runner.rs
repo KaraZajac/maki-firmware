@@ -903,6 +903,63 @@ impl Platform for Device {
         }
     }
 
+    /// A BIP-85 password, made by maki-keys and typed as `type_text` types (for the app in front,
+    /// "typing" in maki's bar), then forgotten: the app never has it, and nothing says it in the
+    /// log.
+    fn type_password(&mut self, path: &[u32]) -> Result<bool, i32> {
+        use zeroize::Zeroize;
+        let mut password = self.wallet(maki_keys::WALLET_BIP85_PASSWORD, path, &[])?;
+        if !self.state.borrow().front {
+            password.zeroize();
+            return Ok(false);
+        }
+        {
+            let mut st = self.state.borrow_mut();
+            st.typing = true;
+            st.dark = false;
+        }
+        self.draw_frame();
+        // ASCII, as BIP-85 writes it: nothing to lose
+        let text = core::str::from_utf8(&password).unwrap_or_default();
+        let typed = matches!(self.ctx.usb.send_str(text), Ok(n) if n == text.len());
+        password.zeroize();
+        log::info!("{}: typed a password: {}", self.id, if typed { "done" } else { "not plugged in" });
+        self.state.borrow_mut().typing = false;
+        self.draw_frame();
+        Ok(typed)
+    }
+
+    /// A BIP-85 password on maki's own review screen, under the app's bar and the app's name for
+    /// it, in fixed-width type, until the owner closes it: forgotten then, and nothing says it in
+    /// the log.
+    fn show_password(&mut self, path: &[u32], label: &str) -> Result<maki_wasm::Answer, i32> {
+        use zeroize::Zeroize;
+        let (_, len, index) = maki_hd::bip85_password(path).ok_or(maki_wasm::INVALID)?;
+        let mut password = self.wallet(maki_keys::WALLET_BIP85_PASSWORD, path, &[])?;
+        let page = maki_launcher::Page {
+            heading: if label.is_empty() { "Password".into() } else { label.into() },
+            value: String::new(),
+            mono: String::from_utf8_lossy(&password).into_owned(),
+            prose: format!("{len} characters, number {index}"),
+        };
+        password.zeroize();
+        log::info!("{}: showing a password", self.id);
+        let shown = self.ctx.launcher.review_app(
+            &self.name,
+            self.sideloaded,
+            "Done with it?",
+            label,
+            vec![page],
+            "done",
+            "close",
+            maki_launcher::ask_timeout(300),
+        );
+        match shown {
+            Ok(Answer::Allowed(_) | Answer::Denied) => Ok(maki_wasm::Answer::Yes),
+            _ => Ok(maki_wasm::Answer::NoAnswer),
+        }
+    }
+
     /// maki's own scanner, for the app in front: the camera's view takes the screen until a QR
     /// code is read or the owner presses a button.
     fn scan_qr(&mut self) -> Option<String> {

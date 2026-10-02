@@ -476,6 +476,61 @@ impl Session {
         self.platform.wallet(maki_hd::op::CARDANO_SIGN, path, message)?.try_into().map_err(|_| FAILED)
     }
 
+    /// The wallet and keyboard permissions (host API 12): maki types the BIP-85 password at
+    /// `path` (one of its own, and a password's: `maki_hd::bip85_password`) into the computer, as
+    /// `type_text` types, if the owner's last yes to a review allows one more. maki makes it from
+    /// the phrase and types it itself: it never reaches the app. 0 typed; `FAILED` if it couldn't
+    /// (the app isn't in front, or maki isn't plugged into a computer).
+    pub fn wallet_type_password(&mut self, path: &[u32]) -> i32 {
+        if let Err(e) = self.needs(Permission::Wallet).and_then(|_| self.needs(Permission::Keyboard)) {
+            return e;
+        }
+        if let Err(e) = self.wallet_path(path, Curve::Secp256k1) {
+            return e;
+        }
+        if maki_hd::bip85_password(path).is_none() {
+            return INVALID;
+        }
+        if let Err(e) = self.allowed(1) {
+            return e;
+        }
+        match self.platform.type_password(path) {
+            Ok(true) => 0,
+            Ok(false) => FAILED,
+            Err(e) => e,
+        }
+    }
+
+    /// The wallet permission (host API 12): maki shows the BIP-85 password at `path` (one of its
+    /// own, and a password's) on its own screen, under `label` (the app's name for it, up to
+    /// `MAX_PASSWORD_LABEL` bytes, no control characters), if the owner's last yes to a review
+    /// allows one more: for typing it where maki can't. It never reaches the app. 0 shown, 2 no
+    /// answer (the screen timed out).
+    pub fn wallet_show_password(&mut self, path: &[u32], label: &str) -> i32 {
+        if let Err(e) = self.needs(Permission::Wallet) {
+            return e;
+        }
+        if label.len() > MAX_PASSWORD_LABEL {
+            return TOO_BIG;
+        }
+        if label.chars().any(char::is_control) {
+            return INVALID;
+        }
+        if let Err(e) = self.wallet_path(path, Curve::Secp256k1) {
+            return e;
+        }
+        if maki_hd::bip85_password(path).is_none() {
+            return INVALID;
+        }
+        if let Err(e) = self.allowed(1) {
+            return e;
+        }
+        match self.platform.show_password(path, label) {
+            Ok(answer) => answer.code(),
+            Err(e) => e,
+        }
+    }
+
     /// The keyboard permission: printable ASCII, newlines and tabs.
     pub fn type_text(&mut self, text: &str) -> i32 {
         if let Err(e) = self.needs(Permission::Keyboard) {

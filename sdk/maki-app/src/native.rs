@@ -428,6 +428,24 @@ mod wallet_calls {
         request(service::WALLET_SHOW_BACKUP, &path, 0).0
     }
 
+    pub unsafe fn wallet_type_password(pptr: *const u32, plen: usize) -> i32 {
+        let Some(path) = path_bytes(pptr, plen) else { return INVALID };
+        request(service::WALLET_TYPE_PASSWORD, &path, 0).0
+    }
+
+    pub unsafe fn wallet_show_password(pptr: *const u32, plen: usize, lptr: *const u8, llen: usize) -> i32 {
+        let Some(path) = path_bytes(pptr, plen) else { return INVALID };
+        // the label's length in a byte: longer than maki takes is refused before it's sent
+        if llen > 255 {
+            return -4;
+        }
+        let mut payload = Vec::with_capacity(1 + llen + path.len());
+        payload.push(llen as u8);
+        payload.extend_from_slice(slice(lptr, llen));
+        payload.extend_from_slice(&path);
+        request(service::WALLET_SHOW_PASSWORD, &payload, 0).0
+    }
+
     pub unsafe fn wallet_monero_view_key(pptr: *const u32, plen: usize, out: *mut u8) -> i32 {
         let Some(path) = path_bytes(pptr, plen) else { return INVALID };
         let (status, got) = request(service::WALLET_MONERO_VIEW_KEY, &path, 32);

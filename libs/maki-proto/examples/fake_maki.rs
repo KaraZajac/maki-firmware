@@ -297,6 +297,21 @@ impl maki_wasm::Platform for FakeApp {
         }
     }
 
+    /// A BIP-85 password: "typed" (the fake has no keyboard, and doesn't print it: its phrase can
+    /// be someone's).
+    fn type_password(&mut self, path: &[u32]) -> Result<bool, i32> {
+        let password = self.wallet(maki_hd::op::BIP85_PASSWORD, path, &[])?;
+        println!("  {} would type a password of {} characters", self.name, password.len());
+        Ok(true)
+    }
+
+    /// A BIP-85 password: "shown", as `type_password` types it.
+    fn show_password(&mut self, path: &[u32], label: &str) -> Result<maki_wasm::Answer, i32> {
+        let password = self.wallet(maki_hd::op::BIP85_PASSWORD, path, &[])?;
+        println!("  maki shows its owner {label:?}'s password, {} characters", password.len());
+        Ok(maki_wasm::Answer::Yes)
+    }
+
     fn app_secret(&mut self, label: &str) -> Option<[u8; 32]> {
         maki_seed::app_secret(&self.secrets.seed, &self.id, &self.developer, label)
     }

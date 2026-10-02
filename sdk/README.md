@@ -102,6 +102,10 @@ the `maki` tool that packs, signs, checks and simulates them. The examples:
 - **Child Seeds**: new recovery phrases made from maki's by BIP-85, each a wallet of its own:
   a number and a length chosen here, and the words shown by maki itself (`show_backup` on a
   child seed's path, host API 9), never the app.
+- **Passwords**: BIP-85's passwords, typed or shown by maki itself (host API 12's
+  `type_password` and `show_password`), never the app, which keeps only which is which: a site, a
+  username and a number, sent from maki desktop (the link permission) once maki's owner says yes.
+  By number, the passwords a Coldcard's Type Passwords types.
 - **Monero**: the Monero wallet Ledger's Monero app makes from the same phrase (host APIs 4
   and 5): its address and subaddresses as QR codes; from its menu, the 25 words that restore it
   in any Monero wallet, which maki shows its owner itself; the view key, for maki desktop or the
@@ -310,6 +314,16 @@ function whose permission it didn't ask for):
   SLIP-10 (every step of the path hardened), and `wallet::sign_ed25519(path, &message)`, a
   signature over the whole message (up to 16 KiB; Ed25519 hashes what it signs itself), one of
   what a yes allows. An Ed25519 wallet has those keys alone, and a secp256k1 wallet none of them.
+  Host API 11 adds Cardano's keys, a kind of their own (BIP32-Ed25519 from the phrase's entropy,
+  Icarus, as Eternl, Lace and Ledger make them): `curve = "bip32-ed25519"` with paths under
+  `m/1852'/1815'`, then `wallet::cardano_public(path)`, the public key and chain code (an account's
+  gives every address under it), and `wallet::sign_cardano(path, &message)`, one of what a yes
+  allows. Host API 12 adds BIP-85's passwords, which maki makes from the phrase and types or shows
+  itself, never handing one to the app: with `m/83696968'/707764'` (base64) or
+  `m/83696968'/707785'` (base85) among the paths, `wallet::type_password(path)` types the one at
+  `m/83696968'/707764'/{length}'/{number}'` (with the keyboard permission too) and
+  `wallet::show_password(path, label)` shows it on maki's own screen, each one of what a yes allows;
+  any BIP-85 tool makes the same password from the same phrase.
   The wallet examples show how: they need `std` (for their allocator), so
   their `Cargo.toml` asks for `maki-app` with `default-features = false, features = ["std",
   "wallet"]`.

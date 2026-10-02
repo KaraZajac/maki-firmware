@@ -1,0 +1,18 @@
+id = "com.leviathan.maki.passwords"
+name = "Passwords"
+version = 1
+label = "1.0"
+api = 12
+storage = 16
+memory = 256
+backup = true
+icon = "icon.pbm"
+description = "Passwords made from your recovery phrase (BIP-85), typed by maki: none stored, so restoring maki restores them all. maki desktop says which is which (a site, a username, a number); maki types or shows each itself, after a yes. By number, the passwords a Coldcard's Type Passwords types."
+
+[permissions]
+wallet = "To have maki make your passwords from your recovery phrase and type or show them itself."
+keyboard = "To type a site's username, and the Tab and Enter around its password."
+link = "So maki desktop can say which password is which. It never sees the passwords."
+
+[wallet]
+paths = ["m/83696968'/707764'", "m/83696968'/707785'"]

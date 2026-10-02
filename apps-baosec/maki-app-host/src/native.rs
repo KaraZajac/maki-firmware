@@ -389,6 +389,16 @@ fn lent(session: &mut Session, id: usize, request: &[u8], last_log: &mut String)
             Some(path) => (session.wallet_show_backup(&path), vec![]),
             None => (maki_wasm::INVALID, vec![]),
         },
+        service::WALLET_TYPE_PASSWORD => match path_of(request) {
+            Some(path) => (session.wallet_type_password(&path), vec![]),
+            None => (maki_wasm::INVALID, vec![]),
+        },
+        service::WALLET_SHOW_PASSWORD => {
+            match split().and_then(|(label, rest)| Some((label, path_of(rest)?))) {
+                Some((label, path)) => (session.wallet_show_password(&path, label), vec![]),
+                None => (maki_wasm::INVALID, vec![]),
+            }
+        }
         service::WALLET_MONERO_VIEW_KEY => match path_of(request).map(|p| session.wallet_monero_view_key(&p))
         {
             Some(Ok(key)) => (0, key.to_vec()),

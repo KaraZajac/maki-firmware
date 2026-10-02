@@ -146,6 +146,11 @@ pub mod op {
     /// An Ed25519 signature with that key (64 bytes, which any Ed25519 verifier takes). The digest
     /// is the whole message: a transaction body's hash, as Cardano signs it.
     pub const CARDANO_SIGN: u8 = 17;
+    /// A BIP-85 password (ASCII), at a path `bip85_password` reads: the key there made entropy,
+    /// encoded and cut to its length as BIP-85 says, the same from the same phrase anywhere
+    /// BIP-85 is followed. For maki to type or show its owner itself, as a child seed's words:
+    /// never an app's.
+    pub const BIP85_PASSWORD: u8 = 18;
 }
 
 /// CIP-1852's purpose: Cardano's keys since Shelley are at `m/1852'/1815'/account'/role/index`.
@@ -178,6 +183,36 @@ pub fn child_seed(path: &[u32]) -> Option<(u32, u32)> {
         {
             let words = words.checked_sub(HARDENED)?;
             matches!(words, 12 | 18 | 24).then_some((words, index - HARDENED))
+        }
+        _ => None,
+    }
+}
+
+/// How a BIP-85 password writes its entropy: base64 (RFC 4648's alphabet; BIP-85 application
+/// 707764') or base85 (RFC 1924's, as Python's `b85encode` writes it; application 707785').
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Bip85Password {
+    Base64,
+    Base85,
+}
+
+/// BIP-85's password applications.
+pub const BIP85_BASE64: u32 = 707764 | HARDENED;
+pub const BIP85_BASE85: u32 = 707785 | HARDENED;
+
+/// A BIP-85 password's path, `m/83696968'/{707764' or 707785'}/{length}'/{index}'`: how it's
+/// written, its length (20 to 86 characters in base64, 10 to 80 in base85: no padding, no more
+/// than the entropy holds) and index. None for any other path.
+pub fn bip85_password(path: &[u32]) -> Option<(Bip85Password, u32, u32)> {
+    match *path {
+        [BIP85, app, len, index] if len >= HARDENED && index >= HARDENED => {
+            let len = len - HARDENED;
+            let kind = match app {
+                BIP85_BASE64 if (20..=86).contains(&len) => Bip85Password::Base64,
+                BIP85_BASE85 if (10..=80).contains(&len) => Bip85Password::Base85,
+                _ => return None,
+            };
+            Some((kind, len, index - HARDENED))
         }
         _ => None,
     }
@@ -233,11 +268,14 @@ pub fn prefix_ok(prefix: &[u32]) -> bool {
     prefix.len() >= 2 && prefix.len() <= MAX_DEPTH && prefix[0] >= HARDENED && prefix[1] >= HARDENED
 }
 
-/// The coin a path's coin type (SLIP-44) names, as an install screen says it (or BIP-85's child
-/// seeds, which aren't a coin).
+/// The coin a path's coin type (SLIP-44) names, as an install screen says it (or what BIP-85
+/// makes, which isn't a coin: child seeds, passwords).
 pub fn coin(prefix: &[u32]) -> Option<&'static str> {
     if prefix.first() == Some(&BIP85) {
-        return Some("child seeds");
+        return Some(match prefix.get(1) {
+            Some(&BIP85_BASE64) | Some(&BIP85_BASE85) => "passwords",
+            _ => "child seeds",
+        });
     }
     let coin_type = *prefix.get(1)?;
     if coin_type < HARDENED {

@@ -166,6 +166,9 @@ pub const WALLET_CARDANO_SIGN: u8 = 17;
 /// A BIP-85 child seed's words (`maki_hd::child_seed`), for the app host to have maki show its
 /// owner: never an app.
 pub const WALLET_BIP85_WORDS: u8 = 15;
+/// A BIP-85 password (ASCII), at a path `maki_hd::bip85_password` reads: for the app host to type
+/// or show itself, never to hand an app.
+pub const WALLET_BIP85_PASSWORD: u8 = 18;
 
 /// A wallet app's request, through the app host, and its answer (`answer`, when `result` is
 /// `RESULT_OK`).

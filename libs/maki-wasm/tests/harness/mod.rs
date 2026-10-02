@@ -46,6 +46,9 @@ pub struct Record {
     pub reviews: Vec<Review>,
     /// backup words maki showed its owner (never the app)
     pub backups: Vec<String>,
+    /// passwords maki showed its owner (never the app), with the app's name for each; those it
+    /// typed are in `typed`, in their turn
+    pub passwords: Vec<(String, String)>,
 }
 
 /// The BIP39 test phrase's seed: wallet apps' keys here, as on a maki set up with it.
@@ -170,6 +173,18 @@ impl Platform for Script {
         let mut r = self.0.borrow_mut();
         r.reviews.push(review.clone());
         r.answers.pop_front().unwrap_or(Answer::NoAnswer)
+    }
+
+    fn type_password(&mut self, path: &[u32]) -> Result<bool, i32> {
+        let password = self.wallet(maki_hd::op::BIP85_PASSWORD, path, &[])?;
+        self.0.borrow_mut().typed.push(String::from_utf8(password).unwrap());
+        Ok(true)
+    }
+
+    fn show_password(&mut self, path: &[u32], label: &str) -> Result<Answer, i32> {
+        let password = self.wallet(maki_hd::op::BIP85_PASSWORD, path, &[])?;
+        self.0.borrow_mut().passwords.push((label.into(), String::from_utf8(password).unwrap()));
+        Ok(Answer::Yes)
     }
 
     fn show_backup(&mut self, path: &[u32]) -> Result<Answer, i32> {

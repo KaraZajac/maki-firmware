@@ -463,6 +463,18 @@ impl SeedKeys {
         Ok(out)
     }
 
+    /// A BIP-85 password (`crate::bip85_password`'s path): the key there made entropy
+    /// (`bip85_entropy`), written in base64 or base85 and cut to its length.
+    fn bip85_password(&self, path: &[u32]) -> Result<alloc::string::String, Error> {
+        let (kind, len, _) = crate::bip85_password(path).ok_or(Error::Path)?;
+        let mut k: [u8; 32] = self.derive(path)?.key.to_bytes().into();
+        let mut entropy = bip85_entropy(&k);
+        k.zeroize();
+        let password = bip85_password_text(kind, &entropy, len as usize);
+        entropy.zeroize();
+        Ok(password)
+    }
+
     /// The Ed25519 key at `path` (SLIP-10), every step hardened. Each is a single HMAC: nothing
     /// to keep.
     fn ed25519_key(&self, path: &[u32]) -> Result<ed25519_dalek::SigningKey, Error> {
@@ -582,6 +594,46 @@ impl Keys for OneKey {
 /// of `k`. Hashed, so what's made of it gives nothing of `k` (or the keys above it) away.
 pub fn bip85_entropy(k: &[u8; 32]) -> [u8; 64] { hmac512(b"bip-entropy-from-k", &[k]) }
 
+/// A BIP-85 password from its entropy: all 64 bytes in base64 (RFC 4648, 88 characters with
+/// its padding) or base85 (RFC 1924's alphabet, 80), the first `len` characters of it. The
+/// lengths `crate::bip85_password` allows never reach the padding.
+pub fn bip85_password_text(
+    kind: crate::Bip85Password,
+    entropy: &[u8; 64],
+    len: usize,
+) -> alloc::string::String {
+    const B64: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    const B85: &[u8; 85] =
+        b"0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz!#$%&()*+-;<=>?@^_`{|}~";
+    let mut out = alloc::string::String::with_capacity(88);
+    match kind {
+        crate::Bip85Password::Base64 => {
+            for c in entropy.chunks(3) {
+                let n = c.iter().enumerate().fold(0u32, |n, (i, &b)| n | (b as u32) << (16 - 8 * i));
+                for i in 0..4 {
+                    // a chunk of fewer than 3 bytes (the last: 64 = 21 × 3 + 1) ends with padding
+                    out.push(if i <= c.len() { B64[(n >> (18 - 6 * i) & 63) as usize] as char } else { '=' });
+                }
+            }
+        }
+        crate::Bip85Password::Base85 => {
+            // 64 bytes are 16 groups of 4: each, big-endian, five base-85 digits, the most
+            // significant first
+            for c in entropy.chunks(4) {
+                let mut n = u32::from_be_bytes([c[0], c[1], c[2], c[3]]);
+                let mut digits = [0u8; 5];
+                for d in digits.iter_mut().rev() {
+                    *d = B85[(n % 85) as usize];
+                    n /= 85;
+                }
+                out.extend(digits.iter().map(|&d| d as char));
+            }
+        }
+    }
+    out.truncate(len);
+    out
+}
+
 /// A numbered request (`crate::op`) on `keys`, as maki-keys answers the app host (and the fake
 /// maki and the simulator answer apps): the answer's bytes. `aux` is BIP340's auxiliary
 /// randomness for a Schnorr signature. Which paths an app may use is the caller's to check.
@@ -630,6 +682,7 @@ pub fn answer(
         }
         op::MONERO_WORDS => keys.monero(path)?.words().join(" ").into_bytes(),
         op::BIP85_WORDS => keys.child_seed_words(path)?.into_bytes(),
+        op::BIP85_PASSWORD => keys.bip85_password(path)?.into_bytes(),
         op::MONERO_VIEW_KEY => keys.monero(path)?.view_bytes().to_vec(),
         op::MONERO_KEY_IMAGE => {
             let d: &[u8; 80] = asked.try_into().map_err(|_| Error::Failed)?;

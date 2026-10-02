@@ -44,6 +44,9 @@ struct Record {
     wallet_calls: Vec<(u8, Vec<u32>)>,
     /// backup words maki showed its owner (never the app)
     backups: Vec<String>,
+    /// passwords maki showed its owner (never the app), with the app's name for each; those it
+    /// typed are in `typed`, in their turn
+    passwords: Vec<(String, String)>,
 }
 
 /// The BIP39 test phrase's seed: wallet apps' keys in these tests.
@@ -165,6 +168,18 @@ impl Platform for Script {
         let mut r = self.0.borrow_mut();
         r.reviews.push(review.clone());
         r.answers.pop_front().unwrap_or(Answer::NoAnswer)
+    }
+
+    fn type_password(&mut self, path: &[u32]) -> Result<bool, i32> {
+        let password = self.wallet(maki_hd::op::BIP85_PASSWORD, path, &[])?;
+        self.0.borrow_mut().typed.push(String::from_utf8(password).unwrap());
+        Ok(true)
+    }
+
+    fn show_password(&mut self, path: &[u32], label: &str) -> Result<Answer, i32> {
+        let password = self.wallet(maki_hd::op::BIP85_PASSWORD, path, &[])?;
+        self.0.borrow_mut().passwords.push((label.into(), String::from_utf8(password).unwrap()));
+        Ok(Answer::Yes)
     }
 
     fn show_backup(&mut self, path: &[u32]) -> Result<Answer, i32> {
@@ -906,18 +921,31 @@ fn gated_functions_need_their_permission() {
         ("wallet_monero_sign", "(param i32 i32 i32 i32 i32 i32) (result i32)"),
         ("wallet_sign_ed25519", "(param i32 i32 i32 i32 i32) (result i32)"),
         ("wallet_sign_cardano", "(param i32 i32 i32 i32 i32) (result i32)"),
+        ("wallet_type_password", "(param i32 i32) (result i32)"),
+        ("wallet_show_password", "(param i32 i32 i32 i32) (result i32)"),
     ];
-    assert_eq!(signatures.len(), GATED.len());
+    let names: std::collections::BTreeSet<&str> = GATED.iter().map(|(n, _)| *n).collect();
+    assert_eq!(signatures.len(), names.len());
     for (name, signature) in signatures {
-        let (_, p) = GATED.iter().find(|(n, _)| *n == name).unwrap();
+        // what it needs: a permission, or two (a password maki types needs the keyboard too)
+        let needs: Vec<Permission> = GATED.iter().filter(|(n, _)| *n == name).map(|(_, p)| *p).collect();
+        assert!(!needs.is_empty(), "{name}");
         let wat = format!(
             r#"(module (import "maki" "{name}" (func {signature})) (memory (export "memory") 1) (func (export "maki_main")))"#
         );
         let err = check(&module(&wat), LIMITS).unwrap_err();
-        assert!(err.contains(&format!("needs the {} permission", p.name())), "{name}: {err}");
-        check(&module(&wat), with(&[*p])).unwrap();
+        assert!(err.contains(&format!("needs the {} permission", needs[0].name())), "{name}: {err}");
+        check(&module(&wat), with(&needs)).unwrap();
+        // each of two is needed
+        for p in &needs {
+            let others: Vec<Permission> = needs.iter().copied().filter(|q| q != p).collect();
+            if !others.is_empty() {
+                let err = check(&module(&wat), with(&others)).unwrap_err();
+                assert!(err.contains(&format!("needs the {} permission", p.name())), "{name}: {err}");
+            }
+        }
         // one permission doesn't stand in for another
-        let other = if *p == Permission::Keys { Permission::Ask } else { Permission::Keys };
+        let other = if needs.contains(&Permission::Keys) { Permission::Ask } else { Permission::Keys };
         assert!(check(&module(&wat), with(&[other])).is_err(), "{name}");
     }
 }
@@ -1893,6 +1921,134 @@ fn a_cardano_wallet_has_cardanos_keys_on_its_paths_alone() {
     // and an Ed25519 wallet (SLIP-10), on the same paths, has no Cardano keys
     let (mut s, _) = wallet_session_on(Curve::Ed25519, &["m/1852'/1815'"], &[Permission::Wallet]);
     assert_eq!(s.wallet_public(&account, WALLET_CARDANO), Err(REFUSED));
+}
+
+/// The test phrase's BIP-85 password at `p`, as maki-hd makes it (its own tests hold that to the
+/// BIP's vectors, and to rust-bitcoin's keys).
+fn bip85_password(p: &[u32]) -> String {
+    let keys = maki_hd::seed::SeedKeys::from_seed(&test_seed()).unwrap();
+    String::from_utf8(maki_hd::seed::answer(&keys, maki_hd::op::BIP85_PASSWORD, p, &[], &[0; 32]).unwrap())
+        .unwrap()
+}
+
+#[test]
+fn maki_types_and_shows_bip85_passwords_for_the_app_never_to_it() {
+    use maki_bundle::{Curve, Permission};
+    let (mut s, record) = wallet_session(
+        &["m/83696968'/707764'", "m/83696968'/707785'"],
+        &[Permission::Wallet, Permission::Keyboard],
+    );
+    let p = path("m/83696968'/707764'/21'/0'");
+    let want = bip85_password(&p);
+    assert_eq!(want.len(), 21);
+    // nothing without a yes to a review first
+    assert_eq!(s.wallet_type_password(&p), REFUSED);
+    assert_eq!(s.wallet_show_password(&p, "example.com"), REFUSED);
+    assert!(record.borrow().typed.is_empty() && record.borrow().passwords.is_empty());
+    // a yes for two: maki types it, then shows it under the app's name for it
+    record.borrow_mut().answers.push_back(Answer::Yes);
+    assert_eq!(s.wallet_review("Log in?\nexample.com", 2, 0), 0);
+    assert_eq!(s.type_text("kara\t"), 0);
+    assert_eq!(s.wallet_type_password(&p), 0);
+    assert_eq!(s.wallet_show_password(&p, "example.com"), 0);
+    assert_eq!(record.borrow().typed, ["kara\t".to_string(), want.clone()]);
+    assert_eq!(record.borrow().passwords, [("example.com".to_string(), want.clone())]);
+    // and no more than two
+    assert_eq!(s.wallet_type_password(&p), REFUSED);
+    // base85 too, from 10 characters to 80, each number a password of its own
+    record.borrow_mut().answers.push_back(Answer::Yes);
+    assert_eq!(s.wallet_review("Type?", 3, 0), 0);
+    for p in ["m/83696968'/707785'/10'/0'", "m/83696968'/707785'/80'/0'", "m/83696968'/707785'/80'/1'"] {
+        assert_eq!(s.wallet_type_password(&path(p)), 0, "{p}");
+    }
+    let typed = record.borrow().typed[2..].to_vec();
+    assert_eq!(typed.iter().map(|t| t.len()).collect::<Vec<_>>(), [10, 80, 80]);
+    // the length is in the path: each a password of its own, not a longer one cut short
+    assert!(!typed[1].starts_with(&typed[0]) && typed[1] != typed[2]);
+    assert_eq!(typed[1], bip85_password(&path("m/83696968'/707785'/80'/0'")));
+    // with a yes, still only a password's path on its own paths, and a label maki can show
+    record.borrow_mut().answers.push_back(Answer::Yes);
+    assert_eq!(s.wallet_review("Type?", 8, 0), 0);
+    for (p, code) in [
+        ("m/83696968'/707764'/19'/0'", INVALID),
+        ("m/83696968'/707764'/87'/0'", INVALID),
+        ("m/83696968'/707785'/81'/0'", INVALID),
+        ("m/83696968'/707764'/21'/0", INVALID),
+        ("m/83696968'/707764'/21'", INVALID),
+        ("m/83696968'/39'/0'/12'/0'", REFUSED),
+        ("m/84'/0'/0'/0/0", REFUSED),
+    ] {
+        assert_eq!(s.wallet_type_password(&path(p)), code, "{p}");
+        assert_eq!(s.wallet_show_password(&path(p), "x"), code, "{p}");
+    }
+    assert_eq!(s.wallet_show_password(&p, "two\nlines"), INVALID);
+    assert_eq!(s.wallet_show_password(&p, &"x".repeat(MAX_PASSWORD_LABEL + 1)), TOO_BIG);
+    assert_eq!(s.wallet_show_password(&p, &"x".repeat(MAX_PASSWORD_LABEL)), 0);
+    // nor in any other form: maki-hd's operation for it isn't a public key's
+    assert_eq!(s.wallet_public(&p, maki_hd::op::BIP85_PASSWORD), Err(INVALID));
+    assert_eq!(record.borrow().typed.len(), 5);
+    // maki made each password itself, and nothing else
+    assert!(record.borrow().wallet_calls.iter().all(|(op, _)| *op == maki_hd::op::BIP85_PASSWORD));
+    // without the keyboard permission, shown but not typed
+    let (mut s, record) = wallet_session(&["m/83696968'/707764'"], &[Permission::Wallet]);
+    record.borrow_mut().answers.push_back(Answer::Yes);
+    assert_eq!(s.wallet_review("Show?", 2, 0), 0);
+    assert_eq!(s.wallet_type_password(&p), REFUSED);
+    assert_eq!(s.wallet_show_password(&p, ""), 0);
+    assert!(record.borrow().typed.is_empty());
+    // locked, nothing
+    record.borrow_mut().locked = true;
+    record.borrow_mut().answers.push_back(Answer::Yes);
+    assert_eq!(s.wallet_review("Show?", 1, 0), 0);
+    assert_eq!(s.wallet_show_password(&p, ""), LOCKED);
+    // and an Ed25519 wallet on the same paths has no passwords
+    let (mut s, record) = wallet_session_on(
+        Curve::Ed25519,
+        &["m/83696968'/707764'"],
+        &[Permission::Wallet, Permission::Keyboard],
+    );
+    record.borrow_mut().answers.push_back(Answer::Yes);
+    assert_eq!(s.wallet_review("Type?", 1, 0), 0);
+    assert_eq!(s.wallet_type_password(&p), REFUSED);
+}
+
+#[test]
+fn passwords_came_with_host_api_12() {
+    for (name, signature) in [
+        ("wallet_type_password", "(param i32 i32) (result i32)"),
+        ("wallet_show_password", "(param i32 i32 i32 i32) (result i32)"),
+    ] {
+        let code = module(&format!(
+            r#"(module (import "maki" "{name}" (func {signature})) (memory (export "memory") 1) (func (export "maki_main")))"#
+        ));
+        let manifest = |api: u16| maki_bundle::Manifest {
+            id: "org.example.passwords".into(),
+            name: "Passwords".into(),
+            version: 1,
+            label: "1.0".into(),
+            kind: maki_bundle::Kind::Wasm,
+            api,
+            firmware: String::new(),
+            permissions: vec![
+                (maki_bundle::Permission::Wallet, "to have maki make them".into()),
+                (maki_bundle::Permission::Keyboard, "to type them".into()),
+            ],
+            storage_kib: 1,
+            memory_kib: 64,
+            backup: true,
+            description: String::new(),
+            wallet: Some(maki_bundle::Wallet {
+                curve: maki_bundle::Curve::Secp256k1,
+                paths: vec![path("m/83696968'/707764'")],
+            }),
+        };
+        let err = admit(&manifest(11), &code).unwrap_err();
+        assert!(
+            err.contains(&format!("{name}, which came with host API 12, and its manifest says 11")),
+            "{err}"
+        );
+        admit(&manifest(12), &code).unwrap();
+    }
 }
 
 #[test]
