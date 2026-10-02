@@ -209,7 +209,11 @@ impl CtapHid {
     pub const CAPABILITY_NMSG: u8 = 0x08;
 
     // TODO: Is this timeout duration specified?
-    const TIMEOUT_DURATION: Duration = Duration::from_millis(100);
+    // maki: half a second, not a tenth. It's measured when a packet is processed, not when it came:
+    // a computer sends a message's packets together, and maki's FIDO thread, busy (just after the
+    // PIN opens maki, say, when a disk unlocked at boot asks), took the rest of a message for late
+    // and refused it.
+    const TIMEOUT_DURATION: Duration = Duration::from_millis(500);
 
     /// Creates a new CTAP HID packet parser.
     ///

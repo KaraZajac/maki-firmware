@@ -210,9 +210,13 @@ pub(crate) fn main_hw() -> ! {
                     TimeoutOp::Pump => {
                         if to_run.load(Ordering::SeqCst) {
                             let tt_lsb = target_time_lsb.load(Ordering::SeqCst);
-                            if tt_lsb >= (now as u32) || (now as u32) - tt_lsb > MAX_TIMEOUT_LIMIT_MS
-                            // limits rollover case
-                            {
+                            // maki: time's up once now has reached the target, read across the
+                            // rollover by the signed difference (this timed out at once while the
+                            // target was still ahead, and waited only once it was behind); and a
+                            // target further off than any wait is a rollover's leftover
+                            let ahead = tt_lsb.wrapping_sub(now as u32) as i32;
+                            if ahead <= 0 || ahead as u32 > MAX_TIMEOUT_LIMIT_MS {
+                                to_run.store(false, Ordering::SeqCst);
                                 xous::try_send_message(
                                     cid,
                                     xous::Message::new_scalar(
@@ -392,6 +396,10 @@ pub(crate) fn main_hw() -> ! {
                                     ),
                                 )
                                 .ok();
+                            } else {
+                                // maki: a wait without a timeout ends a timer still running for an
+                                // earlier one, which would time this one out instead
+                                to_run.store(false, Ordering::SeqCst);
                             }
                         };
                         fido_listener = msg_opt.take();

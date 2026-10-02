@@ -12,14 +12,16 @@ pub mod vault_api;
 pub use vault_api::*;
 mod generator;
 mod link;
+mod locked;
 mod migration;
 mod vendor_commands;
 
 use core::sync::atomic::{AtomicBool, Ordering};
 use std::cell::RefCell;
+use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 use std::thread;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use locales::t;
 use num_traits::*;
@@ -33,6 +35,24 @@ use xous_ipc::Buffer;
 use xous_usb_hid::device::fido::*;
 
 use crate::vendor_commands::VendorSession;
+
+/// maki's FIDO endpoint, for what's answered while OpenSK can't run (`locked`): a connection of
+/// its own, beside OpenSK's (the USB service takes this process's, whichever).
+struct Endpoint(usb_bao1x::UsbHid);
+
+impl locked::Hid for Endpoint {
+    fn recv(&mut self, wait: Duration) -> Option<vault2::ctap::hid::HidPacket> {
+        self.0.u2f_wait_incoming_timeout(wait.as_millis().max(1) as u64).ok().map(|m| m.packet)
+    }
+
+    fn send(&mut self, p: &vault2::ctap::hid::HidPacket) {
+        let mut report = RawFidoReport::default();
+        report.packet.copy_from_slice(p);
+        if let Err(e) = self.0.u2f_send(report) {
+            log::warn!("couldn't send a FIDO packet: {e:?}");
+        }
+    }
+}
 
 /*
 Dev status & notes --
@@ -332,7 +352,41 @@ fn main() -> ! {
             pddb.is_mounted_blocking();
             // maki: and until the PIN has opened the secret basis, so that the FIDO store lands
             // in it, not in the system basis, and there's a phrase to derive the secrets from
-            // (during setup the PIN comes first)
+            // (during setup the PIN comes first). Meanwhile the computer is answered what needs
+            // no store, and a request that does waits for the PIN (`locked`): a disk unlocked at
+            // boot asks while maki still waits for it.
+            let mut endpoint = Endpoint(usb_bao1x::UsbHid::new());
+            let open =
+                |keys: &maki_keys::Keys| keys.status().0 == maki_keys::State::Unlocked && keys.has_phrase();
+            let mut opened = 0u32;
+            let mut waiting: VecDeque<vault2::ctap::hid::HidPacket> = VecDeque::new();
+            while waiting.is_empty() && !open(&keys) {
+                use locked::Hid;
+                let Some(p) = endpoint.recv(Duration::from_secs(1)) else { continue };
+                if !locked::needs_store(&p) {
+                    for r in locked::answer_before_opensk(&p, &mut opened) {
+                        endpoint.send(&r);
+                    }
+                    continue;
+                }
+                let Some(packets) =
+                    locked::collect(&mut endpoint, p, |q| locked::answer_before_opensk(q, &mut opened))
+                else {
+                    continue;
+                };
+                let cid = [packets[0][0], packets[0][1], packets[0][2], packets[0][3]];
+                log::info!("FIDO request before the PIN: waiting for it");
+                let held = locked::hold(
+                    &mut endpoint,
+                    cid,
+                    || open(&keys),
+                    |q| locked::answer_before_opensk(q, &mut opened),
+                    locked::HOLD,
+                );
+                if held == locked::Held::Unlocked {
+                    waiting.extend(packets);
+                }
+            }
             keys.wait_phrase();
 
             let mut env = XousEnv::new(conn);
@@ -345,20 +399,70 @@ fn main() -> ! {
                 None => log::error!("maki-keys gave no FIDO secrets: no credential can be made"),
             }
             let mut ctap = vault2::Ctap::new(env, Instant::now());
+            // maki: the channels handed out before OpenSK ran are its first: it opens as many,
+            // and the next it opens is the one after
+            for _ in 0..opened {
+                let _ =
+                    ctap.process_hid_packet(&locked::broadcast_init(), Transport::MainHid, Instant::now());
+            }
             let mut generation = keys.status_and_generation().1;
             loop {
-                match ctap.env().main_hid_connection().u2f_wait_incoming() {
+                // maki: a request that waited for the PIN first, as if it had just come
+                let incoming = match waiting.pop_front() {
+                    Some(packet) => Ok(RawFidoReport { packet }),
+                    None => ctap.env().main_hid_connection().u2f_wait_incoming(),
+                };
+                match incoming {
                     Ok(msg) => {
-                        // maki: nothing is answered while maki is locked. The secret basis is
-                        // closed, and the store would read the system basis instead, even make
-                        // keys there. The request is dropped (the browser tries again) until the
-                        // PIN opens the basis, and then the store re-reads what it holds.
+                        // maki: nothing that needs the store is answered while maki is locked.
+                        // The secret basis is closed, and the store would read the system basis
+                        // instead, even make keys there. INIT, PING and WINK need none, and
+                        // OpenSK answers them; a request waits for the PIN (`locked`), and then
+                        // the store re-reads what it holds before it's answered.
                         let (state, now) = keys.status_and_generation();
                         if state != maki_keys::State::Unlocked {
+                            let packet = msg.packet;
+                            if matches!(locked::read(&packet), locked::Packet::Continuation { .. }) {
+                                // the rest of a request begun before maki locked: it's dropped,
+                                // and the computer asks again
+                                continue;
+                            }
+                            if !locked::needs_store(&packet) {
+                                let _mutex = opensk_mutex.lock().unwrap();
+                                if let HidIterType::Ctap(reply) =
+                                    ctap.process_hid_packet(&packet, Transport::MainHid, Instant::now())
+                                {
+                                    for pkt in reply {
+                                        locked::Hid::send(&mut endpoint, &pkt);
+                                    }
+                                }
+                                continue;
+                            }
+                            let mut through_opensk = |q: &vault2::ctap::hid::HidPacket| {
+                                let _mutex = opensk_mutex.lock().unwrap();
+                                match ctap.process_hid_packet(q, Transport::MainHid, Instant::now()) {
+                                    HidIterType::Ctap(reply) => reply.collect(),
+                                    HidIterType::Vendor(_) => Vec::new(),
+                                }
+                            };
+                            let Some(packets) = locked::collect(&mut endpoint, packet, &mut through_opensk)
+                            else {
+                                continue;
+                            };
+                            let cid = [packets[0][0], packets[0][1], packets[0][2], packets[0][3]];
                             log::info!("FIDO request while locked: waiting for the PIN");
-                            keys.wait_unlocked();
-                            ctap.env().store().refresh();
-                            generation = keys.status_and_generation().1;
+                            let held = locked::hold(
+                                &mut endpoint,
+                                cid,
+                                || keys.status().0 == maki_keys::State::Unlocked,
+                                &mut through_opensk,
+                                locked::HOLD,
+                            );
+                            if held == locked::Held::Unlocked {
+                                ctap.env().store().refresh();
+                                generation = keys.status_and_generation().1;
+                                waiting.extend(packets);
+                            }
                             continue;
                         }
                         // and a restore may have added passkeys to the store behind its back
