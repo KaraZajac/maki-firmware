@@ -82,3 +82,5 @@ maki-near = { path = "../maki-near" }
 maki-ada = { path = "../maki-ada" }
 # Sui: what its app shows, checked against its library
 maki-sui = { path = "../maki-sui" }
+# Cosmos: what its app shows, checked against its library
+maki-atom = { path = "../maki-atom" }

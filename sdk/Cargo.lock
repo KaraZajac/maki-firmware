@@ -259,6 +259,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "cosmos"
+version = "0.1.0"
+dependencies = [
+ "maki-app",
+ "maki-atom",
+]
+
+[[package]]
 name = "cpufeatures"
 version = "0.2.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -863,6 +871,14 @@ name = "maki-apt"
 version = "0.1.0"
 dependencies = [
  "sha3",
+]
+
+[[package]]
+name = "maki-atom"
+version = "0.1.0"
+dependencies = [
+ "ripemd",
+ "sha2",
 ]
 
 [[package]]

@@ -1,0 +1,436 @@
+[
+ {
+  "name": "send",
+  "chain": "cosmoshub-4",
+  "doc": "{\"account_number\":\"1234567\",\"chain_id\":\"cosmoshub-4\",\"fee\":{\"amount\":[{\"amount\":\"5000\",\"denom\":\"uatom\"}],\"gas\":\"200000\"},\"memo\":\"\",\"msgs\":[{\"type\":\"cosmos-sdk/MsgSend\",\"value\":{\"amount\":[{\"amount\":\"1500000\",\"denom\":\"uatom\"}],\"from_address\":\"cosmos19rl4cm2hmr8afy4kldpxz3fka4jguq0auqdal4\",\"to_address\":\"cosmos10xcqpzrky6eff2g52qdye53xkk9jxkvrpq6uqr\"}}],\"sequence\":\"42\"}",
+  "signature": "f6f800d8d43412ff45b3bcd9781fd8d7eb212a159bd8ede232cf6b12d4d495f80e58ab663f1545a9927468e4f11fe024c5b0b26caea4cfad8d5810cc6fa3d811",
+  "tx": "0a93010a90010a1c2f636f736d6f732e62616e6b2e763162657461312e4d736753656e6412700a2d636f736d6f733139726c34636d32686d7238616679346b6c6470787a33666b61346a6775713061757164616c34122d636f736d6f733130786371707a726b793665666632673532716479653533786b6b396a786b76727071367571721a100a057561746f6d12073135303030303012670a500a460a1f2f636f736d6f732e63727970746f2e736563703235366b312e5075624b657912230a21024f4e2ad99c34d60b9ba6283c9431a8418af8673212961f97a77b6377fcd05b6212040a02087f182a12130a0d0a057561746f6d12043530303010c09a0c1a40f6f800d8d43412ff45b3bcd9781fd8d7eb212a159bd8ede232cf6b12d4d495f80e58ab663f1545a9927468e4f11fe024c5b0b26caea4cfad8d5810cc6fa3d811"
+ },
+ {
+  "name": "send-memo",
+  "chain": "cosmoshub-4",
+  "doc": "{\"account_number\":\"1234567\",\"chain_id\":\"cosmoshub-4\",\"fee\":{\"amount\":[{\"amount\":\"5000\",\"denom\":\"uatom\"}],\"gas\":\"200000\"},\"memo\":\"thanks for the coffee\",\"msgs\":[{\"type\":\"cosmos-sdk/MsgSend\",\"value\":{\"amount\":[{\"amount\":\"20000000\",\"denom\":\"uatom\"}],\"from_address\":\"cosmos19rl4cm2hmr8afy4kldpxz3fka4jguq0auqdal4\",\"to_address\":\"cosmos10xcqpzrky6eff2g52qdye53xkk9jxkvrpq6uqr\"}}],\"sequence\":\"42\"}",
+  "signature": "bfb7512a7a7b7b6752689c8af3299d9769199135f258c3eb1a4bbfc5a8f87b612242ae993210d5007aa7ac49ef961e6ab44ce0809a60e82833bae921549a5cdb",
+  "tx": null
+ },
+ {
+  "name": "send-escapes",
+  "chain": "cosmoshub-4",
+  "doc": "{\"account_number\":\"1234567\",\"chain_id\":\"cosmoshub-4\",\"fee\":{\"amount\":[{\"amount\":\"5000\",\"denom\":\"uatom\"}],\"gas\":\"200000\"},\"memo\":\"Tom \\u0026 Jerry \\u003ctj@example.com\\u003e said \\\"hi\\\" \\\\o/\\nsecond line: café ✓\",\"msgs\":[{\"type\":\"cosmos-sdk/MsgSend\",\"value\":{\"amount\":[{\"amount\":\"1\",\"denom\":\"uatom\"}],\"from_address\":\"cosmos19rl4cm2hmr8afy4kldpxz3fka4jguq0auqdal4\",\"to_address\":\"cosmos10xcqpzrky6eff2g52qdye53xkk9jxkvrpq6uqr\"}}],\"sequence\":\"42\"}",
+  "signature": "1b73476ddddc70bc38c7412955896473037a389389ceaa0f52866edc454c3be77cfa8259cbee021365e9ab5e860d0afdbae9bda6440db41aa05b9cf8be031313",
+  "tx": null
+ },
+ {
+  "name": "send-two-coins",
+  "chain": "cosmoshub-4",
+  "doc": "{\"account_number\":\"1234567\",\"chain_id\":\"cosmoshub-4\",\"fee\":{\"amount\":[{\"amount\":\"5000\",\"denom\":\"uatom\"}],\"gas\":\"200000\"},\"memo\":\"\",\"msgs\":[{\"type\":\"cosmos-sdk/MsgSend\",\"value\":{\"amount\":[{\"amount\":\"2500000\",\"denom\":\"ibc/14F9BC3E44B8A9C1BE1FB08980FAB87034C9905EF17CF2F5008FC085218811CC\"},{\"amount\":\"1500000\",\"denom\":\"uatom\"}],\"from_address\":\"cosmos19rl4cm2hmr8afy4kldpxz3fka4jguq0auqdal4\",\"to_address\":\"cosmos10xcqpzrky6eff2g52qdye53xkk9jxkvrpq6uqr\"}}],\"sequence\":\"42\"}",
+  "signature": "70c31a754db7e9b990ac865fc9328b1ec294ee1e4e1fa4aaa8cb84bb7201e8c3075177c2ee7a9c65ac3f824a6fd0c714f665bdaffff7014fd4667549743f0936",
+  "tx": null
+ },
+ {
+  "name": "send-to-itself",
+  "chain": "cosmoshub-4",
+  "doc": "{\"account_number\":\"1234567\",\"chain_id\":\"cosmoshub-4\",\"fee\":{\"amount\":[{\"amount\":\"5000\",\"denom\":\"uatom\"}],\"gas\":\"200000\"},\"memo\":\"\",\"msgs\":[{\"type\":\"cosmos-sdk/MsgSend\",\"value\":{\"amount\":[{\"amount\":\"1000000\",\"denom\":\"uatom\"}],\"from_address\":\"cosmos19rl4cm2hmr8afy4kldpxz3fka4jguq0auqdal4\",\"to_address\":\"cosmos19rl4cm2hmr8afy4kldpxz3fka4jguq0auqdal4\"}}],\"sequence\":\"42\"}",
+  "signature": "a6b67fb83a92805c6351056822a1604f2a7fc03dcb2eed63639ab3e90f74908358356bba12c408dd49c3e6a4565bd53f49778fe14a703ba86864bae135f9c76e",
+  "tx": null
+ },
+ {
+  "name": "send-unknown-coin",
+  "chain": "cosmoshub-4",
+  "doc": "{\"account_number\":\"1234567\",\"chain_id\":\"cosmoshub-4\",\"fee\":{\"amount\":[{\"amount\":\"5000\",\"denom\":\"uatom\"}],\"gas\":\"200000\"},\"memo\":\"\",\"msgs\":[{\"type\":\"cosmos-sdk/MsgSend\",\"value\":{\"amount\":[{\"amount\":\"42\",\"denom\":\"factory/cosmos1xyz/token\"}],\"from_address\":\"cosmos19rl4cm2hmr8afy4kldpxz3fka4jguq0auqdal4\",\"to_address\":\"cosmos10xcqpzrky6eff2g52qdye53xkk9jxkvrpq6uqr\"}}],\"sequence\":\"42\"}",
+  "signature": "7475152c0b33c315eb361d45b478d264e59964d348b4bcf9b776e4a2c91f1563751e4101d1143409a0313d94240efd85e1e3fca2fed6ee7b5e05d9d648120ccd",
+  "tx": null
+ },
+ {
+  "name": "multi-send",
+  "chain": "cosmoshub-4",
+  "doc": "{\"account_number\":\"1234567\",\"chain_id\":\"cosmoshub-4\",\"fee\":{\"amount\":[{\"amount\":\"5000\",\"denom\":\"uatom\"}],\"gas\":\"200000\"},\"memo\":\"\",\"msgs\":[{\"type\":\"cosmos-sdk/MsgMultiSend\",\"value\":{\"inputs\":[{\"address\":\"cosmos19rl4cm2hmr8afy4kldpxz3fka4jguq0auqdal4\",\"coins\":[{\"amount\":\"3000000\",\"denom\":\"uatom\"}]}],\"outputs\":[{\"address\":\"cosmos10xcqpzrky6eff2g52qdye53xkk9jxkvrpq6uqr\",\"coins\":[{\"amount\":\"1000000\",\"denom\":\"uatom\"}]},{\"address\":\"cosmos1a0qwuze2h85zw7nqpsj3ga0z9geyrgwphl8j6w\",\"coins\":[{\"amount\":\"2000000\",\"denom\":\"uatom\"}]}]}}],\"sequence\":\"42\"}",
+  "signature": "8c3cd25d96e6e85eb4b5af522c7a8a2903d7ccd49d04e1fbc355fe20d1447eec7a9a1ba34431599c0c2f215a36862b278eae4aa95e0db6e7d3ffe69fd30fada0",
+  "tx": "0af2010aef010a212f636f736d6f732e62616e6b2e763162657461312e4d73674d756c746953656e6412c9010a410a2d636f736d6f733139726c34636d32686d7238616679346b6c6470787a33666b61346a6775713061757164616c3412100a057561746f6d12073330303030303012410a2d636f736d6f733130786371707a726b793665666632673532716479653533786b6b396a786b767270713675717212100a057561746f6d12073130303030303012410a2d636f736d6f733161307177757a65326838357a77376e7170736a336761307a3967657972677770686c386a367712100a057561746f6d12073230303030303012670a500a460a1f2f636f736d6f732e63727970746f2e736563703235366b312e5075624b657912230a21024f4e2ad99c34d60b9ba6283c9431a8418af8673212961f97a77b6377fcd05b6212040a02087f182a12130a0d0a057561746f6d12043530303010c09a0c1a408c3cd25d96e6e85eb4b5af522c7a8a2903d7ccd49d04e1fbc355fe20d1447eec7a9a1ba34431599c0c2f215a36862b278eae4aa95e0db6e7d3ffe69fd30fada0"
+ },
+ {
+  "name": "delegate",
+  "chain": "cosmoshub-4",
+  "doc": "{\"account_number\":\"1234567\",\"chain_id\":\"cosmoshub-4\",\"fee\":{\"amount\":[{\"amount\":\"5000\",\"denom\":\"uatom\"}],\"gas\":\"200000\"},\"memo\":\"\",\"msgs\":[{\"type\":\"cosmos-sdk/MsgDelegate\",\"value\":{\"amount\":{\"amount\":\"10000000\",\"denom\":\"uatom\"},\"delegator_address\":\"cosmos19rl4cm2hmr8afy4kldpxz3fka4jguq0auqdal4\",\"validator_address\":\"cosmosvaloper1n454ga9rqwkx6ax309knw5hs0z2erz7j3ahchn\"}}],\"sequence\":\"42\"}",
+  "signature": "97855518057d1048407462a710c52eaee7c1c4859fd95a3514e1c385bf244ce070136f9feb131d3a39a97ad3940906ac271bfe1100194bb1d96b723a9ccbf848",
+  "tx": null
+ },
+ {
+  "name": "undelegate",
+  "chain": "cosmoshub-4",
+  "doc": "{\"account_number\":\"1234567\",\"chain_id\":\"cosmoshub-4\",\"fee\":{\"amount\":[{\"amount\":\"5000\",\"denom\":\"uatom\"}],\"gas\":\"200000\"},\"memo\":\"\",\"msgs\":[{\"type\":\"cosmos-sdk/MsgUndelegate\",\"value\":{\"amount\":{\"amount\":\"5000000\",\"denom\":\"uatom\"},\"delegator_address\":\"cosmos19rl4cm2hmr8afy4kldpxz3fka4jguq0auqdal4\",\"validator_address\":\"cosmosvaloper1n454ga9rqwkx6ax309knw5hs0z2erz7j3ahchn\"}}],\"sequence\":\"42\"}",
+  "signature": "326ca963d23931785f0f1ee148c734a06428f73d9f6db3deee0be8c05456d2b572fad87b5f51b7ef5b52f5e154ae9b718bb92f1caf754ab037dacbd3428a2a08",
+  "tx": null
+ },
+ {
+  "name": "redelegate",
+  "chain": "cosmoshub-4",
+  "doc": "{\"account_number\":\"1234567\",\"chain_id\":\"cosmoshub-4\",\"fee\":{\"amount\":[{\"amount\":\"5000\",\"denom\":\"uatom\"}],\"gas\":\"200000\"},\"memo\":\"\",\"msgs\":[{\"type\":\"cosmos-sdk/MsgBeginRedelegate\",\"value\":{\"amount\":{\"amount\":\"5000000\",\"denom\":\"uatom\"},\"delegator_address\":\"cosmos19rl4cm2hmr8afy4kldpxz3fka4jguq0auqdal4\",\"validator_dst_address\":\"cosmosvaloper16jlzchtg6pl8sstn4m42uaz7xmnkhv36kj8mk0\",\"validator_src_address\":\"cosmosvaloper1n454ga9rqwkx6ax309knw5hs0z2erz7j3ahchn\"}}],\"sequence\":\"42\"}",
+  "signature": "f2f0fc98cabbd41878944f547814fc07aede880c665c943d95c17be42c846808437e117daa9d952259ff77e581b1e470390e96efec3a433496c81417951d2cc4",
+  "tx": "0adf010adc010a2a2f636f736d6f732e7374616b696e672e763162657461312e4d7367426567696e526564656c656761746512ad010a2d636f736d6f733139726c34636d32686d7238616679346b6c6470787a33666b61346a6775713061757164616c341234636f736d6f7376616c6f706572316e3435346761397271776b783661783330396b6e77356873307a3265727a376a33616863686e1a34636f736d6f7376616c6f70657231366a6c7a6368746736706c387373746e346d343275617a37786d6e6b687633366b6a386d6b3022100a057561746f6d12073530303030303012670a500a460a1f2f636f736d6f732e63727970746f2e736563703235366b312e5075624b657912230a21024f4e2ad99c34d60b9ba6283c9431a8418af8673212961f97a77b6377fcd05b6212040a02087f182a12130a0d0a057561746f6d12043530303010c09a0c1a40f2f0fc98cabbd41878944f547814fc07aede880c665c943d95c17be42c846808437e117daa9d952259ff77e581b1e470390e96efec3a433496c81417951d2cc4"
+ },
+ {
+  "name": "cancel-unstaking",
+  "chain": "cosmoshub-4",
+  "doc": "{\"account_number\":\"1234567\",\"chain_id\":\"cosmoshub-4\",\"fee\":{\"amount\":[{\"amount\":\"5000\",\"denom\":\"uatom\"}],\"gas\":\"200000\"},\"memo\":\"\",\"msgs\":[{\"type\":\"cosmos-sdk/MsgCancelUnbondingDelegation\",\"value\":{\"amount\":{\"amount\":\"1000000\",\"denom\":\"uatom\"},\"creation_height\":\"33218000\",\"delegator_address\":\"cosmos19rl4cm2hmr8afy4kldpxz3fka4jguq0auqdal4\",\"validator_address\":\"cosmosvaloper1n454ga9rqwkx6ax309knw5hs0z2erz7j3ahchn\"}}],\"sequence\":\"42\"}",
+  "signature": "f143dd3b339bbe2d73a881607736448c044b66697eb2af6917f25774a4779448788693caf7853b65e07903c442bb1d8c8159691a6dbe1e4d6b880a2f1e75e54c",
+  "tx": null
+ },
+ {
+  "name": "claim-rewards",
+  "chain": "cosmoshub-4",
+  "doc": "{\"account_number\":\"1234567\",\"chain_id\":\"cosmoshub-4\",\"fee\":{\"amount\":[{\"amount\":\"5000\",\"denom\":\"uatom\"}],\"gas\":\"200000\"},\"memo\":\"\",\"msgs\":[{\"type\":\"cosmos-sdk/MsgWithdrawDelegationReward\",\"value\":{\"delegator_address\":\"cosmos19rl4cm2hmr8afy4kldpxz3fka4jguq0auqdal4\",\"validator_address\":\"cosmosvaloper1n454ga9rqwkx6ax309knw5hs0z2erz7j3ahchn\"}}],\"sequence\":\"42\"}",
+  "signature": "6d77400ff9e824519df1427be00d64bbb9495176e4cbecd4264824639310faec02887489f61a369aefbfb1b195ee4f65c96a563ace5329574fef70dc45a8bf34",
+  "tx": null
+ },
+ {
+  "name": "compound",
+  "chain": "cosmoshub-4",
+  "doc": "{\"account_number\":\"1234567\",\"chain_id\":\"cosmoshub-4\",\"fee\":{\"amount\":[{\"amount\":\"5000\",\"denom\":\"uatom\"}],\"gas\":\"200000\"},\"memo\":\"\",\"msgs\":[{\"type\":\"cosmos-sdk/MsgWithdrawDelegationReward\",\"value\":{\"delegator_address\":\"cosmos19rl4cm2hmr8afy4kldpxz3fka4jguq0auqdal4\",\"validator_address\":\"cosmosvaloper1n454ga9rqwkx6ax309knw5hs0z2erz7j3ahchn\"}},{\"type\":\"cosmos-sdk/MsgWithdrawDelegationReward\",\"value\":{\"delegator_address\":\"cosmos19rl4cm2hmr8afy4kldpxz3fka4jguq0auqdal4\",\"validator_address\":\"cosmosvaloper16jlzchtg6pl8sstn4m42uaz7xmnkhv36kj8mk0\"}},{\"type\":\"cosmos-sdk/MsgDelegate\",\"value\":{\"amount\":{\"amount\":\"2000000\",\"denom\":\"uatom\"},\"delegator_address\":\"cosmos19rl4cm2hmr8afy4kldpxz3fka4jguq0auqdal4\",\"validator_address\":\"cosmosvaloper1n454ga9rqwkx6ax309knw5hs0z2erz7j3ahchn\"}}],\"sequence\":\"42\"}",
+  "signature": "287704fff4d503c706becbe31cba1c57340422904be07895204c82af77cd7c58446d9fc0228c758459364859860887009bfb956bab04aff25fdedab3c5d91056",
+  "tx": "0ae7030aa0010a372f636f736d6f732e646973747269627574696f6e2e763162657461312e4d7367576974686472617744656c656761746f7252657761726412650a2d636f736d6f733139726c34636d32686d7238616679346b6c6470787a33666b61346a6775713061757164616c341234636f736d6f7376616c6f706572316e3435346761397271776b783661783330396b6e77356873307a3265727a376a33616863686e0aa0010a372f636f736d6f732e646973747269627574696f6e2e763162657461312e4d7367576974686472617744656c656761746f7252657761726412650a2d636f736d6f733139726c34636d32686d7238616679346b6c6470787a33666b61346a6775713061757164616c341234636f736d6f7376616c6f70657231366a6c7a6368746736706c387373746e346d343275617a37786d6e6b687633366b6a386d6b300a9e010a232f636f736d6f732e7374616b696e672e763162657461312e4d736744656c656761746512770a2d636f736d6f733139726c34636d32686d7238616679346b6c6470787a33666b61346a6775713061757164616c341234636f736d6f7376616c6f706572316e3435346761397271776b783661783330396b6e77356873307a3265727a376a33616863686e1a100a057561746f6d12073230303030303012670a500a460a1f2f636f736d6f732e63727970746f2e736563703235366b312e5075624b657912230a21024f4e2ad99c34d60b9ba6283c9431a8418af8673212961f97a77b6377fcd05b6212040a02087f182a12130a0d0a057561746f6d12043530303010c09a0c1a40287704fff4d503c706becbe31cba1c57340422904be07895204c82af77cd7c58446d9fc0228c758459364859860887009bfb956bab04aff25fdedab3c5d91056"
+ },
+ {
+  "name": "rewards-elsewhere",
+  "chain": "cosmoshub-4",
+  "doc": "{\"account_number\":\"1234567\",\"chain_id\":\"cosmoshub-4\",\"fee\":{\"amount\":[{\"amount\":\"5000\",\"denom\":\"uatom\"}],\"gas\":\"200000\"},\"memo\":\"\",\"msgs\":[{\"type\":\"cosmos-sdk/MsgModifyWithdrawAddress\",\"value\":{\"delegator_address\":\"cosmos19rl4cm2hmr8afy4kldpxz3fka4jguq0auqdal4\",\"withdraw_address\":\"cosmos1g975h6gdx5mryeac72h6lj2nzygugxhy2xgtga\"}}],\"sequence\":\"42\"}",
+  "signature": "40766274518ffdc8240244828f7e54f16da7caefda0b9fa2fff2e7e581373e454643e0e6512ea6f0c111026ff9f243b95cef76ee9c1c6df2f11aa8add2c588b0",
+  "tx": null
+ },
+ {
+  "name": "rewards-to-itself",
+  "chain": "cosmoshub-4",
+  "doc": "{\"account_number\":\"1234567\",\"chain_id\":\"cosmoshub-4\",\"fee\":{\"amount\":[{\"amount\":\"5000\",\"denom\":\"uatom\"}],\"gas\":\"200000\"},\"memo\":\"\",\"msgs\":[{\"type\":\"cosmos-sdk/MsgModifyWithdrawAddress\",\"value\":{\"delegator_address\":\"cosmos19rl4cm2hmr8afy4kldpxz3fka4jguq0auqdal4\",\"withdraw_address\":\"cosmos19rl4cm2hmr8afy4kldpxz3fka4jguq0auqdal4\"}}],\"sequence\":\"42\"}",
+  "signature": "d1143b7d696a9de66f832e7c06cc19ff96b6d7909fb350e84444790f2ac296191155ffd84abf98e48742eb2f247c91cfb6a826a93336e40a3ae5afbd39e9deeb",
+  "tx": null
+ },
+ {
+  "name": "donate",
+  "chain": "cosmoshub-4",
+  "doc": "{\"account_number\":\"1234567\",\"chain_id\":\"cosmoshub-4\",\"fee\":{\"amount\":[{\"amount\":\"5000\",\"denom\":\"uatom\"}],\"gas\":\"200000\"},\"memo\":\"\",\"msgs\":[{\"type\":\"cosmos-sdk/MsgFundCommunityPool\",\"value\":{\"amount\":[{\"amount\":\"1000000\",\"denom\":\"uatom\"}],\"depositor\":\"cosmos19rl4cm2hmr8afy4kldpxz3fka4jguq0auqdal4\"}}],\"sequence\":\"42\"}",
+  "signature": "9470a97e05abc634ff333f5eb8fbc4e6cf344e5d33ca3e212c98e3c2de32572300bddd1c2767e23c78a4838e0988ee9bbe92f0b0a45c83865ff12cf8a330a490",
+  "tx": null
+ },
+ {
+  "name": "vote-yes",
+  "chain": "cosmoshub-4",
+  "doc": "{\"account_number\":\"1234567\",\"chain_id\":\"cosmoshub-4\",\"fee\":{\"amount\":[{\"amount\":\"5000\",\"denom\":\"uatom\"}],\"gas\":\"200000\"},\"memo\":\"\",\"msgs\":[{\"type\":\"cosmos-sdk/MsgVote\",\"value\":{\"option\":1,\"proposal_id\":\"1000\",\"voter\":\"cosmos19rl4cm2hmr8afy4kldpxz3fka4jguq0auqdal4\"}}],\"sequence\":\"42\"}",
+  "signature": "bf7f6f2e19a2e527f0b4fc9d0684a1ff46a88b6095e27d58324a8ab5ff3dc9510ebb85604862472de488a54841895d369537cc039ecaf48a72828f57638e37a9",
+  "tx": null
+ },
+ {
+  "name": "vote-abstain",
+  "chain": "cosmoshub-4",
+  "doc": "{\"account_number\":\"1234567\",\"chain_id\":\"cosmoshub-4\",\"fee\":{\"amount\":[{\"amount\":\"5000\",\"denom\":\"uatom\"}],\"gas\":\"200000\"},\"memo\":\"\",\"msgs\":[{\"type\":\"cosmos-sdk/MsgVote\",\"value\":{\"option\":2,\"proposal_id\":\"1000\",\"voter\":\"cosmos19rl4cm2hmr8afy4kldpxz3fka4jguq0auqdal4\"}}],\"sequence\":\"42\"}",
+  "signature": "d149dcb807ec4fa74e5aac7f964ba5265a03cc00448796b8173368ba55d7272a001128f234566c985cff8f7f585f7887c93ecab3e109d1546789d502d4e8c004",
+  "tx": null
+ },
+ {
+  "name": "vote-no",
+  "chain": "cosmoshub-4",
+  "doc": "{\"account_number\":\"1234567\",\"chain_id\":\"cosmoshub-4\",\"fee\":{\"amount\":[{\"amount\":\"5000\",\"denom\":\"uatom\"}],\"gas\":\"200000\"},\"memo\":\"\",\"msgs\":[{\"type\":\"cosmos-sdk/MsgVote\",\"value\":{\"option\":3,\"proposal_id\":\"1000\",\"voter\":\"cosmos19rl4cm2hmr8afy4kldpxz3fka4jguq0auqdal4\"}}],\"sequence\":\"42\"}",
+  "signature": "094cda5900c466c18532bb4d42353059a05a50ac669b74c09498cd3acc136bfe58b09da6ebcb1b1c799fdc796d8e006691e8b902ce42088b0710f0cafd9536c3",
+  "tx": null
+ },
+ {
+  "name": "vote-veto",
+  "chain": "cosmoshub-4",
+  "doc": "{\"account_number\":\"1234567\",\"chain_id\":\"cosmoshub-4\",\"fee\":{\"amount\":[{\"amount\":\"5000\",\"denom\":\"uatom\"}],\"gas\":\"200000\"},\"memo\":\"\",\"msgs\":[{\"type\":\"cosmos-sdk/MsgVote\",\"value\":{\"option\":4,\"proposal_id\":\"1000\",\"voter\":\"cosmos19rl4cm2hmr8afy4kldpxz3fka4jguq0auqdal4\"}}],\"sequence\":\"42\"}",
+  "signature": "6665bcfc28baa3f1131e0c70e46362f707425955e44d4b38dc1098362bec1b51006ca3587eeff264cfdcbcaecfeebc0d4f28c3fc5acfaffc9af57c31ab484a50",
+  "tx": null
+ },
+ {
+  "name": "vote-split",
+  "chain": "cosmoshub-4",
+  "doc": "{\"account_number\":\"1234567\",\"chain_id\":\"cosmoshub-4\",\"fee\":{\"amount\":[{\"amount\":\"5000\",\"denom\":\"uatom\"}],\"gas\":\"200000\"},\"memo\":\"\",\"msgs\":[{\"type\":\"cosmos-sdk/MsgVoteWeighted\",\"value\":{\"options\":[{\"option\":1,\"weight\":\"0.700000000000000000\"},{\"option\":3,\"weight\":\"0.300000000000000000\"}],\"proposal_id\":\"1000\",\"voter\":\"cosmos19rl4cm2hmr8afy4kldpxz3fka4jguq0auqdal4\"}}],\"sequence\":\"42\"}",
+  "signature": "bbb6314e85f762771ecd51f557459dc5f28c2d996cbd30df19687669cb4a94d20ea48ea6d9ce14e95144a498282b68c8a4cc193728d98ab5b50a16a471dbf3f9",
+  "tx": "0a8c010a89010a232f636f736d6f732e676f762e763162657461312e4d7367566f74655765696768746564126208e807122d636f736d6f733139726c34636d32686d7238616679346b6c6470787a33666b61346a6775713061757164616c341a16080112123730303030303030303030303030303030301a160803121233303030303030303030303030303030303012670a500a460a1f2f636f736d6f732e63727970746f2e736563703235366b312e5075624b657912230a21024f4e2ad99c34d60b9ba6283c9431a8418af8673212961f97a77b6377fcd05b6212040a02087f182a12130a0d0a057561746f6d12043530303010c09a0c1a40bbb6314e85f762771ecd51f557459dc5f28c2d996cbd30df19687669cb4a94d20ea48ea6d9ce14e95144a498282b68c8a4cc193728d98ab5b50a16a471dbf3f9"
+ },
+ {
+  "name": "deposit",
+  "chain": "cosmoshub-4",
+  "doc": "{\"account_number\":\"1234567\",\"chain_id\":\"cosmoshub-4\",\"fee\":{\"amount\":[{\"amount\":\"5000\",\"denom\":\"uatom\"}],\"gas\":\"200000\"},\"memo\":\"\",\"msgs\":[{\"type\":\"cosmos-sdk/MsgDeposit\",\"value\":{\"amount\":[{\"amount\":\"10000000\",\"denom\":\"uatom\"}],\"depositor\":\"cosmos19rl4cm2hmr8afy4kldpxz3fka4jguq0auqdal4\",\"proposal_id\":\"1000\"}}],\"sequence\":\"42\"}",
+  "signature": "69af2a8452a8d5362c5efe1db27d258bac93cbf56dfb6866db03030be0da7db76917e8a5f28083e7b84e430152b0bc4a0e73e81d6dd06384cf65bde9d628c452",
+  "tx": null
+ },
+ {
+  "name": "vote-v1",
+  "chain": "cosmoshub-4",
+  "doc": "{\"account_number\":\"1234567\",\"chain_id\":\"cosmoshub-4\",\"fee\":{\"amount\":[{\"amount\":\"5000\",\"denom\":\"uatom\"}],\"gas\":\"200000\"},\"memo\":\"\",\"msgs\":[{\"type\":\"cosmos-sdk/v1/MsgVote\",\"value\":{\"metadata\":\"for the community\",\"option\":1,\"proposal_id\":\"1000\",\"voter\":\"cosmos19rl4cm2hmr8afy4kldpxz3fka4jguq0auqdal4\"}}],\"sequence\":\"42\"}",
+  "signature": "bce1ee9fbf6ea50196f078fe49201d7fdb90cf90ab47c74783288cb57238b746216405e8fd4ee5b1ee7f6b42b66fcf87b11073713ab9286d2c5619def326c119",
+  "tx": null
+ },
+ {
+  "name": "ibc",
+  "chain": "cosmoshub-4",
+  "doc": "{\"account_number\":\"1234567\",\"chain_id\":\"cosmoshub-4\",\"fee\":{\"amount\":[{\"amount\":\"5000\",\"denom\":\"uatom\"}],\"gas\":\"200000\"},\"memo\":\"\",\"msgs\":[{\"type\":\"cosmos-sdk/MsgTransfer\",\"value\":{\"receiver\":\"osmo19rl4cm2hmr8afy4kldpxz3fka4jguq0a5m7df8\",\"sender\":\"cosmos19rl4cm2hmr8afy4kldpxz3fka4jguq0auqdal4\",\"source_channel\":\"channel-141\",\"source_port\":\"transfer\",\"timeout_height\":{},\"timeout_timestamp\":\"1790917200000000000\",\"token\":{\"amount\":\"1500000\",\"denom\":\"uatom\"}}}],\"sequence\":\"42\"}",
+  "signature": "7cdb0c2e1cc42f91cf04c7a660062ce83716411353b393d736d391f45ab08d173933ed4c7dd3579cf28db1c2c87d113b7efdfabe37293b93991f6007eb0a0542",
+  "tx": "0ac2010abf010a292f6962632e6170706c69636174696f6e732e7472616e736665722e76312e4d73675472616e736665721291010a087472616e73666572120b6368616e6e656c2d3134311a100a057561746f6d120731353030303030222d636f736d6f733139726c34636d32686d7238616679346b6c6470787a33666b61346a6775713061757164616c342a2b6f736d6f3139726c34636d32686d7238616679346b6c6470787a33666b61346a6775713061356d3764663832003880c08cc1c6b6a7ed1812670a500a460a1f2f636f736d6f732e63727970746f2e736563703235366b312e5075624b657912230a21024f4e2ad99c34d60b9ba6283c9431a8418af8673212961f97a77b6377fcd05b6212040a02087f182a12130a0d0a057561746f6d12043530303010c09a0c1a407cdb0c2e1cc42f91cf04c7a660062ce83716411353b393d736d391f45ab08d173933ed4c7dd3579cf28db1c2c87d113b7efdfabe37293b93991f6007eb0a0542"
+ },
+ {
+  "name": "ibc-height",
+  "chain": "cosmoshub-4",
+  "doc": "{\"account_number\":\"1234567\",\"chain_id\":\"cosmoshub-4\",\"fee\":{\"amount\":[{\"amount\":\"5000\",\"denom\":\"uatom\"}],\"gas\":\"200000\"},\"memo\":\"\",\"msgs\":[{\"type\":\"cosmos-sdk/MsgTransfer\",\"value\":{\"receiver\":\"osmo19rl4cm2hmr8afy4kldpxz3fka4jguq0a5m7df8\",\"sender\":\"cosmos19rl4cm2hmr8afy4kldpxz3fka4jguq0auqdal4\",\"source_channel\":\"channel-141\",\"source_port\":\"transfer\",\"timeout_height\":{\"revision_height\":\"72000000\",\"revision_number\":\"1\"},\"token\":{\"amount\":\"1500000\",\"denom\":\"uatom\"}}}],\"sequence\":\"42\"}",
+  "signature": "9e89098c2f0a4ad9eaf48e39ed9691df955116b613ada46ac3afbe000167f2ea014a6b39e32b68e483feecb16c673c555018fe7d578ddb2633513e3e3200e5f1",
+  "tx": null
+ },
+ {
+  "name": "ibc-both",
+  "chain": "cosmoshub-4",
+  "doc": "{\"account_number\":\"1234567\",\"chain_id\":\"cosmoshub-4\",\"fee\":{\"amount\":[{\"amount\":\"5000\",\"denom\":\"uatom\"}],\"gas\":\"200000\"},\"memo\":\"\",\"msgs\":[{\"type\":\"cosmos-sdk/MsgTransfer\",\"value\":{\"receiver\":\"osmo19rl4cm2hmr8afy4kldpxz3fka4jguq0a5m7df8\",\"sender\":\"cosmos19rl4cm2hmr8afy4kldpxz3fka4jguq0auqdal4\",\"source_channel\":\"channel-141\",\"source_port\":\"transfer\",\"timeout_height\":{\"revision_height\":\"72000000\",\"revision_number\":\"1\"},\"timeout_timestamp\":\"1790917200000000000\",\"token\":{\"amount\":\"1500000\",\"denom\":\"uatom\"}}}],\"sequence\":\"42\"}",
+  "signature": "c5963ddaa408075003f92595eba4f18ba54792238af030e31fe2d45aad9874f365f96642fbd21cfce49491a873023e03ce0da8bdd530d883cd1a638a6d3f71cd",
+  "tx": null
+ },
+ {
+  "name": "ibc-instructions",
+  "chain": "cosmoshub-4",
+  "doc": "{\"account_number\":\"1234567\",\"chain_id\":\"cosmoshub-4\",\"fee\":{\"amount\":[{\"amount\":\"5000\",\"denom\":\"uatom\"}],\"gas\":\"200000\"},\"memo\":\"\",\"msgs\":[{\"type\":\"cosmos-sdk/MsgTransfer\",\"value\":{\"memo\":\"{\\\"forward\\\":{\\\"receiver\\\":\\\"neutron1g975h6gdx5mryeac72h6lj2nzygugxhywepfj6\\\",\\\"port\\\":\\\"transfer\\\",\\\"channel\\\":\\\"channel-874\\\"}}\",\"receiver\":\"osmo19rl4cm2hmr8afy4kldpxz3fka4jguq0a5m7df8\",\"sender\":\"cosmos19rl4cm2hmr8afy4kldpxz3fka4jguq0auqdal4\",\"source_channel\":\"channel-141\",\"source_port\":\"transfer\",\"timeout_height\":{},\"timeout_timestamp\":\"1790917200000000000\",\"token\":{\"amount\":\"1500000\",\"denom\":\"uatom\"}}}],\"sequence\":\"42\"}",
+  "signature": "7304ef08283f8613faa513ce536da6e31917dcc4bd11b78a5926dc12a64173163dd15ab385f0933d7fb393ffb8ce55021bffa5cb2e7f5100d17c7af5132b5b1d",
+  "tx": null
+ },
+ {
+  "name": "ibc-memo",
+  "chain": "cosmoshub-4",
+  "doc": "{\"account_number\":\"1234567\",\"chain_id\":\"cosmoshub-4\",\"fee\":{\"amount\":[{\"amount\":\"5000\",\"denom\":\"uatom\"}],\"gas\":\"200000\"},\"memo\":\"\",\"msgs\":[{\"type\":\"cosmos-sdk/MsgTransfer\",\"value\":{\"memo\":\"deposit 1234\",\"receiver\":\"osmo19rl4cm2hmr8afy4kldpxz3fka4jguq0a5m7df8\",\"sender\":\"cosmos19rl4cm2hmr8afy4kldpxz3fka4jguq0auqdal4\",\"source_channel\":\"channel-141\",\"source_port\":\"transfer\",\"timeout_height\":{},\"timeout_timestamp\":\"1790917200000000000\",\"token\":{\"amount\":\"1500000\",\"denom\":\"uatom\"}}}],\"sequence\":\"42\"}",
+  "signature": "8e3d0a1f629cf5b5fcf004b322b0c8ac91cb9651bdeeebcf6e794c43bcf175e62b21dd2f6aacdac91efb8ff167fda9d8d3a70dec0a10968fd93227cf3872ca30",
+  "tx": null
+ },
+ {
+  "name": "ibc-unknown-channel",
+  "chain": "cosmoshub-4",
+  "doc": "{\"account_number\":\"1234567\",\"chain_id\":\"cosmoshub-4\",\"fee\":{\"amount\":[{\"amount\":\"5000\",\"denom\":\"uatom\"}],\"gas\":\"200000\"},\"memo\":\"\",\"msgs\":[{\"type\":\"cosmos-sdk/MsgTransfer\",\"value\":{\"receiver\":\"osmo19rl4cm2hmr8afy4kldpxz3fka4jguq0a5m7df8\",\"sender\":\"cosmos19rl4cm2hmr8afy4kldpxz3fka4jguq0auqdal4\",\"source_channel\":\"channel-9999\",\"source_port\":\"transfer\",\"timeout_height\":{},\"timeout_timestamp\":\"1790917200000000000\",\"token\":{\"amount\":\"1500000\",\"denom\":\"uatom\"}}}],\"sequence\":\"42\"}",
+  "signature": "9a508a41b9007695fa907018777c6acfe46ad2f5058ab2f54f5a1d2d0f84a59152e8f3e1f10468a96c3027d8a1f331723eb11c3686a89ac8a724d40d5657c9f8",
+  "tx": null
+ },
+ {
+  "name": "ibc-wrong-receiver",
+  "chain": "cosmoshub-4",
+  "doc": "{\"account_number\":\"1234567\",\"chain_id\":\"cosmoshub-4\",\"fee\":{\"amount\":[{\"amount\":\"5000\",\"denom\":\"uatom\"}],\"gas\":\"200000\"},\"memo\":\"\",\"msgs\":[{\"type\":\"cosmos-sdk/MsgTransfer\",\"value\":{\"receiver\":\"cosmos10xcqpzrky6eff2g52qdye53xkk9jxkvrpq6uqr\",\"sender\":\"cosmos19rl4cm2hmr8afy4kldpxz3fka4jguq0auqdal4\",\"source_channel\":\"channel-141\",\"source_port\":\"transfer\",\"timeout_height\":{},\"timeout_timestamp\":\"1790917200000000000\",\"token\":{\"amount\":\"1500000\",\"denom\":\"uatom\"}}}],\"sequence\":\"42\"}",
+  "signature": "e0ebb5a1149c3ee351fecc85e2728cd86880b81437b68fe7aed277b3b47210ee492a885071e33465f5de8fe763cb5f6909907db9965b3a8ab4177b7b8fc340a9",
+  "tx": null
+ },
+ {
+  "name": "revoke",
+  "chain": "cosmoshub-4",
+  "doc": "{\"account_number\":\"1234567\",\"chain_id\":\"cosmoshub-4\",\"fee\":{\"amount\":[{\"amount\":\"5000\",\"denom\":\"uatom\"}],\"gas\":\"200000\"},\"memo\":\"\",\"msgs\":[{\"type\":\"cosmos-sdk/MsgRevoke\",\"value\":{\"grantee\":\"cosmos13zxmh4ue370cp48c9d8eeek43qhnzzhv7fwl2v\",\"granter\":\"cosmos19rl4cm2hmr8afy4kldpxz3fka4jguq0auqdal4\",\"msg_type_url\":\"/cosmos.staking.v1beta1.MsgDelegate\"}}],\"sequence\":\"42\"}",
+  "signature": "b11d97bebd6f15eb024981f8b74724f50c12e08f14f23d723e188c65e1da6aef267b2fcab154fdd99e35ddbfb576227ba58eec67df7245adb102998d3c8af4f3",
+  "tx": null
+ },
+ {
+  "name": "revoke-allowance",
+  "chain": "cosmoshub-4",
+  "doc": "{\"account_number\":\"1234567\",\"chain_id\":\"cosmoshub-4\",\"fee\":{\"amount\":[{\"amount\":\"5000\",\"denom\":\"uatom\"}],\"gas\":\"200000\"},\"memo\":\"\",\"msgs\":[{\"type\":\"cosmos-sdk/MsgRevokeAllowance\",\"value\":{\"grantee\":\"cosmos13zxmh4ue370cp48c9d8eeek43qhnzzhv7fwl2v\",\"granter\":\"cosmos19rl4cm2hmr8afy4kldpxz3fka4jguq0auqdal4\"}}],\"sequence\":\"42\"}",
+  "signature": "7f6aeb8f625e74d449d142b2916969c667de9ee5cf77f71bb9baa21b00c0b48473a1bde138b294975e0083f91d26541db8b2d38b590c87a889cb3a9d110da55a",
+  "tx": null
+ },
+ {
+  "name": "fee-granter",
+  "chain": "cosmoshub-4",
+  "doc": "{\"account_number\":\"1234567\",\"chain_id\":\"cosmoshub-4\",\"fee\":{\"amount\":[{\"amount\":\"5000\",\"denom\":\"uatom\"}],\"gas\":\"200000\",\"granter\":\"cosmos13zxmh4ue370cp48c9d8eeek43qhnzzhv7fwl2v\"},\"memo\":\"\",\"msgs\":[{\"type\":\"cosmos-sdk/MsgSend\",\"value\":{\"amount\":[{\"amount\":\"1500000\",\"denom\":\"uatom\"}],\"from_address\":\"cosmos19rl4cm2hmr8afy4kldpxz3fka4jguq0auqdal4\",\"to_address\":\"cosmos10xcqpzrky6eff2g52qdye53xkk9jxkvrpq6uqr\"}}],\"sequence\":\"42\"}",
+  "signature": "be9a1b3b55faf04c2f283d24b8bbd5e8d6690d8d1c4ffcb1275fcf857c7e2853288f09ea7213c5f40ed736d44c95e51afd351a9b963fe87e9ee22df8a8ff532f",
+  "tx": "0a93010a90010a1c2f636f736d6f732e62616e6b2e763162657461312e4d736753656e6412700a2d636f736d6f733139726c34636d32686d7238616679346b6c6470787a33666b61346a6775713061757164616c34122d636f736d6f733130786371707a726b793665666632673532716479653533786b6b396a786b76727071367571721a100a057561746f6d1207313530303030301296010a500a460a1f2f636f736d6f732e63727970746f2e736563703235366b312e5075624b657912230a21024f4e2ad99c34d60b9ba6283c9431a8418af8673212961f97a77b6377fcd05b6212040a02087f182a12420a0d0a057561746f6d12043530303010c09a0c222d636f736d6f7331337a786d6834756533373063703438633964386565656b343371686e7a7a68763766776c32761a40be9a1b3b55faf04c2f283d24b8bbd5e8d6690d8d1c4ffcb1275fcf857c7e2853288f09ea7213c5f40ed736d44c95e51afd351a9b963fe87e9ee22df8a8ff532f"
+ },
+ {
+  "name": "fee-payer",
+  "chain": "cosmoshub-4",
+  "doc": "{\"account_number\":\"1234567\",\"chain_id\":\"cosmoshub-4\",\"fee\":{\"amount\":[{\"amount\":\"5000\",\"denom\":\"uatom\"}],\"gas\":\"200000\",\"payer\":\"cosmos13zxmh4ue370cp48c9d8eeek43qhnzzhv7fwl2v\"},\"memo\":\"\",\"msgs\":[{\"type\":\"cosmos-sdk/MsgSend\",\"value\":{\"amount\":[{\"amount\":\"1500000\",\"denom\":\"uatom\"}],\"from_address\":\"cosmos19rl4cm2hmr8afy4kldpxz3fka4jguq0auqdal4\",\"to_address\":\"cosmos10xcqpzrky6eff2g52qdye53xkk9jxkvrpq6uqr\"}}],\"sequence\":\"42\"}",
+  "signature": "70c5cf626100b5da81b02b0123c560e6b00866accae8365ffa743378088b6b2f22703616825326e39c9004a0c32bcc60bc28cedd6112d54ebc7ecfe30e218853",
+  "tx": "0a93010a90010a1c2f636f736d6f732e62616e6b2e763162657461312e4d736753656e6412700a2d636f736d6f733139726c34636d32686d7238616679346b6c6470787a33666b61346a6775713061757164616c34122d636f736d6f733130786371707a726b793665666632673532716479653533786b6b396a786b76727071367571721a100a057561746f6d1207313530303030301296010a500a460a1f2f636f736d6f732e63727970746f2e736563703235366b312e5075624b657912230a21024f4e2ad99c34d60b9ba6283c9431a8418af8673212961f97a77b6377fcd05b6212040a02087f182a12420a0d0a057561746f6d12043530303010c09a0c1a2d636f736d6f7331337a786d6834756533373063703438633964386565656b343371686e7a7a68763766776c32761a4070c5cf626100b5da81b02b0123c560e6b00866accae8365ffa743378088b6b2f22703616825326e39c9004a0c32bcc60bc28cedd6112d54ebc7ecfe30e218853"
+ },
+ {
+  "name": "no-fee",
+  "chain": "cosmoshub-4",
+  "doc": "{\"account_number\":\"1234567\",\"chain_id\":\"cosmoshub-4\",\"fee\":{\"amount\":[],\"gas\":\"200000\"},\"memo\":\"\",\"msgs\":[{\"type\":\"cosmos-sdk/MsgSend\",\"value\":{\"amount\":[{\"amount\":\"1500000\",\"denom\":\"uatom\"}],\"from_address\":\"cosmos19rl4cm2hmr8afy4kldpxz3fka4jguq0auqdal4\",\"to_address\":\"cosmos10xcqpzrky6eff2g52qdye53xkk9jxkvrpq6uqr\"}}],\"sequence\":\"42\"}",
+  "signature": "7829657c8b6a9f0dadc9d232bcdcdc5bd89187f115243c6005afa9a40fa29cd92e70b9959aec634537d659c312fdb06ca4487c23f084eb07a89efdf3c688134d",
+  "tx": null
+ },
+ {
+  "name": "fee-of-nothing",
+  "chain": "osmo-test-5",
+  "doc": "{\"account_number\":\"1234567\",\"chain_id\":\"osmo-test-5\",\"fee\":{\"amount\":[{\"amount\":\"0\",\"denom\":\"uosmo\"}],\"gas\":\"200000\"},\"memo\":\"\",\"msgs\":[{\"type\":\"cosmos-sdk/MsgSend\",\"value\":{\"amount\":[{\"amount\":\"1500000\",\"denom\":\"uosmo\"}],\"from_address\":\"osmo19rl4cm2hmr8afy4kldpxz3fka4jguq0a5m7df8\",\"to_address\":\"osmo10xcqpzrky6eff2g52qdye53xkk9jxkvrfmfvk3\"}}],\"sequence\":\"42\"}",
+  "signature": "b7708cd1f5a9c979001da865bed6cb1c37e815cc081c9b0c16ecd5dbe48d11736ca33d6e22f2a5530086d503655e2eae467bfd22f2ce1e8e993c53e5cc67f144",
+  "tx": null
+ },
+ {
+  "name": "valid-until",
+  "chain": "cosmoshub-4",
+  "doc": "{\"account_number\":\"1234567\",\"chain_id\":\"cosmoshub-4\",\"fee\":{\"amount\":[{\"amount\":\"5000\",\"denom\":\"uatom\"}],\"gas\":\"200000\"},\"memo\":\"\",\"msgs\":[{\"type\":\"cosmos-sdk/MsgSend\",\"value\":{\"amount\":[{\"amount\":\"1500000\",\"denom\":\"uatom\"}],\"from_address\":\"cosmos19rl4cm2hmr8afy4kldpxz3fka4jguq0auqdal4\",\"to_address\":\"cosmos10xcqpzrky6eff2g52qdye53xkk9jxkvrpq6uqr\"}}],\"sequence\":\"42\",\"timeout_height\":\"33300000\"}",
+  "signature": "e49cb46d44b82e2bc514a0f642dbcbd89742e11d6ae36a3364e2052e47621cf701495ebd8750f2e6befd51f573ac8246419487d198a74c6b7e71eeb0c3f63f1f",
+  "tx": "0a98010a90010a1c2f636f736d6f732e62616e6b2e763162657461312e4d736753656e6412700a2d636f736d6f733139726c34636d32686d7238616679346b6c6470787a33666b61346a6775713061757164616c34122d636f736d6f733130786371707a726b793665666632673532716479653533786b6b396a786b76727071367571721a100a057561746f6d12073135303030303018a0bcf00f12670a500a460a1f2f636f736d6f732e63727970746f2e736563703235366b312e5075624b657912230a21024f4e2ad99c34d60b9ba6283c9431a8418af8673212961f97a77b6377fcd05b6212040a02087f182a12130a0d0a057561746f6d12043530303010c09a0c1a40e49cb46d44b82e2bc514a0f642dbcbd89742e11d6ae36a3364e2052e47621cf701495ebd8750f2e6befd51f573ac8246419487d198a74c6b7e71eeb0c3f63f1f"
+ },
+ {
+  "name": "long-memo",
+  "chain": "cosmoshub-4",
+  "doc": "{\"account_number\":\"1234567\",\"chain_id\":\"cosmoshub-4\",\"fee\":{\"amount\":[{\"amount\":\"5000\",\"denom\":\"uatom\"}],\"gas\":\"200000\"},\"memo\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"msgs\":[{\"type\":\"cosmos-sdk/MsgSend\",\"value\":{\"amount\":[{\"amount\":\"1500000\",\"denom\":\"uatom\"}],\"from_address\":\"cosmos19rl4cm2hmr8afy4kldpxz3fka4jguq0auqdal4\",\"to_address\":\"cosmos10xcqpzrky6eff2g52qdye53xkk9jxkvrpq6uqr\"}}],\"sequence\":\"42\"}",
+  "signature": "e2ec2106ab40a7328f6fe401c4143881cb038b8b4215511cd9669f57df405cb62784ee5506ca12bc2bfd34f5fbc5ef2df9533544aba5ddfe3657678735e9d29f",
+  "tx": null
+ },
+ {
+  "name": "not-mine",
+  "chain": "cosmoshub-4",
+  "doc": "{\"account_number\":\"1234567\",\"chain_id\":\"cosmoshub-4\",\"fee\":{\"amount\":[{\"amount\":\"5000\",\"denom\":\"uatom\"}],\"gas\":\"200000\"},\"memo\":\"\",\"msgs\":[{\"type\":\"cosmos-sdk/MsgSend\",\"value\":{\"amount\":[{\"amount\":\"1500000\",\"denom\":\"uatom\"}],\"from_address\":\"cosmos1g975h6gdx5mryeac72h6lj2nzygugxhy2xgtga\",\"to_address\":\"cosmos10xcqpzrky6eff2g52qdye53xkk9jxkvrpq6uqr\"}}],\"sequence\":\"42\"}",
+  "signature": null,
+  "tx": null
+ },
+ {
+  "name": "grant",
+  "chain": "cosmoshub-4",
+  "doc": "{\"account_number\":\"1234567\",\"chain_id\":\"cosmoshub-4\",\"fee\":{\"amount\":[{\"amount\":\"5000\",\"denom\":\"uatom\"}],\"gas\":\"200000\"},\"memo\":\"\",\"msgs\":[{\"type\":\"cosmos-sdk/MsgGrant\",\"value\":{\"grant\":{\"authorization\":{\"type\":\"cosmos-sdk/GenericAuthorization\",\"value\":{\"msg\":\"/cosmos.bank.v1beta1.MsgSend\"}},\"expiration\":\"2027-10-02T00:00:00Z\"},\"grantee\":\"cosmos13zxmh4ue370cp48c9d8eeek43qhnzzhv7fwl2v\",\"granter\":\"cosmos19rl4cm2hmr8afy4kldpxz3fka4jguq0auqdal4\"}}],\"sequence\":\"42\"}",
+  "signature": "89a953a827c270825e02083a2e9134ed9b8965b049cb674475b8516e5086a4bc614998b6fa39c24d6af45aebe6d426e89ae5738fb9e48c6822de0168c3e41a18",
+  "tx": null
+ },
+ {
+  "name": "grant-allowance",
+  "chain": "cosmoshub-4",
+  "doc": "{\"account_number\":\"1234567\",\"chain_id\":\"cosmoshub-4\",\"fee\":{\"amount\":[{\"amount\":\"5000\",\"denom\":\"uatom\"}],\"gas\":\"200000\"},\"memo\":\"\",\"msgs\":[{\"type\":\"cosmos-sdk/MsgGrantAllowance\",\"value\":{\"allowance\":{\"type\":\"cosmos-sdk/BasicAllowance\",\"value\":{\"spend_limit\":[{\"amount\":\"1000000\",\"denom\":\"uatom\"}]}},\"grantee\":\"cosmos13zxmh4ue370cp48c9d8eeek43qhnzzhv7fwl2v\",\"granter\":\"cosmos19rl4cm2hmr8afy4kldpxz3fka4jguq0auqdal4\"}}],\"sequence\":\"42\"}",
+  "signature": "56ba96e93d24821573fdffa64aeff2557601917ba105e75e59c78c438e5e62cd3f7a725229a9732fde93fa69425be40910885b90f4f1b201c43e38776a0e6950",
+  "tx": null
+ },
+ {
+  "name": "unknown-chain",
+  "chain": "secret-4",
+  "doc": "{\"account_number\":\"1234567\",\"chain_id\":\"secret-4\",\"fee\":{\"amount\":[{\"amount\":\"5000\",\"denom\":\"uscrt\"}],\"gas\":\"200000\"},\"memo\":\"\",\"msgs\":[{\"type\":\"cosmos-sdk/MsgSend\",\"value\":{\"amount\":[{\"amount\":\"1500000\",\"denom\":\"uscrt\"}],\"from_address\":\"secret19rl4cm2hmr8afy4kldpxz3fka4jguq0a79e5zf\",\"to_address\":\"secret10xcqpzrky6eff2g52qdye53xkk9jxkvrr9w4al\"}}],\"sequence\":\"42\"}",
+  "signature": "4f78d446229a64a291136c8cf2ecabcfff120f5c221bc8f425fcf10bdefe9db97289fd8c44ce42662340f88525889837c0f4cb1d6ffdb864e4b3cc714845df55",
+  "tx": null
+ },
+ {
+  "name": "osmosis-atom",
+  "chain": "osmosis-1",
+  "doc": "{\"account_number\":\"1234567\",\"chain_id\":\"osmosis-1\",\"fee\":{\"amount\":[{\"amount\":\"20000\",\"denom\":\"uosmo\"}],\"gas\":\"200000\"},\"memo\":\"\",\"msgs\":[{\"type\":\"cosmos-sdk/MsgSend\",\"value\":{\"amount\":[{\"amount\":\"1500000\",\"denom\":\"ibc/27394FB092D2ECCD56123C74F36E4C1F926001CEADA9CA97EA622B25F41E5EB2\"}],\"from_address\":\"osmo19rl4cm2hmr8afy4kldpxz3fka4jguq0a5m7df8\",\"to_address\":\"osmo10xcqpzrky6eff2g52qdye53xkk9jxkvrfmfvk3\"}}],\"sequence\":\"42\"}",
+  "signature": "7857cd43c61247ce541f317d5dc0eac3c4346ddc392c943ad18d875154af2f165c3fb3a5f2303226673e0bf7264a94fd6ed8e8402bf98d4f45242a8060745f7d",
+  "tx": null
+ },
+ {
+  "name": "osmosis-usdc",
+  "chain": "osmosis-1",
+  "doc": "{\"account_number\":\"1234567\",\"chain_id\":\"osmosis-1\",\"fee\":{\"amount\":[{\"amount\":\"20000\",\"denom\":\"uosmo\"}],\"gas\":\"200000\"},\"memo\":\"\",\"msgs\":[{\"type\":\"cosmos-sdk/MsgSend\",\"value\":{\"amount\":[{\"amount\":\"25000000\",\"denom\":\"ibc/498A0751C798A0D9A389AA3691123DADA57DAA4FE165D5C75894505B876BA6E4\"}],\"from_address\":\"osmo19rl4cm2hmr8afy4kldpxz3fka4jguq0a5m7df8\",\"to_address\":\"osmo10xcqpzrky6eff2g52qdye53xkk9jxkvrfmfvk3\"}}],\"sequence\":\"42\"}",
+  "signature": "ba1e338fde357118121c97f05b24d25a282701cffa92050fd9e9b6c69a3e50677b251b17b434f38e0238e20af51ece65e5cfb4d998e5b740416a0ee8d0fc1e92",
+  "tx": null
+ },
+ {
+  "name": "osmosis-stray-atom",
+  "chain": "osmosis-1",
+  "doc": "{\"account_number\":\"1234567\",\"chain_id\":\"osmosis-1\",\"fee\":{\"amount\":[{\"amount\":\"20000\",\"denom\":\"uosmo\"}],\"gas\":\"200000\"},\"memo\":\"\",\"msgs\":[{\"type\":\"cosmos-sdk/MsgSend\",\"value\":{\"amount\":[{\"amount\":\"1500000\",\"denom\":\"ibc/0000000000000000000000000000000000000000000000000000000000000001\"}],\"from_address\":\"osmo19rl4cm2hmr8afy4kldpxz3fka4jguq0a5m7df8\",\"to_address\":\"osmo10xcqpzrky6eff2g52qdye53xkk9jxkvrfmfvk3\"}}],\"sequence\":\"42\"}",
+  "signature": "6bad0abbbd7558268c64e9f1e2ea06cf6f6a7bd911a5d9b27236b830140fdc4016921448bed44640289f0f1141278a64b185359568800ca7b3d669c89b94e18c",
+  "tx": null
+ },
+ {
+  "name": "osmosis-ibc-home",
+  "chain": "osmosis-1",
+  "doc": "{\"account_number\":\"1234567\",\"chain_id\":\"osmosis-1\",\"fee\":{\"amount\":[{\"amount\":\"20000\",\"denom\":\"uosmo\"}],\"gas\":\"200000\"},\"memo\":\"\",\"msgs\":[{\"type\":\"cosmos-sdk/MsgTransfer\",\"value\":{\"receiver\":\"cosmos19rl4cm2hmr8afy4kldpxz3fka4jguq0auqdal4\",\"sender\":\"osmo19rl4cm2hmr8afy4kldpxz3fka4jguq0a5m7df8\",\"source_channel\":\"channel-0\",\"source_port\":\"transfer\",\"timeout_height\":{},\"timeout_timestamp\":\"1790917200000000000\",\"token\":{\"amount\":\"1500000\",\"denom\":\"ibc/27394FB092D2ECCD56123C74F36E4C1F926001CEADA9CA97EA622B25F41E5EB2\"}}}],\"sequence\":\"42\"}",
+  "signature": "b269c1933e4f80adde47164a41bb488fa12b4be5a45eb90b85e824eac8eb721b189e01ea361673fb4cb4e19061f2890b623cf0660e71f704a380d4cc6e1739c1",
+  "tx": "0aff010afc010a292f6962632e6170706c69636174696f6e732e7472616e736665722e76312e4d73675472616e7366657212ce010a087472616e7366657212096368616e6e656c2d301a4f0a446962632f32373339344642303932443245434344353631323343373446333645344331463932363030314345414441394341393745413632324232354634314535454232120731353030303030222b6f736d6f3139726c34636d32686d7238616679346b6c6470787a33666b61346a6775713061356d376466382a2d636f736d6f733139726c34636d32686d7238616679346b6c6470787a33666b61346a6775713061757164616c3432003880c08cc1c6b6a7ed1812680a500a460a1f2f636f736d6f732e63727970746f2e736563703235366b312e5075624b657912230a21024f4e2ad99c34d60b9ba6283c9431a8418af8673212961f97a77b6377fcd05b6212040a02087f182a12140a0e0a05756f736d6f1205323030303010c09a0c1a40b269c1933e4f80adde47164a41bb488fa12b4be5a45eb90b85e824eac8eb721b189e01ea361673fb4cb4e19061f2890b623cf0660e71f704a380d4cc6e1739c1"
+ },
+ {
+  "name": "osmosis-swap",
+  "chain": "osmosis-1",
+  "doc": "{\"account_number\":\"1234567\",\"chain_id\":\"osmosis-1\",\"fee\":{\"amount\":[{\"amount\":\"20000\",\"denom\":\"uosmo\"}],\"gas\":\"200000\"},\"memo\":\"\",\"msgs\":[{\"type\":\"osmosis/poolmanager/swap-exact-amount-in\",\"value\":{\"routes\":[{\"pool_id\":\"1\",\"token_out_denom\":\"ibc/27394FB092D2ECCD56123C74F36E4C1F926001CEADA9CA97EA622B25F41E5EB2\"}],\"sender\":\"osmo19rl4cm2hmr8afy4kldpxz3fka4jguq0a5m7df8\",\"token_in\":{\"amount\":\"1000000\",\"denom\":\"uosmo\"},\"token_out_min_amount\":\"100000\"}}],\"sequence\":\"42\"}",
+  "signature": "ad761e4492cb8620f358850a924018ec2e787458c4b92f5c4e9ab4cf8e13127221af05393d5a9622ef8f0ffb061aa64f3d061b4c28d1103d6e97f2232eb53480",
+  "tx": null
+ },
+ {
+  "name": "osmosis-contract",
+  "chain": "osmosis-1",
+  "doc": "{\"account_number\":\"1234567\",\"chain_id\":\"osmosis-1\",\"fee\":{\"amount\":[{\"amount\":\"20000\",\"denom\":\"uosmo\"}],\"gas\":\"200000\"},\"memo\":\"\",\"msgs\":[{\"type\":\"wasm/MsgExecuteContract\",\"value\":{\"contract\":\"osmo1qurswpc8qurswpc8qurswpc8qurswpc8qurswpc8qurswpc8qurstc4vrk\",\"funds\":[{\"amount\":\"1000000\",\"denom\":\"uosmo\"}],\"msg\":{\"swap\":{\"min_out\":\"100\",\"route\":[1,2]}},\"sender\":\"osmo19rl4cm2hmr8afy4kldpxz3fka4jguq0a5m7df8\"}}],\"sequence\":\"42\"}",
+  "signature": "bafecbf24e46ecc21d57429e5134ad5810ce33731c6fb63627e57d0bbc21bc040f2bf068e8031aff7a349f895056d3e0c699868e179eb55ee8550d79bd281da4",
+  "tx": null
+ },
+ {
+  "name": "dydx-usdc-fee",
+  "chain": "dydx-mainnet-1",
+  "doc": "{\"account_number\":\"1234567\",\"chain_id\":\"dydx-mainnet-1\",\"fee\":{\"amount\":[{\"amount\":\"5000\",\"denom\":\"ibc/8E27BA2D5493AF5636760E354E46004562C46AB7EC0CC4C1CA14E9E20E2545B5\"}],\"gas\":\"200000\"},\"memo\":\"\",\"msgs\":[{\"type\":\"cosmos-sdk/MsgSend\",\"value\":{\"amount\":[{\"amount\":\"1500000000000000000\",\"denom\":\"adydx\"}],\"from_address\":\"dydx19rl4cm2hmr8afy4kldpxz3fka4jguq0a4erelz\",\"to_address\":\"dydx10xcqpzrky6eff2g52qdye53xkk9jxkvrge5cq5\"}}],\"sequence\":\"42\"}",
+  "signature": "ba62d619a217054f4d7096c95f6eb3f1a8861e4c4888b47df7f17eac2b6897e55d7c9cacbda24f05c3a09e18dd744d7525a3221ca4346547a1551a3d10d36971",
+  "tx": "0a9b010a98010a1c2f636f736d6f732e62616e6b2e763162657461312e4d736753656e6412780a2b647964783139726c34636d32686d7238616679346b6c6470787a33666b61346a6775713061346572656c7a122b647964783130786371707a726b793665666632673532716479653533786b6b396a786b76726765356371351a1c0a05616479647812133135303030303030303030303030303030303012a6010a500a460a1f2f636f736d6f732e63727970746f2e736563703235366b312e5075624b657912230a21024f4e2ad99c34d60b9ba6283c9431a8418af8673212961f97a77b6377fcd05b6212040a02087f182a12520a4c0a446962632f3845323742413244353439334146353633363736304533353445343630303435363243343641423745433043433443314341313445394532304532353435423512043530303010c09a0c1a40ba62d619a217054f4d7096c95f6eb3f1a8861e4c4888b47df7f17eac2b6897e55d7c9cacbda24f05c3a09e18dd744d7525a3221ca4346547a1551a3d10d36971"
+ },
+ {
+  "name": "send-hub",
+  "chain": "cosmoshub-4",
+  "doc": "{\"account_number\":\"1234567\",\"chain_id\":\"cosmoshub-4\",\"fee\":{\"amount\":[{\"amount\":\"5000\",\"denom\":\"uatom\"}],\"gas\":\"200000\"},\"memo\":\"\",\"msgs\":[{\"type\":\"cosmos-sdk/MsgSend\",\"value\":{\"amount\":[{\"amount\":\"1500000\",\"denom\":\"uatom\"}],\"from_address\":\"cosmos19rl4cm2hmr8afy4kldpxz3fka4jguq0auqdal4\",\"to_address\":\"cosmos10xcqpzrky6eff2g52qdye53xkk9jxkvrpq6uqr\"}}],\"sequence\":\"42\"}",
+  "signature": "f6f800d8d43412ff45b3bcd9781fd8d7eb212a159bd8ede232cf6b12d4d495f80e58ab663f1545a9927468e4f11fe024c5b0b26caea4cfad8d5810cc6fa3d811",
+  "tx": null
+ },
+ {
+  "name": "send-osmosis",
+  "chain": "osmosis-1",
+  "doc": "{\"account_number\":\"1234567\",\"chain_id\":\"osmosis-1\",\"fee\":{\"amount\":[{\"amount\":\"20000\",\"denom\":\"uosmo\"}],\"gas\":\"200000\"},\"memo\":\"\",\"msgs\":[{\"type\":\"cosmos-sdk/MsgSend\",\"value\":{\"amount\":[{\"amount\":\"1500000\",\"denom\":\"uosmo\"}],\"from_address\":\"osmo19rl4cm2hmr8afy4kldpxz3fka4jguq0a5m7df8\",\"to_address\":\"osmo10xcqpzrky6eff2g52qdye53xkk9jxkvrfmfvk3\"}}],\"sequence\":\"42\"}",
+  "signature": "243c09b6a9bb514d50e47e85ccda5b0aa227f0af8dc2f43d619222345b33257b07b145e88c3324e8f130cbafafc74d9675144ae9c8ac8fd8738515b93e31db9f",
+  "tx": null
+ },
+ {
+  "name": "send-celestia",
+  "chain": "celestia",
+  "doc": "{\"account_number\":\"1234567\",\"chain_id\":\"celestia\",\"fee\":{\"amount\":[{\"amount\":\"4000\",\"denom\":\"utia\"}],\"gas\":\"200000\"},\"memo\":\"\",\"msgs\":[{\"type\":\"cosmos-sdk/MsgSend\",\"value\":{\"amount\":[{\"amount\":\"1500000\",\"denom\":\"utia\"}],\"from_address\":\"celestia19rl4cm2hmr8afy4kldpxz3fka4jguq0ad2ud9c\",\"to_address\":\"celestia10xcqpzrky6eff2g52qdye53xkk9jxkvrs2tv6w\"}}],\"sequence\":\"42\"}",
+  "signature": "8414e27afdc99041e99be3410dbd1186f81a6e7d7164ba527103a77d4a8dbfff3cabc58691fa3484bc42b04c6a4861d54ce2da38989c56bca6fe435b56360c71",
+  "tx": null
+ },
+ {
+  "name": "send-dydx",
+  "chain": "dydx-mainnet-1",
+  "doc": "{\"account_number\":\"1234567\",\"chain_id\":\"dydx-mainnet-1\",\"fee\":{\"amount\":[{\"amount\":\"2500000000000000\",\"denom\":\"adydx\"}],\"gas\":\"200000\"},\"memo\":\"\",\"msgs\":[{\"type\":\"cosmos-sdk/MsgSend\",\"value\":{\"amount\":[{\"amount\":\"1500000000000000000\",\"denom\":\"adydx\"}],\"from_address\":\"dydx19rl4cm2hmr8afy4kldpxz3fka4jguq0a4erelz\",\"to_address\":\"dydx10xcqpzrky6eff2g52qdye53xkk9jxkvrge5cq5\"}}],\"sequence\":\"42\"}",
+  "signature": "95068624abf20eead77fd8a42a1ff05468e06e90fa844a5f72366535e6d2fa065b9cdd8959c9608aa1f8290f82406f53871f2f3bdab2dcd02612ebfa17063cf0",
+  "tx": null
+ },
+ {
+  "name": "send-neutron",
+  "chain": "neutron-1",
+  "doc": "{\"account_number\":\"1234567\",\"chain_id\":\"neutron-1\",\"fee\":{\"amount\":[{\"amount\":\"1060\",\"denom\":\"untrn\"}],\"gas\":\"200000\"},\"memo\":\"\",\"msgs\":[{\"type\":\"cosmos-sdk/MsgSend\",\"value\":{\"amount\":[{\"amount\":\"1500000\",\"denom\":\"untrn\"}],\"from_address\":\"neutron19rl4cm2hmr8afy4kldpxz3fka4jguq0aclyl9j\",\"to_address\":\"neutron10xcqpzrky6eff2g52qdye53xkk9jxkvr9ln76y\"}}],\"sequence\":\"42\"}",
+  "signature": "a96a197e3eecc2ba9223afeadf3d362dfa76f4fa2ca890b8506ba7b001b67e1a2fc249cfccf1f7db08c0414d7594a152c9fd4e03c2003024d996689639630b9e",
+  "tx": null
+ },
+ {
+  "name": "send-noble",
+  "chain": "noble-1",
+  "doc": "{\"account_number\":\"1234567\",\"chain_id\":\"noble-1\",\"fee\":{\"amount\":[{\"amount\":\"20000\",\"denom\":\"uusdc\"}],\"gas\":\"200000\"},\"memo\":\"\",\"msgs\":[{\"type\":\"cosmos-sdk/MsgSend\",\"value\":{\"amount\":[{\"amount\":\"1500000\",\"denom\":\"uusdc\"}],\"from_address\":\"noble19rl4cm2hmr8afy4kldpxz3fka4jguq0a5rc48m\",\"to_address\":\"noble10xcqpzrky6eff2g52qdye53xkk9jxkvrfr05cd\"}}],\"sequence\":\"42\"}",
+  "signature": "7b12606681c0055bc870efabc2d6bf2332f70bd1559d47d3e5376746e5d7334c2c5bcf0a6225f44cf937544f2b4aa7c8389d54409f8c67dc7e3caaf97df23379",
+  "tx": null
+ },
+ {
+  "name": "send-akash",
+  "chain": "akashnet-2",
+  "doc": "{\"account_number\":\"1234567\",\"chain_id\":\"akashnet-2\",\"fee\":{\"amount\":[{\"amount\":\"5000\",\"denom\":\"uakt\"}],\"gas\":\"200000\"},\"memo\":\"\",\"msgs\":[{\"type\":\"cosmos-sdk/MsgSend\",\"value\":{\"amount\":[{\"amount\":\"1500000\",\"denom\":\"uakt\"}],\"from_address\":\"akash19rl4cm2hmr8afy4kldpxz3fka4jguq0a3mq6x0\",\"to_address\":\"akash10xcqpzrky6eff2g52qdye53xkk9jxkvrvmhmee\"}}],\"sequence\":\"42\"}",
+  "signature": "a5753e194f8878eb863cc159c4a80d7b4d4a7b7005bea21aa474999aab8ea39726ff5d63aff7989bbc4c5485bf17f66b01cb5ca581ed8e4b33e1cdaba38485cd",
+  "tx": null
+ },
+ {
+  "name": "send-axelar",
+  "chain": "axelar-dojo-1",
+  "doc": "{\"account_number\":\"1234567\",\"chain_id\":\"axelar-dojo-1\",\"fee\":{\"amount\":[{\"amount\":\"1400\",\"denom\":\"uaxl\"}],\"gas\":\"200000\"},\"memo\":\"\",\"msgs\":[{\"type\":\"cosmos-sdk/MsgSend\",\"value\":{\"amount\":[{\"amount\":\"1500000\",\"denom\":\"uaxl\"}],\"from_address\":\"axelar19rl4cm2hmr8afy4kldpxz3fka4jguq0acwm455\",\"to_address\":\"axelar10xcqpzrky6eff2g52qdye53xkk9jxkvr9wv5tz\"}}],\"sequence\":\"42\"}",
+  "signature": "9e856418039dd9ac2e96381eeec2b2727698a16048484f5d211684b0c17c1fdb1cfbdf1acfc22ed192923d178ec23df1091e961999fe823811b83c2af9e74bc1",
+  "tx": null
+ },
+ {
+  "name": "send-babylon",
+  "chain": "bbn-1",
+  "doc": "{\"account_number\":\"1234567\",\"chain_id\":\"bbn-1\",\"fee\":{\"amount\":[{\"amount\":\"1400\",\"denom\":\"ubbn\"}],\"gas\":\"200000\"},\"memo\":\"\",\"msgs\":[{\"type\":\"cosmos-sdk/MsgSend\",\"value\":{\"amount\":[{\"amount\":\"1500000\",\"denom\":\"ubbn\"}],\"from_address\":\"bbn19rl4cm2hmr8afy4kldpxz3fka4jguq0at7uvqv\",\"to_address\":\"bbn10xcqpzrky6eff2g52qdye53xkk9jxkvrk7tdl6\"}}],\"sequence\":\"42\"}",
+  "signature": "651b001c6c10ed70833c70f75238668091c75b25faa70bbb8347f953148ae93853653379b7cd23186c106dbd349d8804a45563aa6d21243e57b35b20f3b64bec",
+  "tx": null
+ },
+ {
+  "name": "send-juno",
+  "chain": "juno-1",
+  "doc": "{\"account_number\":\"1234567\",\"chain_id\":\"juno-1\",\"fee\":{\"amount\":[{\"amount\":\"20000\",\"denom\":\"ujuno\"}],\"gas\":\"200000\"},\"memo\":\"\",\"msgs\":[{\"type\":\"cosmos-sdk/MsgSend\",\"value\":{\"amount\":[{\"amount\":\"1500000\",\"denom\":\"ujuno\"}],\"from_address\":\"juno19rl4cm2hmr8afy4kldpxz3fka4jguq0a2jwxcf\",\"to_address\":\"juno10xcqpzrky6eff2g52qdye53xkk9jxkvrhje88l\"}}],\"sequence\":\"42\"}",
+  "signature": "be0f2d8ed281f81599eead964713799e036e3097c35556cf30b6903990e6b8c7023408c76f015dba4dbd71c5df8acdd216a8d5ca1a833f96abe3df85c4223f6c",
+  "tx": null
+ },
+ {
+  "name": "send-hubtest",
+  "chain": "provider",
+  "doc": "{\"account_number\":\"1234567\",\"chain_id\":\"provider\",\"fee\":{\"amount\":[{\"amount\":\"4000\",\"denom\":\"uatom\"}],\"gas\":\"200000\"},\"memo\":\"\",\"msgs\":[{\"type\":\"cosmos-sdk/MsgSend\",\"value\":{\"amount\":[{\"amount\":\"1500000\",\"denom\":\"uatom\"}],\"from_address\":\"cosmos19rl4cm2hmr8afy4kldpxz3fka4jguq0auqdal4\",\"to_address\":\"cosmos10xcqpzrky6eff2g52qdye53xkk9jxkvrpq6uqr\"}}],\"sequence\":\"42\"}",
+  "signature": "9a03575ef672b85c858108f2322997f2d81448371d064448be8df675aec9a0266ba94d91dba102fc5276fca53604183ba843c1825fde5231fa2e0e082b5078f2",
+  "tx": null
+ },
+ {
+  "name": "send-osmotest",
+  "chain": "osmo-test-5",
+  "doc": "{\"account_number\":\"1234567\",\"chain_id\":\"osmo-test-5\",\"fee\":{\"amount\":[{\"amount\":\"5000\",\"denom\":\"uosmo\"}],\"gas\":\"200000\"},\"memo\":\"\",\"msgs\":[{\"type\":\"cosmos-sdk/MsgSend\",\"value\":{\"amount\":[{\"amount\":\"1500000\",\"denom\":\"uosmo\"}],\"from_address\":\"osmo19rl4cm2hmr8afy4kldpxz3fka4jguq0a5m7df8\",\"to_address\":\"osmo10xcqpzrky6eff2g52qdye53xkk9jxkvrfmfvk3\"}}],\"sequence\":\"42\"}",
+  "signature": "ee2eb8de87e305bc78b16dfbc7d546be2d804005ba5dc628e26197043524ff98323a4db9d72f43589a0475445f98b4a371c1a2e1f59ce4a209d33278caef59bc",
+  "tx": null
+ },
+ {
+  "name": "send-celestiatest",
+  "chain": "mocha-5",
+  "doc": "{\"account_number\":\"1234567\",\"chain_id\":\"mocha-5\",\"fee\":{\"amount\":[{\"amount\":\"4000\",\"denom\":\"utia\"}],\"gas\":\"200000\"},\"memo\":\"\",\"msgs\":[{\"type\":\"cosmos-sdk/MsgSend\",\"value\":{\"amount\":[{\"amount\":\"1500000\",\"denom\":\"utia\"}],\"from_address\":\"celestia19rl4cm2hmr8afy4kldpxz3fka4jguq0ad2ud9c\",\"to_address\":\"celestia10xcqpzrky6eff2g52qdye53xkk9jxkvrs2tv6w\"}}],\"sequence\":\"42\"}",
+  "signature": "fe3bb9e41e7e9cf9a55c4ca1447eda2e778ee5c05934f4d9898805542d076ace40cad5cdd000e4d76679d9acb8d22cf8c871d6c9f6a486305334952435fe8be4",
+  "tx": null
+ }
+]

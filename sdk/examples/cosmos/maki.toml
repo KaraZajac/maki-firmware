@@ -1,0 +1,17 @@
+id = "com.leviathan.maki.cosmos"
+name = "Cosmos"
+version = 1
+label = "1.0"
+api = 3
+storage = 0
+memory = 256
+backup = true
+icon = "icon.pbm"
+description = "Your Cosmos account, from maki's recovery phrase, as Keplr and Ledger make it: on the Cosmos Hub and the chains that share its keys, for maki desktop's wallet. Every payment, IBC transfer, stake, vote and fee is shown on maki before it signs; a grant letting another act for you isn't signed."
+
+[permissions]
+link = "So maki desktop can ask for your account, show you its address, and ask for signatures."
+wallet = "To sign the transactions you approve on maki's screen, and nothing else."
+
+[wallet]
+paths = ["m/44'/118'"]

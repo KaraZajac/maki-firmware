@@ -149,6 +149,7 @@ members = [
   "libs/maki-near",
   "libs/maki-ada",
   "libs/maki-sui",
+  "libs/maki-atom",
   "libs/maki-bundle",
   "libs/maki-store",
   "libs/maki-native",

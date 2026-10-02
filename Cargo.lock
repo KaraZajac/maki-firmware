@@ -5353,6 +5353,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "maki-atom"
+version = "0.1.0"
+dependencies = [
+ "k256",
+ "maki-hd",
+ "maki-seed",
+ "ripemd",
+ "serde_json",
+ "sha2 0.10.8",
+]
+
+[[package]]
 name = "maki-btc"
 version = "0.1.0"
 dependencies = [
@@ -5661,6 +5673,7 @@ dependencies = [
  "log",
  "maki-ada",
  "maki-apt",
+ "maki-atom",
  "maki-bundle",
  "maki-eth",
  "maki-hd",

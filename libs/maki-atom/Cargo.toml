@@ -1,0 +1,19 @@
+[package]
+name = "maki-atom"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "maki's Cosmos account: its addresses, and what it signs, read strictly and shown first"
+
+[dependencies]
+# what's signed (the SHA-256 of the sign doc), an address (the RIPEMD-160 of the key's SHA-256), and
+# an IBC token's denom (the SHA-256 of the path it came by)
+sha2 = { version = "0.10.8", default-features = false }
+ripemd = { version = "0.1", default-features = false }
+
+[dev-dependencies]
+maki-hd = { path = "../maki-hd", features = ["seed"] }
+maki-seed = { path = "../maki-seed" }
+# checks the signatures of transactions the chains took, over the sign docs maki reads
+k256 = { version = "0.13", default-features = false, features = ["ecdsa"] }
+serde_json = "1"
