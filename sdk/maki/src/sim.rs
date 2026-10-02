@@ -669,7 +669,12 @@ impl Platform for Sim {
     /// for it on a maki set up with that phrase. The session has held the path to the app's own.
     fn wallet(&mut self, op: u8, path: &[u32], digest: &[u8]) -> Result<Vec<u8>, i32> {
         let seed = self.test_seed();
-        let keys = maki_hd::seed::SeedKeys::from_seed(&seed).map_err(|_| maki_wasm::FAILED)?;
+        let mut keys = maki_hd::seed::SeedKeys::from_seed(&seed).map_err(|_| maki_wasm::FAILED)?;
+        // Cardano's keys from the test phrase's entropy (sixteen zeros), only when they're asked
+        // for: Icarus's PBKDF2 is slow
+        if matches!(op, maki_hd::op::CARDANO_PUBLIC | maki_hd::op::CARDANO_SIGN) {
+            keys.with_cardano(&[0; 16]);
+        }
         // no randomness in the simulator's Schnorr signatures: the same every run, for tests
         maki_hd::seed::answer(&keys, op, path, digest, &[0; 32]).map_err(|e| match e {
             maki_hd::Error::Path => maki_wasm::REFUSED,

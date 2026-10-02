@@ -150,7 +150,10 @@ impl Platform for Script {
             return Err(LOCKED);
         }
         r.wallet_calls.push((op, path.to_vec()));
-        let keys = maki_hd::seed::SeedKeys::from_seed(&test_seed()).unwrap();
+        let mut keys = maki_hd::seed::SeedKeys::from_seed(&test_seed()).unwrap();
+        if matches!(op, maki_hd::op::CARDANO_PUBLIC | maki_hd::op::CARDANO_SIGN) {
+            keys.with_cardano(&[0; 16]);
+        }
         // as maki's app host has maki-keys' answers
         maki_hd::seed::answer(&keys, op, path, digest, &[0; 32]).map_err(|e| match e {
             maki_hd::Error::Path => REFUSED,
@@ -869,6 +872,7 @@ fn gated_functions_need_their_permission() {
         ("wallet_monero_key_image", "(param i32 i32 i32 i32) (result i32)"),
         ("wallet_monero_sign", "(param i32 i32 i32 i32 i32 i32) (result i32)"),
         ("wallet_sign_ed25519", "(param i32 i32 i32 i32 i32) (result i32)"),
+        ("wallet_sign_cardano", "(param i32 i32 i32 i32 i32) (result i32)"),
     ];
     assert_eq!(signatures.len(), GATED.len());
     for (name, signature) in signatures {
@@ -1821,6 +1825,71 @@ fn ed25519_wallets_came_with_host_api_6() {
         "{err}"
     );
     admit(&manifest(6), &code).unwrap();
+}
+
+#[test]
+fn a_cardano_wallet_has_cardanos_keys_on_its_paths_alone() {
+    use ed25519_dalek::{Signature, Verifier, VerifyingKey};
+    use maki_bundle::{Curve, Permission};
+    let (mut s, record) = wallet_session_on(Curve::Bip32Ed25519, &["m/1852'/1815'"], &[Permission::Wallet]);
+    // the test phrase's first account, as cardano-serialization-lib makes it (Icarus): its public
+    // key and chain code, which give every address under it
+    let account = path("m/1852'/1815'/0'");
+    let public = s.wallet_public(&account, WALLET_CARDANO).unwrap();
+    let hex: String = public.iter().map(|b| format!("{b:02x}")).collect();
+    assert_eq!(
+        hex,
+        "beb7e770b3d0f1932b0a2f3a63285bf9ef7d3e461d55446d6a3911d8f0ee55c0b0e2df16538508046649d0e6d5b32969555a23f2f1ebf2db2819359b0d88bd16"
+    );
+    // not secp256k1's keys, Monero's or SLIP-10's; and nothing off its paths
+    for form in [WALLET_PUBLIC, WALLET_UNCOMPRESSED, WALLET_TAPROOT, WALLET_MONERO, WALLET_ED25519] {
+        assert_eq!(s.wallet_public(&account, form), Err(REFUSED), "{form}");
+    }
+    assert_eq!(s.wallet_public(&path("m/44'/1815'/0'"), WALLET_CARDANO), Err(REFUSED));
+    // a key below the account needn't be hardened: the first payment key's signature
+    let p = path("m/1852'/1815'/0'/0/0");
+    let key: [u8; 32] = s.wallet_public(&p, WALLET_CARDANO).unwrap()[..32].try_into().unwrap();
+    let message = [9u8; 32];
+    assert_eq!(s.wallet_sign_cardano(&p, &message), Err(REFUSED));
+    record.borrow_mut().answers.push_back(Answer::Yes);
+    assert_eq!(s.wallet_review("Sign?\x1eSend\x1f1 ADA", 1, 0), 0);
+    let sig = s.wallet_sign_cardano(&p, &message).unwrap();
+    VerifyingKey::from_bytes(&key).unwrap().verify(&message, &Signature::from_bytes(&sig)).unwrap();
+    assert_eq!(s.wallet_sign_cardano(&p, &message), Err(REFUSED));
+    assert_eq!(s.wallet_sign_ed25519(&p, &message), Err(REFUSED));
+    // and an Ed25519 wallet (SLIP-10), on the same paths, has no Cardano keys
+    let (mut s, _) = wallet_session_on(Curve::Ed25519, &["m/1852'/1815'"], &[Permission::Wallet]);
+    assert_eq!(s.wallet_public(&account, WALLET_CARDANO), Err(REFUSED));
+}
+
+#[test]
+fn cardano_wallets_came_with_host_api_11() {
+    let code = module(
+        r#"(module (import "maki" "wallet_sign_cardano" (func (param i32 i32 i32 i32 i32) (result i32))) (memory (export "memory") 1) (func (export "maki_main")))"#,
+    );
+    let manifest = |api: u16, curve| maki_bundle::Manifest {
+        id: "org.example.cardano".into(),
+        name: "Cardano".into(),
+        version: 1,
+        label: "1.0".into(),
+        kind: maki_bundle::Kind::Wasm,
+        api,
+        firmware: String::new(),
+        permissions: vec![(maki_bundle::Permission::Wallet, "to sign".into())],
+        storage_kib: 1,
+        memory_kib: 64,
+        backup: true,
+        description: String::new(),
+        wallet: Some(maki_bundle::Wallet { curve, paths: vec![path("m/1852'/1815'")] }),
+    };
+    let err = admit(&manifest(10, maki_bundle::Curve::Bip32Ed25519), &code).unwrap_err();
+    assert!(err.contains("Cardano's kind (BIP32-Ed25519), which came with host API 11"), "{err}");
+    let err = admit(&manifest(10, maki_bundle::Curve::Ed25519), &code).unwrap_err();
+    assert!(
+        err.contains("wallet_sign_cardano, which came with host API 11, and its manifest says 10"),
+        "{err}"
+    );
+    admit(&manifest(11, maki_bundle::Curve::Bip32Ed25519), &code).unwrap();
 }
 
 #[test]

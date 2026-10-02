@@ -153,7 +153,12 @@ impl Platform for Script {
         if self.0.borrow().locked {
             return Err(LOCKED);
         }
-        let keys = maki_hd::seed::SeedKeys::from_seed(&test_seed()).unwrap();
+        let mut keys = maki_hd::seed::SeedKeys::from_seed(&test_seed()).unwrap();
+        // Cardano's keys from the test phrase's entropy (sixteen zeros), only when they're asked
+        // for: Icarus's PBKDF2 is slow
+        if matches!(op, maki_hd::op::CARDANO_PUBLIC | maki_hd::op::CARDANO_SIGN) {
+            keys.with_cardano(&[0; 16]);
+        }
         // no randomness in Schnorr signatures: the same as maki-btc's fixtures
         maki_hd::seed::answer(&keys, op, path, digest, &[0; 32]).map_err(|e| match e {
             maki_hd::Error::Path => REFUSED,

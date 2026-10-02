@@ -1,6 +1,7 @@
-//! The keys themselves, from a BIP39 seed (BIP32 on secp256k1, and SLIP-10 on Ed25519): maki-keys',
-//! the fake maki's, the simulator's and tests'. Every signature is checked before it's returned:
-//! one a fault spoiled can give the key away.
+//! The keys themselves, from a BIP39 seed (BIP32 on secp256k1, and SLIP-10 on Ed25519), and
+//! Cardano's from the phrase's entropy (BIP32-Ed25519, Icarus): maki-keys', the fake maki's, the
+//! simulator's and tests'. Every signature is checked before it's returned: one a fault spoiled
+//! can give the key away.
 
 use alloc::vec::Vec;
 use core::cell::UnsafeCell;
@@ -199,6 +200,112 @@ impl Slip10 {
     }
 }
 
+/// A Cardano key: BIP32-Ed25519 (Khovratovich and Law's, the "V2" scheme Cardano's wallets use),
+/// an extended Ed25519 key (`kl`, the scalar, clamped as RFC 8032's are, and `kr`, which makes
+/// each signature's nonce) with a chain code. Its master key is Icarus's (CIP-3): PBKDF2 over the
+/// phrase's entropy, not BIP39's seed. Unlike SLIP-10's, its children needn't be hardened: an
+/// account's public key and chain code give every address under it.
+struct Icarus {
+    kl: [u8; 32],
+    kr: [u8; 32],
+    chain_code: [u8; 32],
+}
+
+impl Drop for Icarus {
+    fn drop(&mut self) {
+        self.kl.zeroize();
+        self.kr.zeroize();
+        self.chain_code.zeroize();
+    }
+}
+
+impl Icarus {
+    /// Icarus's master key (CIP-3): 96 bytes of PBKDF2-HMAC-SHA512, 4096 rounds, the phrase's
+    /// entropy the salt and its passphrase (none, on maki) the password; the scalar clamped.
+    fn master(entropy: &[u8]) -> Icarus {
+        let mut out = [0u8; 96];
+        pbkdf2::pbkdf2_hmac::<Sha512>(b"", entropy, 4096, &mut out);
+        out[0] &= 0b1111_1000;
+        out[31] &= 0b0001_1111;
+        out[31] |= 0b0100_0000;
+        let key = Icarus::from_parts(&out);
+        out.zeroize();
+        key
+    }
+
+    fn from_parts(b: &[u8; 96]) -> Icarus {
+        let mut k = Icarus { kl: [0; 32], kr: [0; 32], chain_code: [0; 32] };
+        k.kl.copy_from_slice(&b[..32]);
+        k.kr.copy_from_slice(&b[32..64]);
+        k.chain_code.copy_from_slice(&b[64..]);
+        k
+    }
+
+    fn scalar(&self) -> curve25519_dalek::Scalar { curve25519_dalek::Scalar::from_bytes_mod_order(self.kl) }
+
+    /// Its public key: the scalar times the base point (the scalar's full value; the point has
+    /// the group's order, so it's the same reduced).
+    fn public(&self) -> [u8; 32] {
+        curve25519_dalek::EdwardsPoint::mul_base(&self.scalar()).compress().to_bytes()
+    }
+
+    /// The child at `index` (hardened at or above `HARDENED`), V2's way: the scalar gains eight
+    /// times the first 28 bytes of an HMAC, the nonce key the last 32, as little-endian numbers.
+    fn child(&self, index: u32) -> Icarus {
+        let le = index.to_le_bytes();
+        let (mut z, mut i) = if index >= HARDENED {
+            (
+                hmac512(&self.chain_code, &[&[0x00], &self.kl, &self.kr, &le]),
+                hmac512(&self.chain_code, &[&[0x01], &self.kl, &self.kr, &le]),
+            )
+        } else {
+            let a = self.public();
+            (hmac512(&self.chain_code, &[&[0x02], &a, &le]), hmac512(&self.chain_code, &[&[0x03], &a, &le]))
+        };
+        let mut child = Icarus { kl: [0; 32], kr: [0; 32], chain_code: [0; 32] };
+        // kl + 8 * zl, zl the first 28 bytes
+        let mut carry = 0u16;
+        for n in 0..32 {
+            let add = if n < 28 { (z[n] as u16) << 3 } else { 0 };
+            let sum = self.kl[n] as u16 + add + carry;
+            child.kl[n] = sum as u8;
+            carry = sum >> 8;
+        }
+        // kr + zr, mod 2^256
+        let mut carry = 0u16;
+        for n in 0..32 {
+            let sum = self.kr[n] as u16 + z[32 + n] as u16 + carry;
+            child.kr[n] = sum as u8;
+            carry = sum >> 8;
+        }
+        child.chain_code.copy_from_slice(&i[32..]);
+        z.zeroize();
+        i.zeroize();
+        child
+    }
+
+    /// An Ed25519 signature with the extended key (RFC 8032's, but for where the key comes from):
+    /// the nonce from `kr` and the message, then S = r + H(R, A, M) times the scalar.
+    fn sign(&self, message: &[u8]) -> Result<[u8; 64], Error> {
+        use curve25519_dalek::{EdwardsPoint, Scalar};
+        let a = self.public();
+        let mut nonce: [u8; 64] = Sha512::new().chain_update(self.kr).chain_update(message).finalize().into();
+        let r = Scalar::from_bytes_mod_order_wide(&nonce);
+        nonce.zeroize();
+        let big_r = EdwardsPoint::mul_base(&r).compress().to_bytes();
+        let h: [u8; 64] =
+            Sha512::new().chain_update(big_r).chain_update(a).chain_update(message).finalize().into();
+        let s = r + Scalar::from_bytes_mod_order_wide(&h) * self.scalar();
+        let mut sig = [0u8; 64];
+        sig[..32].copy_from_slice(&big_r);
+        sig[32..].copy_from_slice(s.as_bytes());
+        // checked as any Ed25519 signature is, against the public key
+        let key = ed25519_dalek::VerifyingKey::from_bytes(&a).map_err(|_| Error::Key)?;
+        key.verify(message, &ed25519_dalek::Signature::from_bytes(&sig)).map_err(|_| Error::Key)?;
+        Ok(sig)
+    }
+}
+
 /// Keys derived before, by path (the most recent last), behind a spin lock: `Keys` are shared
 /// between threads, and this is `no_std`. Held only while a path is derived.
 struct Kept {
@@ -248,6 +355,9 @@ pub struct SeedKeys {
     master: Xpriv,
     /// SLIP-10's Ed25519 master key: an HMAC of the seed, as BIP32's is, under another name
     ed25519: Slip10,
+    /// Cardano's master key, from the phrase's entropy rather than its seed: made the first time
+    /// Cardano is asked for (`with_cardano`), since its PBKDF2 is twice the seed's
+    cardano: Option<Icarus>,
     kept: Kept,
     generators: Generators,
 }
@@ -257,12 +367,47 @@ impl SeedKeys {
         Ok(SeedKeys {
             master: Xpriv::master(seed)?,
             ed25519: Slip10::master(seed),
+            cardano: None,
             kept: Kept { busy: AtomicBool::new(false), keys: UnsafeCell::new(Vec::new()) },
             generators: Generators {
                 busy: AtomicBool::new(false),
                 generators: UnsafeCell::new(maki_xmr::bulletproof::Generators::new()),
             },
         })
+    }
+
+    /// Cardano's keys too, from the phrase's entropy (the same phrase as the seed's: the caller's
+    /// to see to). Until then `op::CARDANO_*` are `Error::Locked`.
+    pub fn with_cardano(&mut self, entropy: &[u8]) { self.cardano = Some(Icarus::master(entropy)); }
+
+    /// Whether Cardano's keys are made yet.
+    pub fn has_cardano(&self) -> bool { self.cardano.is_some() }
+
+    /// The Cardano key at `path`, under `m/1852'/1815'/account'` alone.
+    fn cardano_key(&self, path: &[u32]) -> Result<Icarus, Error> {
+        if path.len() > MAX_DEPTH || !crate::cardano_path(path) {
+            return Err(Error::Path);
+        }
+        let master = self.cardano.as_ref().ok_or(Error::Locked)?;
+        let mut key = master.child(path[0]);
+        for &i in &path[1..] {
+            key = key.child(i);
+        }
+        Ok(key)
+    }
+
+    /// A Cardano key's public key and chain code (`op::CARDANO_PUBLIC`).
+    pub fn cardano_public(&self, path: &[u32]) -> Result<[u8; 64], Error> {
+        let key = self.cardano_key(path)?;
+        let mut out = [0u8; 64];
+        out[..32].copy_from_slice(&key.public());
+        out[32..].copy_from_slice(&key.chain_code);
+        Ok(out)
+    }
+
+    /// An Ed25519 signature over the whole of `message` with the Cardano key at `path`.
+    pub fn sign_cardano(&self, path: &[u32], message: &[u8]) -> Result<[u8; 64], Error> {
+        self.cardano_key(path)?.sign(message)
     }
 
     /// The key at `path`, from the deepest key kept on the way to it.
@@ -503,6 +648,8 @@ pub fn answer(
         }
         op::ED25519_PUBLIC => keys.ed25519_public(path)?.to_vec(),
         op::ED25519_SIGN => keys.sign_ed25519(path, asked)?.to_vec(),
+        op::CARDANO_PUBLIC => keys.cardano_public(path)?.to_vec(),
+        op::CARDANO_SIGN => keys.sign_cardano(path, asked)?.to_vec(),
         op::MONERO_SIGN => {
             let account = keys.monero(path)?;
             let signed = maki_xmr::request::Request::parse(asked)

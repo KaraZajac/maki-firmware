@@ -28,8 +28,13 @@ use wasmi::{
 const MAX_TABLE_ELEMENTS: usize = 10_000;
 
 /// The functions this host offers apps. 10 adds `key_chord`: a key pressed with Ctrl, Alt or the
-/// Command/Windows key held, not Shift alone (the keyboard permission).
-pub const API_VERSION: u16 = 10;
+/// Command/Windows key held, not Shift alone (the keyboard permission). 11 adds Cardano's keys:
+/// BIP32-Ed25519 wallets (`WALLET_CARDANO`, `wallet_sign_cardano`).
+pub const API_VERSION: u16 = 11;
+
+/// Host API 11: a wallet on BIP32-Ed25519 (Cardano's, `Curve::Bip32Ed25519`) says this API or
+/// later, so an older maki refuses it for its API, with a reason, before its curve.
+pub const API_CARDANO: u16 = 11;
 
 /// Host API 8: the jog dial on maki's side, up and down (`Event::Up`, `Event::Down`). Only an app
 /// that says this API or later gets them: an older one would read them as a timeout. The API also
@@ -68,6 +73,7 @@ pub const SINCE: &[(&str, u16)] = &[
     ("screen_dark", 8),
     ("text_scaled", 9),
     ("key_chord", 10),
+    ("wallet_sign_cardano", 11),
 ];
 
 /// Keys an app may press beyond text (`key_press`, the keyboard permission), as USB HID usage IDs:
@@ -160,6 +166,10 @@ pub const MAX_MONERO_REQUEST: usize = 64 * 1024;
 /// the path hardened), as Solana's wallets derive them; `wallet_sign_ed25519` signs with it, over
 /// a whole message of up to `MAX_SIGN` bytes (Ed25519 hashes what it signs itself).
 pub const WALLET_ED25519: u8 = maki_hd::op::ED25519_PUBLIC;
+/// Host API 11: a Cardano key's public key and chain code (64 bytes), from `wallet_public`, by
+/// BIP32-Ed25519 from the phrase's entropy (Icarus), under `m/1852'/1815'` alone;
+/// `wallet_sign_cardano` signs with it, over a whole message of up to `MAX_SIGN` bytes.
+pub const WALLET_CARDANO: u8 = maki_hd::op::CARDANO_PUBLIC;
 /// A review's text, pages, and each page's parts, in bytes. A page's text runs on over as many
 /// screens as it takes ("Message (2)"): a message to sign can be 4 KiB, and a transaction 64
 /// payments, their change and the fee.
@@ -205,6 +215,7 @@ pub const GATED: &[(&str, Permission)] = &[
     ("wallet_monero_key_image", Permission::Wallet),
     ("wallet_monero_sign", Permission::Wallet),
     ("wallet_sign_ed25519", Permission::Wallet),
+    ("wallet_sign_cardano", Permission::Wallet),
 ];
 
 /// What `wait` hands the app.
@@ -522,6 +533,14 @@ fn prepare(manifest: &Manifest, code: &[u8], mode: CompilationMode) -> Result<Lo
     if manifest.api > API_VERSION {
         return Err(format!(
             "it needs a newer maki (host API {}; this maki has {API_VERSION})",
+            manifest.api
+        ));
+    }
+    if manifest.wallet.as_ref().is_some_and(|w| w.curve == maki_bundle::Curve::Bip32Ed25519)
+        && manifest.api < API_CARDANO
+    {
+        return Err(format!(
+            "its wallet is Cardano's kind (BIP32-Ed25519), which came with host API {API_CARDANO}, and its manifest says {}",
             manifest.api
         ));
     }
@@ -1224,6 +1243,28 @@ fn link(linker: &mut Linker<State>) -> Result<(), Error> {
             let message = read(&c, mptr, mlen, MAX_SIGN, "wallet_sign_ed25519")?;
             match c.data_mut().session.wallet_sign_ed25519(&path, &message) {
                 Ok(sig) => write(&mut c, out, &sig, "wallet_sign_ed25519").map(|_| 0),
+                Err(code) => Ok(code),
+            }
+        },
+    )?;
+    linker.func_wrap(
+        M,
+        "wallet_sign_cardano",
+        |mut c: Caller<'_, State>,
+         pptr: i32,
+         plen: i32,
+         mptr: i32,
+         mlen: i32,
+         out: i32|
+         -> Result<i32, Error> {
+            permitted(&c, Permission::Wallet, "wallet_sign_cardano")?;
+            let Some(path) = read_path(&c, pptr, plen, "wallet_sign_cardano")? else { return Ok(INVALID) };
+            if mlen as u32 as usize > MAX_SIGN {
+                return Ok(TOO_BIG);
+            }
+            let message = read(&c, mptr, mlen, MAX_SIGN, "wallet_sign_cardano")?;
+            match c.data_mut().session.wallet_sign_cardano(&path, &message) {
+                Ok(sig) => write(&mut c, out, &sig, "wallet_sign_cardano").map(|_| 0),
                 Err(code) => Ok(code),
             }
         },

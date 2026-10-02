@@ -298,7 +298,8 @@ impl Session {
     }
 
     /// Whether the wallet permission's paths let the app use `path`, on its curve: a
-    /// secp256k1 wallet's keys (and Monero's, made from them), or an Ed25519 wallet's.
+    /// secp256k1 wallet's keys (and Monero's, made from them), an Ed25519 wallet's, or a
+    /// BIP32-Ed25519 (Cardano) wallet's.
     fn wallet_path(&self, path: &[u32], curve: Curve) -> Result<(), i32> {
         match &self.wallet {
             Some(w) if w.curve == curve && path.len() <= maki_hd::MAX_DEPTH && w.allows(path) => Ok(()),
@@ -319,11 +320,21 @@ impl Session {
         self.needs(Permission::Wallet)?;
         if !matches!(
             form,
-            WALLET_PUBLIC | WALLET_UNCOMPRESSED | WALLET_TAPROOT | WALLET_MONERO | WALLET_ED25519
+            WALLET_PUBLIC
+                | WALLET_UNCOMPRESSED
+                | WALLET_TAPROOT
+                | WALLET_MONERO
+                | WALLET_ED25519
+                | WALLET_CARDANO
         ) {
             return Err(INVALID);
         }
-        self.wallet_path(path, if form == WALLET_ED25519 { Curve::Ed25519 } else { Curve::Secp256k1 })?;
+        let curve = match form {
+            WALLET_ED25519 => Curve::Ed25519,
+            WALLET_CARDANO => Curve::Bip32Ed25519,
+            _ => Curve::Secp256k1,
+        };
+        self.wallet_path(path, curve)?;
         self.platform.wallet(form, path, &[])
     }
 
@@ -449,6 +460,20 @@ impl Session {
         self.wallet_path(path, Curve::Ed25519)?;
         self.allowed(1)?;
         self.platform.wallet(maki_hd::op::ED25519_SIGN, path, message)?.try_into().map_err(|_| FAILED)
+    }
+
+    /// The wallet permission (host API 11): an Ed25519 signature over the whole of `message`
+    /// with the Cardano key at `path` (one of its own, BIP32-Ed25519 from the phrase's entropy:
+    /// a transaction body's hash, as Cardano signs it), if the owner's last yes to a review allows
+    /// one more.
+    pub fn wallet_sign_cardano(&mut self, path: &[u32], message: &[u8]) -> Result<[u8; 64], i32> {
+        self.needs(Permission::Wallet)?;
+        if message.len() > MAX_SIGN {
+            return Err(TOO_BIG);
+        }
+        self.wallet_path(path, Curve::Bip32Ed25519)?;
+        self.allowed(1)?;
+        self.platform.wallet(maki_hd::op::CARDANO_SIGN, path, message)?.try_into().map_err(|_| FAILED)
     }
 
     /// The keyboard permission: printable ASCII, newlines and tabs.

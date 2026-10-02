@@ -5380,13 +5380,16 @@ name = "maki-hd"
 version = "0.1.0"
 dependencies = [
  "bitcoin",
+ "curve25519-dalek-bao1x",
  "ed25519-dalek-compat",
  "hmac 0.12.1",
  "k256",
  "maki-hd",
  "maki-seed",
  "maki-xmr",
+ "pbkdf2",
  "ripemd",
+ "serde_json",
  "sha2 0.10.8",
  "sha3 0.10.8",
  "zeroize",

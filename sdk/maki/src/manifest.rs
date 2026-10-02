@@ -136,9 +136,10 @@ fn wallet(path: &Path, w: WalletToml) -> Result<Wallet, String> {
     let curve = match w.curve.as_str() {
         "secp256k1" => Curve::Secp256k1,
         "ed25519" => Curve::Ed25519,
+        "bip32-ed25519" => Curve::Bip32Ed25519,
         other => {
             return Err(format!(
-                "{}: [wallet] curve \"{other}\": maki's wallets are secp256k1 or ed25519",
+                "{}: [wallet] curve \"{other}\": maki's wallets are secp256k1, ed25519 or bip32-ed25519",
                 path.display()
             ));
         }

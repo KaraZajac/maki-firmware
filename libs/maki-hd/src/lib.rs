@@ -1,7 +1,8 @@
 //! Keys for maki's wallet apps (ARCHITECTURE.md, "Wallets are apps"): BIP32 from the recovery
 //! phrase's seed, on the derivation paths a wallet uses, and the two signatures wallets need,
 //! ECDSA (with its recovery ID, for Ethereum) and BIP340 Schnorr (tweaked the BIP86 way for a
-//! taproot key spend). And Ed25519 keys by SLIP-10, for Solana, through `op` alone.
+//! taproot key spend). And Ed25519 keys by SLIP-10, for Solana, and Cardano's (BIP32-Ed25519 from
+//! the phrase's entropy, Icarus), through `op` alone.
 //!
 //! `Keys` is all a wallet's code sees. maki-keys implements it from the seed (the `seed`
 //! feature), and so do the fake maki, the simulator and tests; an app implements it with calls
@@ -137,6 +138,25 @@ pub mod op {
     /// reads: a phrase of its own for another wallet, made from maki's, for maki to show its
     /// owner itself: never an app's.
     pub const BIP85_WORDS: u8 = 15;
+    /// A Cardano key (BIP32-Ed25519 from the phrase's entropy, Icarus, as Cardano's wallets make
+    /// it: CIP-3, CIP-1852; Cardano's coin type alone): its public key and its chain code (64
+    /// bytes), from which the keys below it that aren't hardened can be worked out, as Cardano's
+    /// wallets work out an account's addresses.
+    pub const CARDANO_PUBLIC: u8 = 16;
+    /// An Ed25519 signature with that key (64 bytes, which any Ed25519 verifier takes). The digest
+    /// is the whole message: a transaction body's hash, as Cardano signs it.
+    pub const CARDANO_SIGN: u8 = 17;
+}
+
+/// CIP-1852's purpose: Cardano's keys since Shelley are at `m/1852'/1815'/account'/role/index`.
+pub const CIP1852: u32 = 1852 | HARDENED;
+/// Cardano's coin type (SLIP-44).
+pub const CARDANO: u32 = 1815 | HARDENED;
+
+/// Whether `path` is one of Cardano's: under `m/1852'/1815'/account'`. The keys there are
+/// Cardano's own kind (BIP32-Ed25519), made for no other coin.
+pub fn cardano_path(path: &[u32]) -> bool {
+    path.len() >= 3 && path[0] == CIP1852 && path[1] == CARDANO && path[2] >= HARDENED
 }
 
 /// The words maki shows its owner for a wallet's backup, from the path's own kind: a BIP-85

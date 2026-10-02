@@ -206,6 +206,9 @@ pub enum Curve {
     Secp256k1 = 1,
     /// SLIP-10 on Ed25519, every step hardened: Solana's (host API 6).
     Ed25519 = 2,
+    /// BIP32-Ed25519 from the phrase's entropy (Icarus, CIP-3), whose children needn't be
+    /// hardened: Cardano's (host API 11), under `m/1852'/1815'` alone.
+    Bip32Ed25519 = 3,
 }
 
 /// What a wallet app may use: paths on a curve, each a purpose and a coin type at least, both
@@ -541,6 +544,7 @@ fn wallet_field(v: &[u8]) -> Result<Wallet, Error> {
     let curve = match r.u8()? {
         1 => Curve::Secp256k1,
         2 => Curve::Ed25519,
+        3 => Curve::Bip32Ed25519,
         _ => return Err(Error::Manifest("a wallet curve this maki doesn't know")),
     };
     let n = r.u8()? as usize;

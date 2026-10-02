@@ -1264,6 +1264,19 @@ fn main() -> ! {
                             s.zeroize();
                         }
                     }
+                    // Cardano's keys come from the phrase's entropy, not its seed (Icarus): made
+                    // the first time they're asked for, and kept with the others until Lock
+                    if matches!(req.op, WALLET_CARDANO_PUBLIC | WALLET_CARDANO_SIGN) {
+                        if let (Some(keys), Some(lock)) = (
+                            wallet.as_mut().filter(|k| !k.has_cardano()),
+                            store.lock().filter(|_| state == State::Unlocked),
+                        ) {
+                            if let Some(mut entropy) = store.entropy(&lock.basis) {
+                                keys.with_cardano(&entropy);
+                                entropy.zeroize();
+                            }
+                        }
+                    }
                     match &wallet {
                         None if state == State::Unlocked => RESULT_NO_PHRASE,
                         None => RESULT_NOT_NOW,

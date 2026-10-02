@@ -141,6 +141,14 @@ mod sys {
             mlen: usize,
             out: *mut u8,
         ) -> i32;
+        #[cfg(feature = "wallet")]
+        pub fn wallet_sign_cardano(
+            pptr: *const u32,
+            plen: usize,
+            mptr: *const u8,
+            mlen: usize,
+            out: *mut u8,
+        ) -> i32;
     }
 }
 
@@ -1019,6 +1027,7 @@ pub mod wallet {
     const SIGN_TAPROOT: i32 = maki_hd::op::SIGN_TAPROOT as i32;
     const MONERO: i32 = maki_hd::op::MONERO_PUBLIC as i32;
     const ED25519: i32 = maki_hd::op::ED25519_PUBLIC as i32;
+    const CARDANO: i32 = maki_hd::op::CARDANO_PUBLIC as i32;
 
     /// The master key's fingerprint, as descriptors and PSBTs name the seed.
     pub fn fingerprint() -> Result<[u8; 4], Error> {
@@ -1157,6 +1166,29 @@ pub mod wallet {
         let mut out = [0u8; 64];
         result(unsafe {
             sys::wallet_sign_ed25519(
+                path.as_ptr(),
+                path.len(),
+                message.as_ptr(),
+                message.len(),
+                out.as_mut_ptr(),
+            )
+        })?;
+        Ok(out)
+    }
+
+    /// A Cardano key (host API 11): its public key and chain code (64 bytes), by BIP32-Ed25519 from
+    /// the phrase's entropy (Icarus), as Eternl, Lace and Yoroi make them, at `path` under
+    /// `m/1852'/1815'/account'` (the manifest's `curve = "bip32-ed25519"`). An account's gives the
+    /// computer every address under it: the keys below an account needn't be hardened.
+    pub fn cardano_public(path: &[u32]) -> Result<[u8; 64], Error> { public_form(path, CARDANO) }
+
+    /// An Ed25519 signature with the Cardano key at `path`, over the whole of `message`, up to 16
+    /// KiB (host API 11): a transaction body's hash, as Cardano signs it. Any Ed25519 verifier takes
+    /// it; checked by maki before it's returned, and one of what the owner's last yes allows.
+    pub fn sign_cardano(path: &[u32], message: &[u8]) -> Result<[u8; 64], Error> {
+        let mut out = [0u8; 64];
+        result(unsafe {
+            sys::wallet_sign_cardano(
                 path.as_ptr(),
                 path.len(),
                 message.as_ptr(),

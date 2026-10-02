@@ -158,6 +158,11 @@ pub const WALLET_MONERO_SIGN: u8 = 12;
 pub const WALLET_ED25519_PUBLIC: u8 = 13;
 /// An Ed25519 signature; `digest` is the whole message, up to 16 KiB.
 pub const WALLET_ED25519_SIGN: u8 = 14;
+/// A Cardano key's public key and chain code (BIP32-Ed25519 from the phrase's entropy, Icarus),
+/// under `m/1852'/1815'` alone (`maki_hd::op::CARDANO_PUBLIC`).
+pub const WALLET_CARDANO_PUBLIC: u8 = 16;
+/// An Ed25519 signature with a Cardano key; `digest` is the whole message, up to 16 KiB.
+pub const WALLET_CARDANO_SIGN: u8 = 17;
 /// A BIP-85 child seed's words (`maki_hd::child_seed`), for the app host to have maki show its
 /// owner: never an app.
 pub const WALLET_BIP85_WORDS: u8 = 15;

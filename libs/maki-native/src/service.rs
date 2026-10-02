@@ -98,6 +98,9 @@ pub const WALLET_SIGN_ED25519: usize = 41;
 /// Host API 7's `ask_review` (the ask permission), likewise: the timeout (i32) and the review's
 /// text; its status is the answer.
 pub const ASK_REVIEW: usize = 42;
+/// Host API 11's, as `WALLET_SIGN_ED25519`'s: the message's length (u32), the message and the path,
+/// and a Cardano key's Ed25519 signature (64 bytes).
+pub const WALLET_SIGN_CARDANO: usize = 43;
 // a plain scalar
 pub const EXIT: usize = 30;
 /// maki's own, from the app host to itself: look at what's waiting (the owner left the app, or

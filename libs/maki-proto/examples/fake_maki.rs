@@ -144,13 +144,22 @@ type Inbox = std::sync::mpsc::Sender<(Vec<u8>, ReplyTo)>;
 /// How long an app started for a message runs with nothing to do, as on maki.
 const APP_IDLE: Duration = Duration::from_secs(30);
 
+/// The phrase's secrets: its seed, and its entropy (up to 32 bytes; `len` of them), which
+/// Cardano's keys come from (Icarus) where everything else comes from the seed.
+#[derive(Clone, Copy)]
+struct Secrets {
+    seed: [u8; 64],
+    entropy: [u8; 32],
+    len: usize,
+}
+
 /// What a running app has instead of maki's app host: messages from the computer, asks answered
 /// by the fake's policy, keys from its phrase, and storage in memory. No screen.
 struct FakeApp {
     id: String,
     name: String,
     developer: [u8; 32],
-    seed: [u8; 64],
+    secrets: Secrets,
     policy: Policy,
     inbox: std::sync::mpsc::Receiver<(Vec<u8>, ReplyTo)>,
     current: Option<(Vec<u8>, ReplyTo)>,
@@ -254,7 +263,10 @@ impl maki_wasm::Platform for FakeApp {
     /// can hold them to the fixtures' (maki adds fresh randomness, as BIP340 advises).
     fn wallet(&mut self, op: u8, path: &[u32], digest: &[u8]) -> Result<Vec<u8>, i32> {
         if self.keys.is_none() {
-            self.keys = Some(maki_hd::seed::SeedKeys::from_seed(&self.seed).map_err(|_| maki_wasm::FAILED)?);
+            let mut keys =
+                maki_hd::seed::SeedKeys::from_seed(&self.secrets.seed).map_err(|_| maki_wasm::FAILED)?;
+            keys.with_cardano(&self.secrets.entropy[..self.secrets.len]);
+            self.keys = Some(keys);
         }
         maki_hd::seed::answer(self.keys.as_ref().unwrap(), op, path, digest, &[0; 32]).map_err(|e| match e {
             maki_hd::Error::Path => maki_wasm::REFUSED,
@@ -266,7 +278,8 @@ impl maki_wasm::Platform for FakeApp {
     /// and doesn't print them: its phrase can be someone's). The app hears only the answer.
     fn show_backup(&mut self, path: &[u32]) -> Result<maki_wasm::Answer, i32> {
         if self.keys.is_none() {
-            self.keys = Some(maki_hd::seed::SeedKeys::from_seed(&self.seed).map_err(|_| maki_wasm::FAILED)?);
+            self.keys =
+                Some(maki_hd::seed::SeedKeys::from_seed(&self.secrets.seed).map_err(|_| maki_wasm::FAILED)?);
         }
         let words =
             maki_hd::seed::answer(self.keys.as_ref().unwrap(), maki_hd::words_op(path), path, &[], &[0; 32])
@@ -285,7 +298,7 @@ impl maki_wasm::Platform for FakeApp {
     }
 
     fn app_secret(&mut self, label: &str) -> Option<[u8; 32]> {
-        maki_seed::app_secret(&self.seed, &self.id, &self.developer, label)
+        maki_seed::app_secret(&self.secrets.seed, &self.id, &self.developer, label)
     }
 
     fn type_text(&mut self, text: &str) -> bool {
@@ -312,7 +325,7 @@ fn app_message(
     message: Vec<u8>,
     store: &Arc<Mutex<Store>>,
     running: &Arc<Mutex<std::collections::BTreeMap<String, Inbox>>>,
-    seed: [u8; 64],
+    secrets: Secrets,
     policy: Policy,
 ) -> (Approval, Vec<u8>) {
     let Some(Installed { bundle, .. }) = store.lock().unwrap().apps.get(app).cloned() else {
@@ -332,7 +345,7 @@ fn app_message(
         let inbox = {
             let mut r = running.lock().unwrap();
             r.entry(app.to_string())
-                .or_insert_with(|| start_app(bundle.clone(), store.clone(), seed, policy))
+                .or_insert_with(|| start_app(bundle.clone(), store.clone(), secrets, policy))
                 .clone()
         };
         let (reply_to, answer) = std::sync::mpsc::channel();
@@ -354,7 +367,7 @@ fn app_message(
 
 /// Runs an installed app without a screen, on its own thread, until it's had nothing to do for
 /// a while.
-fn start_app(bundle: Vec<u8>, store: Arc<Mutex<Store>>, seed: [u8; 64], policy: Policy) -> Inbox {
+fn start_app(bundle: Vec<u8>, store: Arc<Mutex<Store>>, secrets: Secrets, policy: Policy) -> Inbox {
     let (inbox, messages) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
         let b = maki_bundle::read(&bundle).expect("installed bundles read");
@@ -365,7 +378,7 @@ fn start_app(bundle: Vec<u8>, store: Arc<Mutex<Store>>, seed: [u8; 64], policy: 
             id: b.manifest.id.clone(),
             name: b.manifest.name.clone(),
             developer: b.developer,
-            seed,
+            secrets,
             policy,
             inbox: messages,
             current: None,
@@ -740,10 +753,12 @@ fn main() {
     let running = Arc::new(Mutex::new(std::collections::BTreeMap::new()));
     let phrase =
         args.windows(2).find(|w| w[0] == "--phrase").map(|w| w[1].clone()).unwrap_or(TEST_PHRASE.into());
-    let seed = {
+    let secrets = {
         let words: Vec<&str> = phrase.split_whitespace().collect();
-        maki_seed::to_entropy(&words).expect("--phrase isn't a BIP39 phrase");
-        maki_seed::seed(&words, "")
+        let entropy = maki_seed::to_entropy(&words).expect("--phrase isn't a BIP39 phrase");
+        let mut e = [0u8; 32];
+        e[..entropy.len()].copy_from_slice(&entropy);
+        Secrets { seed: maki_seed::seed(&words, ""), entropy: e, len: entropy.len() }
     };
     // a passkey for a site, which its login request is answered with: --passkey github.com
     for rp in args.windows(2).filter(|w| w[0] == "--passkey").map(|w| &w[1]) {
@@ -931,7 +946,8 @@ fn main() {
                         let (writer, store, running, id) =
                             (writer.clone(), store.clone(), running.clone(), packet.id);
                         std::thread::spawn(move || {
-                            let (status, answer) = app_message(&app, message, &store, &running, seed, policy);
+                            let (status, answer) =
+                                app_message(&app, message, &store, &running, secrets, policy);
                             let (kind, body) = reply::app_message(status, &answer);
                             writer.lock().unwrap().write_all(&frame::encode(kind, id, &body)).ok();
                         });

@@ -9,7 +9,7 @@ license = "MIT"
 default = []
 # The keys themselves, from a seed: maki-keys, the fake maki, the simulator and tests. Without
 # it, only the trait and paths, for apps (which get their keys through maki).
-seed = ["dep:k256", "dep:hmac", "dep:sha2", "dep:ripemd", "dep:zeroize", "dep:maki-xmr", "dep:ed25519-dalek", "dep:maki-seed"]
+seed = ["dep:k256", "dep:hmac", "dep:sha2", "dep:ripemd", "dep:zeroize", "dep:maki-xmr", "dep:ed25519-dalek", "dep:maki-seed", "dep:pbkdf2", "dep:curve25519-dalek"]
 
 [dependencies]
 k256 = { version = "0.13", default-features = false, features = ["ecdsa", "arithmetic", "sha256", "alloc", "schnorr"], optional = true }
@@ -23,6 +23,10 @@ maki-xmr = { path = "../maki-xmr", features = ["keys"], optional = true }
 maki-seed = { path = "../maki-seed", optional = true }
 # Ed25519 keys (SLIP-10), for Solana: the Baochip build the app host's Ed25519 keys use
 ed25519-dalek = { package = "ed25519-dalek-compat", path = "../../bao1x-boot/ed25519-dalek-compat", default-features = false, features = ["zeroize"], optional = true }
+# Cardano's keys (BIP32-Ed25519, Icarus): PBKDF2 over the phrase's entropy, and the curve's arithmetic
+# on extended keys, which RFC 8032's keys don't expose
+pbkdf2 = { version = "0.12.2", default-features = false, features = ["hmac"], optional = true }
+curve25519-dalek = { package = "curve25519-dalek-bao1x", path = "../../bao1x-boot/curve25519-dalek-bao1x", default-features = false, features = ["zeroize", "alloc"], optional = true }
 
 [dev-dependencies]
 # its own tests are of the keys: `cargo test -p maki-hd` builds them with `seed`
@@ -31,3 +35,5 @@ maki-seed = { path = "../maki-seed" }
 bitcoin = "0.32"
 sha3 = { version = "0.10.8", default-features = false }
 maki-xmr = { path = "../maki-xmr" }
+# Cardano's vectors (tests/fixtures/cardano.json, by cardano-serialization-lib)
+serde_json = "1"
