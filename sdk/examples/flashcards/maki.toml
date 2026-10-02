@@ -1,0 +1,13 @@
+id = "com.leviathan.maki.flashcards"
+name = "Flashcards"
+version = 1
+label = "1.0"
+api = 9
+storage = 64
+memory = 256
+backup = true
+description = "Decks to study a card at a time: the centre turns a card over, then left says you didn't know it and right that you did. Cards you know come back less and less often (Leitner's boxes). maki desktop sends the decks, from a CSV file, pasted text or Anki: up to 8, of up to 1000 cards, in 64 KiB."
+icon = "icon.pbm"
+
+[permissions]
+link = "So maki desktop can send it decks, replace or remove them, and show what each has for today."

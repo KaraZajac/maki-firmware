@@ -1,0 +1,13 @@
+[package]
+name = "flashcards"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+# std, for an allocator: decks of up to a thousand cards, and their progress
+maki-app = { path = "../../maki-app", default-features = false, features = ["std"] }

@@ -6,7 +6,7 @@ you can install"). Anyone can build one and sideload it through maki desktop; ma
 owner what it is, where it's from and what it may do before installing it, and a sideloaded
 app carries a mark in maki's top bar for as long as it's installed.
 
-This directory has the Rust crate apps are written with (`maki-app`), thirty-four examples, and
+This directory has the Rust crate apps are written with (`maki-app`), sixty-one examples, and
 the `maki` tool that packs, signs, checks and simulates them. The examples:
 
 - **Hello**, **Dice** and **Tally**: a screen, the buttons, storage and randomness. Dice takes the
@@ -66,6 +66,10 @@ the `maki` tool that packs, signs, checks and simulates them. The examples:
   techniques solving it takes, made ahead while you're still (the work cut into steps that wait
   between them); pencil marks, and best times kept. **Sokoban**: David W. Skinner's Microban, 148
   levels, each drawn as big as it fits, with undo.
+- **Flashcards**: decks maki desktop sends (from a CSV file, pasted text or Anki), studied a card
+  at a time: the centre turns it over, left says you missed it and right that you knew it, and
+  Leitner's boxes bring a card back less often each time you know it. Up to 8 decks of up to 1000
+  cards, sent in pieces over the link; a deck sent again keeps each card's progress by its front.
 - **Name Tag**: your name as big as it fits (host API 9's `text_scaled`), on as many lines as
   that takes, with a line under it and a link of yours as a QR code people can scan, all read
   from a QR code you make.
