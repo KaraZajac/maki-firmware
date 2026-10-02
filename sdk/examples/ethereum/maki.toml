@@ -1,13 +1,13 @@
 id = "com.leviathan.maki.ethereum"
 name = "Ethereum"
-version = 2
-label = "1.1"
+version = 3
+label = "1.2"
 api = 3
 storage = 1
 memory = 1024
 backup = true
 icon = "icon.pbm"
-description = "Your Ethereum account, from maki's recovery phrase, as MetaMask and Ledger make it: for sites through the maki extension, maki desktop's wallet, and MetaMask by QR codes. Every transaction, message and permit is shown on maki before it signs."
+description = "Your Ethereum account, from maki's recovery phrase, as MetaMask and Ledger make it, on Ethereum and the networks like it: for sites through the maki extension, maki desktop's wallet, and MetaMask by QR codes. Every transaction, message and permit is shown on maki before it signs."
 
 [permissions]
 camera = "To read what MetaMask asks it to sign off its screen, with no cable."

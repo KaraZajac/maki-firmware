@@ -16,7 +16,8 @@ pub enum Kind {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Error {
     Rlp(rlp::Error),
-    /// Not a transaction type maki signs (EIP-2930, blobs, and pre-EIP-155 ones among them).
+    /// Not a transaction type maki signs (EIP-2930, blobs, pre-EIP-155 ones, and ZKsync's and
+    /// Celo's own among them).
     Unsupported(&'static str),
     Shape(&'static str),
     /// The maximum fee overflows: gas limit times the fee per gas.
@@ -165,6 +166,11 @@ impl Tx {
             }
             Some(0x01) => Err(Error::Unsupported("EIP-2930 transactions")),
             Some(0x03) => Err(Error::Unsupported("blob transactions")),
+            // networks' own kinds, said so: each pays or is signed in a way maki wouldn't show
+            Some(0x71) => {
+                Err(Error::Unsupported("ZKsync's own transactions (EIP-712): send an EIP-1559 one"))
+            }
+            Some(0x7b) => Err(Error::Unsupported("Celo's fee-currency transactions: pay the fee in CELO")),
             _ => Err(Error::Unsupported("that kind of transaction")),
         }
     }

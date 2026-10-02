@@ -181,6 +181,11 @@ fn what_maki_wont_sign() {
     assert!(matches!(Tx::parse(&pre155), Err(Error::Unsupported(_))));
     assert!(matches!(Tx::parse(&[0x01, 0xc0]), Err(Error::Unsupported(_))));
     assert!(matches!(Tx::parse(&[0x03, 0xc0]), Err(Error::Unsupported(_))));
+    // networks' own kinds: refused, saying which, rather than read as something they aren't
+    let zksync = Tx::parse(&[0x71, 0xc0]).unwrap_err().to_string();
+    assert_eq!(zksync, "maki doesn't sign ZKsync's own transactions (EIP-712): send an EIP-1559 one");
+    let celo = Tx::parse(&[0x7b, 0xc0]).unwrap_err().to_string();
+    assert_eq!(celo, "maki doesn't sign Celo's fee-currency transactions: pay the fee in CELO");
     let good = eip1559(Some(bob()), 1, vec![], AccessList::default()).encoded_for_signing();
     assert!(Tx::parse(&good).is_ok());
     // bytes after the end
@@ -239,7 +244,8 @@ fn the_review_says_what_the_transaction_does() {
         ("USDC", "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48")
     );
 
-    // the same contract on another network is just a contract: its smallest units
+    // the same contract on another network is just a contract: its smallest units (and Base adds
+    // its L1 fee, which nothing caps, to the gas)
     let elsewhere = Tx::parse(
         &TxEip1559 {
             chain_id: 8453,
@@ -255,7 +261,7 @@ fn the_review_says_what_the_transaction_does() {
     .unwrap();
     let (pages, _) = display::review(&elsewhere).unwrap();
     let headings: Vec<&str> = pages.iter().map(|p| p.heading.as_str()).collect();
-    assert_eq!(headings, ["Network", "Send tokens", "Token amount", "Token", "Max fee"]);
+    assert_eq!(headings, ["Network", "Send tokens", "Token amount", "Token", "Max gas fee", "L1 fee"]);
     assert_eq!(pages[2].mono, "1500000");
 
     let approve = tx(eip1559(
@@ -308,6 +314,220 @@ fn known_tokens_say_their_amounts_exactly() {
         assert!(TOKENS[i + 1..].iter().all(|b| (a.chain_id, a.contract) != (b.chain_id, b.contract)));
     }
     assert!(known(1, &[0; 20]).is_none());
+}
+
+/// Each network maki names, as its own documentation and chainlist name it, with its coin: written
+/// out again here, so a slip in the table shows.
+const NAMED: [(u64, &str, &str); 25] = [
+    (1, "ethereum", "ETH"),
+    (10, "optimism", "ETH"),
+    (56, "bnb chain", "BNB"),
+    (137, "polygon", "POL"),
+    (8453, "base", "ETH"),
+    (42161, "arbitrum", "ETH"),
+    (43114, "avalanche", "AVAX"),
+    (4663, "robinhood chain", "ETH"),
+    (999, "hyperevm", "HYPE"),
+    (143, "monad", "MON"),
+    (5000, "mantle", "MNT"),
+    (9745, "plasma", "XPL"),
+    (196, "x layer", "OKB"),
+    (5042, "arc", "USDC"),
+    (480, "world chain", "ETH"),
+    (57073, "ink", "ETH"),
+    (59144, "linea", "ETH"),
+    (100, "gnosis", "xDAI"),
+    (324, "zksync era", "ETH"),
+    (42220, "celo", "CELO"),
+    (130, "unichain", "ETH"),
+    (11155111, "sepolia", "ETH"),
+    (17000, "holesky", "ETH"),
+    (560048, "hoodi", "ETH"),
+    (84532, "base sepolia", "ETH"),
+];
+
+#[test]
+fn every_network_maki_names_says_its_coin() {
+    for (id, name, coin) in NAMED {
+        assert_eq!(display::network(id), (name.to_string(), coin), "chain {id}");
+    }
+    assert_eq!(display::NETWORKS.len(), NAMED.len());
+    for (i, a) in display::NETWORKS.iter().enumerate() {
+        assert!(display::NETWORKS[i + 1..].iter().all(|b| b.chain_id != a.chain_id), "chain {}", a.chain_id);
+    }
+    // the rest: their chain ID, in coins, which maki can't name; never a neighbour's name
+    for id in [0, 2, 25, 146, 204, 998, 4217, 42170, 534352, 7777777, u64::MAX] {
+        assert_eq!(display::network(id), (format!("chain {id}"), "coins"));
+    }
+    // the OP Stack's, which add fees no transaction caps; Celo sets them to zero
+    let outside: Vec<u64> =
+        display::NETWORKS.iter().filter(|n| n.fees_outside_gas).map(|n| n.chain_id).collect();
+    assert_eq!(outside, [10, 8453, 5000, 196, 480, 57073, 130, 84532]);
+}
+
+#[test]
+fn tokens_are_known_by_their_network_and_contract() {
+    use maki_eth::tokens::known;
+    let addr = |s: &str| -> [u8; 20] { hex(s).try_into().unwrap() };
+    for (chain, contract, symbol, decimals) in [
+        (56, "0x55d398326f99059fF775485246999027B3197955", "USDT", 18),
+        (56, "0x8AC76a51cc950d9822D68b83fE1Ad97B32Cd580d", "USDC", 18),
+        (43114, "0xB97EF9Ef8734C71904D8002F8b6Bc66Dd9c48a6E", "USDC", 6),
+        (43114, "0x9702230A8Ea53601f5cD2dc00fDBc13d4dF4A8c7", "USDT", 6),
+        (4663, "0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168", "USDG", 6),
+        (999, "0xB8CE59FC3717ada4C02eaDF9682A9e934F625ebb", "USDT0", 6),
+        (9745, "0xB8CE59FC3717ada4C02eaDF9682A9e934F625ebb", "USDT0", 6),
+        (143, "0x754704Bc059F8C67012fEd69BC8A327a5aafb603", "USDC", 6),
+        (5000, "0xdEAddEaDdeadDEadDEADDEAddEADDEAddead1111", "WETH", 18),
+        (5042, "0x3600000000000000000000000000000000000000", "USDC", 6),
+        (480, "0x4200000000000000000000000000000000000006", "WETH", 18),
+        (59144, "0xe5D7C2a44FfDDf6b295A15c148167daaAf5Cf34f", "WETH", 18),
+        (100, "0x2a22f9c3b484c3629090FeED35F17Ff8F88f76F0", "USDC.e", 6),
+        (324, "0x1d17CBcF0D6D143135aE902365D2E5e2A16538D4", "USDC", 6),
+        (42220, "0x48065fbBE25f71C9282ddf5e1cD6D6A887483D5e", "USDT", 6),
+        (130, "0x9151434b16b9763660705744891fA906F660EcC5", "USDT0", 6),
+    ] {
+        let t = known(chain, &addr(contract)).unwrap_or_else(|| panic!("{symbol} on chain {chain}"));
+        assert_eq!((t.symbol, t.decimals), (symbol, decimals), "{contract} on chain {chain}");
+    }
+    // a contract is a token only on the networks it's listed for: USDT0's address on HyperEVM
+    // and Plasma is nothing on Monad, and the OP Stack's WETH is nothing on Ethereum or Arbitrum
+    assert!(known(143, &addr("0xB8CE59FC3717ada4C02eaDF9682A9e934F625ebb")).is_none());
+    assert!(known(1, &addr("0x4200000000000000000000000000000000000006")).is_none());
+    assert!(known(42161, &addr("0x4200000000000000000000000000000000000006")).is_none());
+    // every token is on a network maki names, and none goes by its network's coin's symbol, but
+    // Arc's USDC: that is Arc's coin, through its ERC-20 interface
+
+    for t in &maki_eth::tokens::TOKENS {
+        let n =
+            display::known_network(t.chain_id).unwrap_or_else(|| panic!("{} on {}", t.symbol, t.chain_id));
+        assert!(t.symbol != n.unit || t.chain_id == 5042, "{} on {}", t.symbol, n.name);
+    }
+}
+
+/// An EIP-1559 transaction as `eip1559` makes them, on another network.
+fn on(chain_id: u64, t: TxEip1559) -> TxEip1559 { TxEip1559 { chain_id, ..t } }
+
+#[test]
+fn a_transaction_on_another_network_is_shown_with_its_name_and_coin() {
+    let signer = alloy_signer(0);
+    let account = Account::new(keys(&seed()), 0).unwrap();
+    // one AVAX to Bob on Avalanche: signed as alloy signs it, the chain ID in what's signed
+    let avax = on(43114, eip1559(Some(bob()), 10u128.pow(18), vec![], AccessList::default()));
+    let ours = Tx::parse(&avax.encoded_for_signing()).unwrap();
+    let sig = signer.sign_hash_sync(&avax.signature_hash()).unwrap();
+    assert_eq!(ours.sign(&account).unwrap(), TxEnvelope::from(avax.into_signed(sig)).encoded_2718());
+    let (pages, summary) = display::review(&ours).unwrap();
+    let headings: Vec<&str> = pages.iter().map(|p| p.heading.as_str()).collect();
+    assert_eq!(headings, ["Network", "Send", "Max fee"]);
+    assert_eq!((pages[0].value.as_str(), pages[0].mono.as_str()), ("avalanche", "chain ID 43114"));
+    assert_eq!((pages[1].value.as_str(), pages[2].value.as_str()), ("1 AVAX", "0.00195 AVAX"));
+    assert_eq!(summary, "up to 1.00195 AVAX");
+
+    // a legacy one on Monad (as wallets there often send them): EIP-155's v for chain 143
+    let legacy = TxLegacy {
+        chain_id: Some(143),
+        nonce: 3,
+        gas_price: 102_000_000_000,
+        gas_limit: 21_000,
+        to: TxKind::Call(bob()),
+        value: U256::from(25u128 * 10u128.pow(17)),
+        input: Bytes::new(),
+    };
+    let ours = Tx::parse(&legacy.encoded_for_signing()).unwrap();
+    let sig = signer.sign_hash_sync(&legacy.signature_hash()).unwrap();
+    let signed = ours.sign(&account).unwrap();
+    assert_eq!(signed, TxEnvelope::from(legacy.into_signed(sig)).encoded_2718());
+    assert!(
+        [321, 322].contains(
+            &(ours.signature(&account).unwrap()[64..].iter().fold(0u64, |v, b| v << 8 | *b as u64))
+        )
+    );
+    let (pages, summary) = display::review(&ours).unwrap();
+    assert_eq!((pages[0].value.as_str(), pages[1].value.as_str()), ("monad", "2.5 MON"));
+    assert_eq!((pages[2].value.as_str(), pages[2].mono.as_str()), ("0.002142 MON", "21000 gas\n102 gwei"));
+    assert_eq!(summary, "up to 2.502142 MON");
+
+    // Arc counts in USDC, its coin, with 18 decimals as a coin
+    let arc = Tx::parse(
+        &on(5042, eip1559(Some(bob()), 5 * 10u128.pow(17), vec![], AccessList::default()))
+            .encoded_for_signing(),
+    )
+    .unwrap();
+    let (pages, _) = display::review(&arc).unwrap();
+    assert_eq!((pages[0].value.as_str(), pages[1].value.as_str()), ("arc", "0.5 USDC"));
+}
+
+#[test]
+fn a_token_on_another_network_is_shown_by_its_symbol() {
+    let send = |chain: u64, token: &str, amount: U256| {
+        let to = Some(token.parse::<Address>().unwrap());
+        let data = erc20([0xa9, 0x05, 0x9c, 0xbb], bob(), amount);
+        display::review(
+            &Tx::parse(&on(chain, eip1559(to, 0, data, AccessList::default())).encoded_for_signing())
+                .unwrap(),
+        )
+        .unwrap()
+        .0
+    };
+    // USDC on Monad: Circle's, in its 6 decimals
+    let pages = send(143, "0x754704Bc059F8C67012fEd69BC8A327a5aafb603", U256::from(1_500_000u64));
+    let headings: Vec<&str> = pages.iter().map(|p| p.heading.as_str()).collect();
+    assert_eq!(headings, ["Network", "Send tokens", "Token", "Max fee"]);
+    assert_eq!(
+        (pages[1].value.as_str(), pages[1].mono.as_str()),
+        ("1.5 USDC", "0x70997970C51812dc3A010C7d01b50e0d17dc79C8")
+    );
+    assert_eq!(
+        (pages[2].value.as_str(), pages[2].mono.as_str()),
+        ("USDC", "0x754704Bc059F8C67012fEd69BC8A327a5aafb603")
+    );
+    assert_eq!(pages[3].value, "0.00195 MON");
+    // BNB Chain's USDT has 18 decimals: 1.5 of it is 1.5 × 10^18 of its smallest units
+    let pages = send(56, "0x55d398326f99059fF775485246999027B3197955", U256::from(15u128 * 10u128.pow(17)));
+    assert_eq!((pages[0].value.as_str(), pages[1].value.as_str()), ("bnb chain", "1.5 USDT"));
+    // a bridged look-alike, by its own symbol
+    let pages = send(100, "0x2a22f9c3b484c3629090FeED35F17Ff8F88f76F0", U256::from(2_250_000u64));
+    assert_eq!((pages[1].value.as_str(), pages[2].value.as_str()), ("2.25 USDC.e", "USDC.e"));
+    assert_eq!(pages[3].value, "0.00195 xDAI");
+    // Monad's USDC contract on HyperEVM is just a contract: its smallest units
+    let pages = send(999, "0x754704Bc059F8C67012fEd69BC8A327a5aafb603", U256::from(1_500_000u64));
+    let headings: Vec<&str> = pages.iter().map(|p| p.heading.as_str()).collect();
+    assert_eq!(headings, ["Network", "Send tokens", "Token amount", "Token", "Max fee"]);
+    assert_eq!((pages[0].value.as_str(), pages[2].mono.as_str()), ("hyperevm", "1500000"));
+}
+
+#[test]
+fn fees_outside_the_gas_are_called_out_where_a_network_adds_them() {
+    let send = |chain: u64| {
+        display::review(
+            &Tx::parse(
+                &on(chain, eip1559(Some(bob()), 10u128.pow(17), vec![], AccessList::default()))
+                    .encoded_for_signing(),
+            )
+            .unwrap(),
+        )
+        .unwrap()
+    };
+    for (chain, coin) in
+        [(8453, "ETH"), (10, "ETH"), (5000, "MNT"), (480, "ETH"), (57073, "ETH"), (130, "ETH"), (196, "OKB")]
+    {
+        let (pages, summary) = send(chain);
+        let headings: Vec<&str> = pages.iter().map(|p| p.heading.as_str()).collect();
+        // the most the gas can cost, then what the network adds on top, which nothing caps
+        assert_eq!(headings, ["Network", "Send", "Max gas fee", "L1 fee"], "chain {chain}");
+        assert_eq!(pages[2].value, format!("0.00195 {coin}"));
+        assert_eq!((pages[3].value.as_str(), pages[3].mono.as_str()), ("not capped", ""));
+        assert!(pages[3].prose.contains("nothing in a transaction caps them"), "chain {chain}");
+        assert_eq!(summary, format!("up to 0.10195 {coin} and L1 fees"));
+    }
+    // Arbitrum's and Celo's are in the gas (Celo's L1 fees are always zero): the max fee is the most
+    for chain in [42161, 42220, 4663, 324, 59144, 1] {
+        let (pages, summary) = send(chain);
+        assert_eq!(pages.last().unwrap().heading, "Max fee", "chain {chain}");
+        assert!(pages.iter().all(|p| p.prose.is_empty()));
+        assert!(!summary.contains("L1"), "chain {chain}");
+    }
 }
 
 #[test]

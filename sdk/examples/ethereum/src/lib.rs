@@ -103,7 +103,7 @@ fn valid_site(site: &str) -> bool {
 /// The page every review starts with: who's asking. The browser names the site; maki shows it.
 fn site_page(site: &str) -> Page { Page::new("Asked by").mono(site) }
 
-fn page(p: display::Page) -> Page { Page::new(&p.heading).value(&p.value).mono(&p.mono) }
+fn page(p: display::Page) -> Page { Page::new(&p.heading).value(&p.value).mono(&p.mono).prose(&p.prose) }
 
 fn keys_status(e: maki_hd::Error) -> u8 {
     match e {

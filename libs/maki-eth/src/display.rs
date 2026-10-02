@@ -12,33 +12,107 @@ use crate::tokens;
 use crate::tx::{Error, Tx};
 use crate::typed::{self, TypedData};
 
-/// A screen's worth: a heading at the top, the thing to check in bold, and fixed-width text
-/// under it across as many lines as it takes.
+/// A screen's worth: a heading at the top, the thing to check in bold, fixed-width text under it
+/// across as many lines as it takes, and prose (small words, wrapped) for what it means.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Page {
     pub heading: String,
     pub value: String,
     pub mono: String,
+    pub prose: String,
 }
 
-fn page(heading: &str, value: String, mono: String) -> Page { Page { heading: heading.into(), value, mono } }
+fn page(heading: &str, value: String, mono: String) -> Page {
+    Page { heading: heading.into(), value, mono, prose: String::new() }
+}
+
+/// A network maki knows by name: what maki calls it, the coin it counts in (its own, with 18
+/// decimals in transactions, as every one here has), and whether it charges fees outside the gas.
+pub struct Network {
+    pub chain_id: u64,
+    pub name: &'static str,
+    pub unit: &'static str,
+    /// An OP Stack chain's: on top of the gas, an L1 data fee for posting the transaction to
+    /// Ethereum, and an operator fee, both at rates the network sets when the transaction goes
+    /// in. Nothing in a transaction caps them ("It is currently not possible to limit the
+    /// maximum L1 Data Fee that a transaction is willing to pay": docs.optimism.io, Transaction
+    /// fees), so maki can say the most the gas costs there, not the most the fee is. Celo is an
+    /// OP Stack chain that sets both to zero, always (docs.celo.org, Transaction fees), and isn't
+    /// one of these.
+    pub fees_outside_gas: bool,
+}
+
+const fn net(chain_id: u64, name: &'static str, unit: &'static str, fees_outside_gas: bool) -> Network {
+    Network { chain_id, name, unit, fees_outside_gas }
+}
+
+/// The networks maki knows, each checked on 2026-10-02 against the chain's own documentation and
+/// against chainlist's source (github.com/ethereum-lists/chains, `_data/chains/eip155-<id>.json`),
+/// and asked for its chain ID (`eth_chainId`). Every one takes the transactions maki signs
+/// (EIP-1559, and legacy ones with EIP-155's chain ID) and counts its coin in 18 decimals. Whether
+/// one charges fees outside the gas was read off its receipts (an `l1Fee`) and its fee oracle
+/// (`getL1Fee`, `getOperatorFee` at 0x420…0F), and from its documentation. maki desktop knows
+/// the same mainnets (desktop/src/shared/ethereum.ts), with their servers.
+pub const NETWORKS: [Network; 25] = [
+    net(1, "ethereum", "ETH", false),
+    net(10, "optimism", "ETH", true),
+    net(56, "bnb chain", "BNB", false),
+    net(137, "polygon", "POL", false),
+    net(8453, "base", "ETH", true),
+    net(42161, "arbitrum", "ETH", false),
+    // build.avax.network: the C-Chain, on chain ID 43114
+    net(43114, "avalanche", "AVAX", false),
+    // docs.robinhood.com/chain: an Arbitrum chain, whose L1 data fee is part of the gas
+    net(4663, "robinhood chain", "ETH", false),
+    // hyperliquid.gitbook.io, HyperEVM. Chainlist has 999 as Wanchain's test network, which also
+    // answers to 999 (asked 2026-10-02): a signature for one is good on the other. maki names
+    // HyperEVM, where a chain 999 transaction spends something of worth.
+    net(999, "hyperevm", "HYPE", false),
+    // docs.monad.xyz: it charges the gas limit, not the gas used: still at most the max fee
+    net(143, "monad", "MON", false),
+    // docs.mantle.xyz: since Arsia, the gas, an L1 data fee and an operator fee
+    net(5000, "mantle", "MNT", true),
+    // docs.plasma.org: total fee = gas used × gas price
+    net(9745, "plasma", "XPL", false),
+    // web3.okx.com, X Layer: an OP Stack chain. Its L1 and operator fees were zero on
+    // 2026-10-02, but nothing published says they'll stay so
+    net(196, "x layer", "OKB", true),
+    // docs.arc.io: USDC is Arc's coin, with 18 decimals as a coin (and 6 as an ERC-20)
+    net(5042, "arc", "USDC", false),
+    // docs.world.org: "an L2 (execution) fee and an L1 (security) fee"
+    net(480, "world chain", "ETH", true),
+    // docs.inkonchain.com: an OP Stack chain
+    net(57073, "ink", "ETH", true),
+    // docs.linea.build: total fee = units of gas used × (base fee + priority fee)
+    net(59144, "linea", "ETH", false),
+    // docs.gnosischain.com: xDAI, a dollar, is its coin
+    net(100, "gnosis", "xDAI", false),
+    // docs.zksync.io: its own EIP-712 transactions (type 0x71) maki doesn't sign; EIP-1559 ones
+    // pay for their data in the gas
+    net(324, "zksync era", "ETH", false),
+    // docs.celo.org: its L1 and operator fees are "configured to always be zero"
+    net(42220, "celo", "CELO", false),
+    // developers.uniswap.org/docs/unichain: an OP Stack chain
+    net(130, "unichain", "ETH", true),
+    net(11155111, "sepolia", "ETH", false),
+    net(17000, "holesky", "ETH", false),
+    // Holesky's successor as Ethereum's second test network (ethereum.org, Networks)
+    net(560048, "hoodi", "ETH", false),
+    net(84532, "base sepolia", "ETH", true),
+];
+
+/// The network with this chain ID, if maki knows it.
+pub fn known_network(chain_id: u64) -> Option<&'static Network> {
+    NETWORKS.iter().find(|n| n.chain_id == chain_id)
+}
 
 /// The networks maki knows by name, and the coin each counts in. Any other shows its chain ID,
 /// and amounts in "coins": maki can't say which.
 pub fn network(chain_id: u64) -> (String, &'static str) {
-    let (name, unit) = match chain_id {
-        1 => ("ethereum", "ETH"),
-        10 => ("optimism", "ETH"),
-        56 => ("bnb chain", "BNB"),
-        137 => ("polygon", "POL"),
-        8453 => ("base", "ETH"),
-        42161 => ("arbitrum", "ETH"),
-        11155111 => ("sepolia", "ETH"),
-        17000 => ("holesky", "ETH"),
-        84532 => ("base sepolia", "ETH"),
-        n => return (format!("chain {}", n), "coins"),
-    };
-    (name.into(), unit)
+    match known_network(chain_id) {
+        Some(n) => (n.name.into(), n.unit),
+        None => (format!("chain {}", chain_id), "coins"),
+    }
 }
 
 /// An amount of wei, exactly, in whole coins without trailing zeros: `0.05 ETH`.
@@ -211,13 +285,25 @@ pub fn review(tx: &Tx) -> Result<(Vec<Page>, String), Error> {
             ));
         }
     }
-    pages.push(page(
-        "Max fee",
-        amount(max_fee, unit),
-        format!("{} gas\n{} gwei", tx.gas_limit, gwei(tx.max_fee_per_gas)),
-    ));
+    let gas = format!("{} gas\n{} gwei", tx.gas_limit, gwei(tx.max_fee_per_gas));
     let total = tx.value.checked_add(max_fee).ok_or(Error::Fee)?;
-    Ok((pages, format!("up to {}", amount(total, unit))))
+    if !known_network(tx.chain_id).is_some_and(|n| n.fees_outside_gas) {
+        pages.push(page("Max fee", amount(max_fee, unit), gas));
+        return Ok((pages, format!("up to {}", amount(total, unit))));
+    }
+    // the most the gas can cost; what the network adds on top, no one can say beforehand
+    pages.push(page("Max gas fee", amount(max_fee, unit), gas));
+    pages.push(Page {
+        heading: String::from("L1 fee"),
+        value: String::from("not capped"),
+        mono: String::new(),
+        prose: String::from(
+            "This network can add fees on top of the gas: for putting the transaction on Ethereum, and \
+             its operator's. It sets them when the transaction goes in, and nothing in a transaction \
+             caps them.",
+        ),
+    });
+    Ok((pages, format!("up to {} and L1 fees", amount(total, unit))))
 }
 
 /// A message to sign, as the owner reads it: text if it's text, else hex.

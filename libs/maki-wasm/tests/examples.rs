@@ -2695,6 +2695,87 @@ fn ethereum_signs_what_the_owner_read_as_maki_always_has() {
     assert!(r.reviews.is_empty());
 }
 
+/// An unsigned EIP-1559 transaction sending `value` wei to Bob on `chain_id`, as wallets make them.
+fn eth_send(chain_id: u64, value: u128) -> Vec<u8> {
+    use maki_eth::rlp::{encode_bytes, encode_list, encode_uint};
+    let mut fields = Vec::new();
+    let uint = |out: &mut Vec<u8>, n: u128| encode_uint(out, &n.to_be_bytes());
+    uint(&mut fields, chain_id as u128);
+    uint(&mut fields, 4); // nonce
+    uint(&mut fields, 1_000_000); // tip
+    uint(&mut fields, 20_000_000); // fee cap
+    uint(&mut fields, 21_000); // gas
+    encode_bytes(
+        &mut fields,
+        &[
+            0x70, 0x99, 0x79, 0x70, 0xC5, 0x18, 0x12, 0xdc, 0x3A, 0x01, 0x0C, 0x7d, 0x01, 0xb5, 0x0e, 0x0d,
+            0x17, 0xdc, 0x79, 0xC8,
+        ],
+    );
+    uint(&mut fields, value);
+    encode_bytes(&mut fields, &[]); // data
+    encode_list(&mut fields, &[]); // access list
+    let mut out = vec![0x02];
+    encode_list(&mut out, &fields);
+    out
+}
+
+#[test]
+fn ethereum_names_each_network_and_says_what_it_cant_cap() {
+    let keys = maki_hd::seed::SeedKeys::from_seed(&test_seed()).unwrap();
+    let account = maki_eth::Account::new(&keys, 0).unwrap();
+    // on Base: the coin, the most the gas costs, and Base's L1 fee, which nothing caps
+    let unsigned = eth_send(8453, 10_000_000_000_000_000);
+    let mut inbox = eth_pieces(b'T', "demo.maki", &unsigned);
+    inbox.push([&[b'G'][..], &0u32.to_le_bytes()].concat());
+    let r = run_wallet("ethereum", inbox, vec![Answer::Yes], false);
+    assert_eq!(fetched(&r.replies[1..]), maki_eth::Tx::parse(&unsigned).unwrap().sign(&account).unwrap());
+    let review = &r.reviews[0];
+    assert_eq!(review.detail, "up to 0.01000042 ETH and L1 fees");
+    let headings: Vec<&str> = review.pages.iter().map(|p| p.heading.as_str()).collect();
+    assert_eq!(headings, ["Asked by", "Network", "Send", "Max gas fee", "L1 fee"]);
+    assert_eq!((review.pages[1].value.as_str(), review.pages[1].mono.as_str()), ("base", "chain ID 8453"));
+    assert_eq!(
+        (review.pages[3].value.as_str(), review.pages[3].mono.as_str()),
+        ("0.00000042 ETH", "21000 gas\n0.02 gwei")
+    );
+    assert_eq!(review.pages[4].value, "not capped");
+    assert!(review.pages[4].prose.starts_with("This network can add fees on top of the gas"));
+
+    // on Avalanche, in AVAX, and the max fee is the most it can cost
+    let r = run_wallet(
+        "ethereum",
+        eth_pieces(b'T', "demo.maki", &eth_send(43114, 10u128.pow(18))),
+        vec![Answer::No],
+        false,
+    );
+    let review = &r.reviews[0];
+    assert_eq!((review.pages[1].value.as_str(), review.pages[2].value.as_str()), ("avalanche", "1 AVAX"));
+    assert_eq!(
+        (review.pages[3].heading.as_str(), review.detail.as_str()),
+        ("Max fee", "up to 1.00000042 AVAX")
+    );
+    assert_eq!(r.replies[0], [1]);
+
+    // a network maki doesn't know: its chain ID, in coins it can't name
+    let r = run_wallet(
+        "ethereum",
+        eth_pieces(b'T', "demo.maki", &eth_send(7777777, 10u128.pow(18))),
+        vec![Answer::No],
+        false,
+    );
+    let review = &r.reviews[0];
+    assert_eq!(
+        (review.pages[1].value.as_str(), review.pages[2].value.as_str()),
+        ("chain 7777777", "1 coins")
+    );
+    // ZKsync's own kind of transaction: refused, with why, before anything's shown
+    let r = run_wallet("ethereum", eth_pieces(b'T', "demo.maki", &[0x71, 0xc0]), vec![], false);
+    assert_eq!(r.replies[0][0], 5);
+    assert!(texts(&r.replies[0])[0].contains("ZKsync's own transactions"));
+    assert!(r.reviews.is_empty());
+}
+
 /// A Monero app's `D`: an address to compare, on a network (0 Monero, 1 testnet, 2 stagenet).
 fn xmr_address(net: u8, major: u32, minor: u32) -> Vec<u8> {
     [&[b'D', net][..], &major.to_le_bytes(), &minor.to_le_bytes()].concat()
