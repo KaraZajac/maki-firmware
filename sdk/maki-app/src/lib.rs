@@ -94,6 +94,7 @@ mod sys {
         pub fn key_x25519_agree(lptr: *const u8, llen: usize, pptr: *const u8, out: *mut u8) -> i32;
         pub fn type_text(ptr: *const u8, len: usize) -> i32;
         pub fn key_press(code: i32, shift: i32) -> i32;
+        pub fn key_chord(code: i32, mods: i32) -> i32;
         pub fn link_read(ptr: *mut u8, cap: usize) -> i32;
         pub fn link_reply(ptr: *const u8, len: usize) -> i32;
         pub fn camera_scan_qr(ptr: *mut u8, cap: usize) -> i32;
@@ -710,7 +711,9 @@ pub mod keys {
 }
 
 /// Typing into the computer as a USB keyboard (the `keyboard` permission), only while the app
-/// is in front, with "typing" in maki's bar meanwhile.
+/// is in front, with "typing" in maki's bar meanwhile: text (`type_text`), a key beyond text
+/// (`press`), and a shortcut with Ctrl, Alt or Gui held (`chord`, host API 10). maki warns at
+/// install that the permission can press shortcuts and open programs.
 pub mod keyboard {
     use super::{Error, result, sys};
 
@@ -763,6 +766,54 @@ pub mod keyboard {
     /// The same with Shift held: Shift+F5, say.
     pub fn press_shifted(key: Key) -> Result<(), Error> {
         result(unsafe { sys::key_press(key as i32, 1) }).map(|_| ())
+    }
+
+    /// Modifiers a chord holds (`chord`), as a bitmask. Shift is here too, so one chord names all
+    /// of its modifiers; Ctrl, Alt and Gui (the Command or Windows key) are the ones `press` won't
+    /// hold. maki warns at install that the keyboard permission can press shortcuts and open
+    /// programs.
+    pub const SHIFT: u8 = 1;
+    pub const CTRL: u8 = 2;
+    pub const ALT: u8 = 4;
+    pub const GUI: u8 = 8;
+
+    /// Presses a key with `mods` (the `SHIFT`/`CTRL`/`ALT`/`GUI` bits) held and lets it go — a
+    /// shortcut such as Gui+R or Ctrl+C (host API 10, `api = 10`). `code` is a USB HID usage ID of
+    /// a main-keyboard key: a letter, digit or symbol (`usage` turns a character into one), or a
+    /// `Key`. WebAssembly apps only; as `press`, only while the app is in front, and
+    /// `Error::Failed` if maki isn't plugged into a computer.
+    #[cfg(not(target_os = "xous"))]
+    pub fn chord(code: u8, mods: u8) -> Result<(), Error> {
+        result(unsafe { sys::key_chord(code as i32, mods as i32) }).map(|_| ())
+    }
+
+    /// A chord over a `Key` (an arrow, a function key, Delete): Ctrl+Alt+Delete, Alt+F4, Gui+Space.
+    #[cfg(not(target_os = "xous"))]
+    pub fn chord_key(key: Key, mods: u8) -> Result<(), Error> { chord(key as u8, mods) }
+
+    /// The USB HID usage ID for a character on a US keyboard, for a chord over it (Gui+R is
+    /// `chord(usage('r').unwrap(), GUI)`). Letters (upper or lower: the same physical key, Shift
+    /// is a modifier of its own), digits and the common symbols. None for anything else.
+    #[cfg(not(target_os = "xous"))]
+    pub fn usage(c: char) -> Option<u8> {
+        Some(match c.to_ascii_lowercase() {
+            'a'..='z' => 0x04 + (c.to_ascii_lowercase() as u8 - b'a'),
+            '1'..='9' => 0x1e + (c as u8 - b'1'),
+            '0' => 0x27,
+            '-' | '_' => 0x2d,
+            '=' | '+' => 0x2e,
+            '[' | '{' => 0x2f,
+            ']' | '}' => 0x30,
+            '\\' | '|' => 0x31,
+            ';' | ':' => 0x33,
+            '\'' | '"' => 0x34,
+            '`' | '~' => 0x35,
+            ',' | '<' => 0x36,
+            '.' | '>' => 0x37,
+            '/' | '?' => 0x38,
+            ' ' => 0x2c,
+            _ => return None,
+        })
     }
 }
 

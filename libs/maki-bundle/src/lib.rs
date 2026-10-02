@@ -152,7 +152,7 @@ impl Permission {
                 "It gets secrets made from your recovery phrase, for this app only: never your wallets' or passkeys'."
             }
             Permission::Keyboard => {
-                "It can type anything into your computer while it's open, commands included."
+                "It can type anything into your computer while it's open, and press shortcuts: it could open and run programs."
             }
             Permission::Camera => "It can see what the camera sees while it's open.",
             Permission::Motion => "It can read the accelerometer, which can pick up typing nearby.",

@@ -1,0 +1,14 @@
+id = "com.leviathan.maki.macropad"
+name = "Macro Pad"
+version = 1
+label = "1.0"
+api = 10
+storage = 32
+memory = 128
+backup = true
+icon = "icon.pbm"
+description = "Keystrokes maki types into a computer at the press of a button: text, keys, and DuckyScript, loaded from maki desktop. For demos, pentests and your own machine, run with you holding maki, on its own screen. It can open and run programs, so run only scripts you trust and understand."
+
+[permissions]
+keyboard = "To type your scripts into the computer: text, keys and shortcuts that can open and run programs."
+link = "To receive the scripts you send it from maki desktop."

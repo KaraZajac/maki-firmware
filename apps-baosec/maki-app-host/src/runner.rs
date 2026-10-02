@@ -961,14 +961,21 @@ impl Platform for Device {
         typed
     }
 
-    fn press_key(&mut self, code: u8, shift: bool) -> bool {
+    fn press_key(&mut self, code: u8, mods: u8) -> bool {
         use usb_bao1x::UsbKeyCode;
         if !self.state.borrow().front || !self.ctx.unlocked() {
             return false;
         }
         let mut codes = vec![UsbKeyCode::from(code)];
-        if shift {
-            codes.push(UsbKeyCode::LeftShift);
+        for (bit, key) in [
+            (maki_wasm::MOD_SHIFT, UsbKeyCode::LeftShift),
+            (maki_wasm::MOD_CTRL, UsbKeyCode::LeftControl),
+            (maki_wasm::MOD_ALT, UsbKeyCode::LeftAlt),
+            (maki_wasm::MOD_GUI, UsbKeyCode::LeftGUI),
+        ] {
+            if mods & bit != 0 {
+                codes.push(key);
+            }
         }
         {
             // typing always shows: a dark screen lights for it
@@ -978,10 +985,20 @@ impl Platform for Device {
         }
         self.draw_frame();
         let pressed = self.ctx.usb.send_keycode(codes, true).is_ok();
+        let held = [
+            (maki_wasm::MOD_CTRL, "Ctrl"),
+            (maki_wasm::MOD_ALT, "Alt"),
+            (maki_wasm::MOD_GUI, "GUI"),
+            (maki_wasm::MOD_SHIFT, "Shift"),
+        ]
+        .iter()
+        .filter(|(bit, _)| mods & bit != 0)
+        .map(|(_, name)| *name)
+        .collect::<Vec<_>>();
         log::info!(
             "{}: pressed key {code:#04x}{}: {}",
             self.id,
-            if shift { " with Shift" } else { "" },
+            if held.is_empty() { String::new() } else { format!(" with {}", held.join("+")) },
             if pressed { "done" } else { "not plugged in" }
         );
         self.state.borrow_mut().typing = false;

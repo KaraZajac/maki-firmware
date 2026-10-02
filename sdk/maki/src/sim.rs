@@ -846,10 +846,20 @@ impl Platform for Sim {
         true
     }
 
-    fn press_key(&mut self, code: u8, shift: bool) -> bool {
+    fn press_key(&mut self, code: u8, mods: u8) -> bool {
         let mut s = self.0.borrow_mut();
         s.dark = false;
-        let line = format!("pressed: {}{}", if shift { "Shift+" } else { "" }, key_name(code));
+        let held: String = [
+            (maki_wasm::MOD_CTRL, "Ctrl+"),
+            (maki_wasm::MOD_ALT, "Alt+"),
+            (maki_wasm::MOD_GUI, "GUI+"),
+            (maki_wasm::MOD_SHIFT, "Shift+"),
+        ]
+        .iter()
+        .filter(|(bit, _)| mods & bit != 0)
+        .map(|(_, name)| *name)
+        .collect();
+        let line = format!("pressed: {held}{}", key_name(code));
         if !s.interactive {
             eprintln!("{line}");
         }

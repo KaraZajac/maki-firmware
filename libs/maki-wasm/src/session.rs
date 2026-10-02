@@ -472,11 +472,24 @@ impl Session {
         }
         match u8::try_from(code) {
             Ok(code) if crate::pressable(code) => {
-                if self.platform.press_key(code, shift) {
-                    0
-                } else {
-                    FAILED
-                }
+                let mods = if shift { crate::MOD_SHIFT } else { 0 };
+                if self.platform.press_key(code, mods) { 0 } else { FAILED }
+            }
+            _ => INVALID,
+        }
+    }
+
+    /// The keyboard permission, host API 10: a key (`chordable`) pressed with the `MOD_*`
+    /// modifiers held, Ctrl, Alt and GUI among them — a shortcut such as `GUI r` or `CTRL c`. The
+    /// permission's install warning says it can do this; what the app does with it is the app's.
+    pub fn press_chord(&mut self, code: i32, mods: i32) -> i32 {
+        if let Err(e) = self.needs(Permission::Keyboard) {
+            return e;
+        }
+        let Ok(mods) = u8::try_from(mods) else { return INVALID };
+        match u8::try_from(code) {
+            Ok(code) if crate::chordable(code) && mods & !crate::MODS_ALL == 0 => {
+                if self.platform.press_key(code, mods) { 0 } else { FAILED }
             }
             _ => INVALID,
         }

@@ -27,9 +27,9 @@ use wasmi::{
 /// pointers holds a few hundred.
 const MAX_TABLE_ELEMENTS: usize = 10_000;
 
-/// The functions this host offers apps. 9 adds `text_scaled` (maki's fonts drawn bigger), and
-/// `wallet_show_backup` shows BIP-85 child seeds.
-pub const API_VERSION: u16 = 9;
+/// The functions this host offers apps. 10 adds `key_chord`: a key pressed with Ctrl, Alt or the
+/// Command/Windows key held, not Shift alone (the keyboard permission).
+pub const API_VERSION: u16 = 10;
 
 /// Host API 8: the jog dial on maki's side, up and down (`Event::Up`, `Event::Down`). Only an app
 /// that says this API or later gets them: an older one would read them as a timeout. The API also
@@ -67,13 +67,31 @@ pub const SINCE: &[(&str, u16)] = &[
     ("motion_range", 8),
     ("screen_dark", 8),
     ("text_scaled", 9),
+    ("key_chord", 10),
 ];
 
 /// Keys an app may press beyond text (`key_press`, the keyboard permission), as USB HID usage IDs:
 /// Enter, Escape, Backspace, Tab and Space (0x28 to 0x2c), F1 to F12 (0x3a to 0x45), and Insert,
 /// Home, Page Up, Delete, End, Page Down and the arrows (0x49 to 0x52). Shift is the one modifier
-/// an app may hold: no shortcut is an app's to press.
+/// `key_press` holds; `key_chord` (host API 10) holds the others, over a wider set of keys.
 pub fn pressable(code: u8) -> bool { matches!(code, 0x28..=0x2c | 0x3a..=0x45 | 0x49..=0x52) }
+
+/// The modifier keys `key_chord` holds, as a bitmask (host API 10). Shift is here too, so a chord
+/// says all of its modifiers at once; Ctrl, Alt and GUI (the Command or Windows key) are the ones
+/// `key_press` won't hold. No app presses a chord without the keyboard permission, and maki warns
+/// at install that the permission can press shortcuts and open programs.
+pub const MOD_SHIFT: u8 = 1;
+pub const MOD_CTRL: u8 = 2;
+pub const MOD_ALT: u8 = 4;
+pub const MOD_GUI: u8 = 8;
+pub const MODS_ALL: u8 = MOD_SHIFT | MOD_CTRL | MOD_ALT | MOD_GUI;
+
+/// A key `key_chord` may press with modifiers held (host API 10), as a USB HID usage ID: the main
+/// keyboard, from `a`/`A` (0x04) through the arrows (0x52) — letters, digits, punctuation, Enter,
+/// Tab, Space, the function keys and the navigation block. The modifiers themselves aren't base
+/// keys: they're the `MOD_*` bits. `GUI r`, `CTRL c` and `ALT F4` are chords; a lone letter isn't
+/// (that's `type_text`).
+pub fn chordable(code: u8) -> bool { matches!(code, 0x04..=0x52) }
 
 /// What maki's functions return for failures they report (rather than stopping the app).
 pub const NOT_FOUND: i32 = -1;
@@ -171,6 +189,7 @@ pub const GATED: &[(&str, Permission)] = &[
     ("key_x25519_agree", Permission::Keys),
     ("type_text", Permission::Keyboard),
     ("key_press", Permission::Keyboard),
+    ("key_chord", Permission::Keyboard),
     ("link_read", Permission::Link),
     ("link_reply", Permission::Link),
     ("camera_scan_qr", Permission::Camera),
@@ -319,10 +338,11 @@ pub trait Platform {
     /// (the keyboard permission). Whether it did: maki types only for the app in front, and
     /// only when plugged into a computer.
     fn type_text(&mut self, _text: &str) -> bool { false }
-    /// Presses a key beyond text (`pressable`, a USB HID usage ID) and lets it go, Shift held if
-    /// `shift` (the keyboard permission): as `type_text`, only for the app in front and only when
-    /// plugged into a computer. Whether it did.
-    fn press_key(&mut self, _code: u8, _shift: bool) -> bool { false }
+    /// Presses a key (a USB HID usage ID) and lets it go, with the `MOD_*` modifiers held (the
+    /// keyboard permission): as `type_text`, only for the app in front and only when plugged into a
+    /// computer. `key_press` gives a `pressable` key with Shift or nothing; `key_chord` a
+    /// `chordable` key with any modifiers. Whether it did.
+    fn press_key(&mut self, _code: u8, _mods: u8) -> bool { false }
     /// The message the last `Event::Message` brought (the link permission), until it's
     /// answered.
     fn message(&mut self) -> Option<Vec<u8>> { None }
@@ -1282,6 +1302,14 @@ fn link(linker: &mut Linker<State>) -> Result<(), Error> {
         |mut c: Caller<'_, State>, code: i32, shift: i32| -> Result<i32, Error> {
             permitted(&c, Permission::Keyboard, "key_press")?;
             Ok(c.data_mut().session.press_key(code, shift != 0))
+        },
+    )?;
+    linker.func_wrap(
+        M,
+        "key_chord",
+        |mut c: Caller<'_, State>, code: i32, mods: i32| -> Result<i32, Error> {
+            permitted(&c, Permission::Keyboard, "key_chord")?;
+            Ok(c.data_mut().session.press_chord(code, mods))
         },
     )?;
     linker.func_wrap(M, "screen_dark", |mut c: Caller<'_, State>, dark: i32| -> Result<(), Error> {

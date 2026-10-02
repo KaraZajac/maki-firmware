@@ -19,8 +19,8 @@ struct Record {
     asks: Vec<Ask>,
     answers: VecDeque<Answer>,
     typed: Vec<String>,
-    /// keys beyond text pressed, and whether with Shift
-    pressed: Vec<(u8, bool)>,
+    /// keys pressed and the modifiers held (`MOD_*`)
+    pressed: Vec<(u8, u8)>,
     /// maki is locked: no secrets, and nothing typed
     locked: bool,
     /// messages from the computer, each delivered with an Event::Message
@@ -120,12 +120,12 @@ impl Platform for Script {
         true
     }
 
-    fn press_key(&mut self, code: u8, shift: bool) -> bool {
+    fn press_key(&mut self, code: u8, mods: u8) -> bool {
         let mut r = self.0.borrow_mut();
         if r.locked {
             return false;
         }
-        r.pressed.push((code, shift));
+        r.pressed.push((code, mods));
         true
     }
 
@@ -853,6 +853,7 @@ fn gated_functions_need_their_permission() {
         ("key_x25519_agree", "(param i32 i32 i32 i32) (result i32)"),
         ("type_text", "(param i32 i32) (result i32)"),
         ("key_press", "(param i32 i32) (result i32)"),
+        ("key_chord", "(param i32 i32) (result i32)"),
         ("link_read", "(param i32 i32) (result i32)"),
         ("link_reply", "(param i32 i32) (result i32)"),
         ("camera_scan_qr", "(param i32 i32) (result i32)"),
@@ -1034,7 +1035,8 @@ fn keys_beyond_text_are_pressed_and_shortcuts_are_not() {
     for (code, shift) in [(0x4e, 0), (0x3e, 1)] {
         let (_, r) =
             call_with(imports, "", &press(code, shift), Record::default(), with(&[Permission::Keyboard]));
-        assert_eq!((result_of(&r), r.pressed.clone()), (0, vec![(code as u8, shift != 0)]));
+        // shift is 0 or 1, which is the modifier bitmask for Shift or nothing
+        assert_eq!((result_of(&r), r.pressed.clone()), (0, vec![(code as u8, shift as u8)]));
     }
     // letters are type_text's; Caps Lock, Print Screen, the keypad, Power, and Ctrl, Alt and
     // Command (0xe0 on) are no app's to press
@@ -1053,6 +1055,58 @@ fn keys_beyond_text_are_pressed_and_shortcuts_are_not() {
         with(&[Permission::Keyboard]),
     );
     assert_eq!(result_of(&r), FAILED);
+}
+
+#[test]
+fn chords_press_a_key_with_ctrl_alt_or_gui_held() {
+    use maki_bundle::{Kind, Manifest, Permission};
+    let imports = r#"(import "maki" "key_chord" (func $chord (param i32 i32) (result i32)))"#;
+    let chord = |code: i32, mods: i32| format!("(call $chord (i32.const {code}) (i32.const {mods}))");
+    // GUI r, Ctrl c, Ctrl+Alt+Delete, Shift+Alt+Tab, and a lone letter with GUI (a chord may hold
+    // a letter, which key_press won't): each pressed with its modifiers
+    for (code, mods) in
+        [(0x15, MOD_GUI), (0x06, MOD_CTRL), (0x4c, MOD_CTRL | MOD_ALT), (0x2b, MOD_SHIFT | MOD_ALT)]
+    {
+        let (_, r) = call_with(
+            imports,
+            "",
+            &chord(code, mods as i32),
+            Record::default(),
+            with(&[Permission::Keyboard]),
+        );
+        assert_eq!((result_of(&r), r.pressed.clone()), (0, vec![(code as u8, mods)]), "{code:#x} {mods:#x}");
+    }
+    // the modifiers themselves aren't base keys (0xe0 on), nor is the keypad (0x53 on); an unknown
+    // modifier bit, and a code out of range, are refused
+    for (code, mods) in [(0xe0, 0), (0x53, 0), (0x66, 0), (-1, 0), (0x15, 0x10), (0x15, 0xff)] {
+        let (_, r) =
+            call_with(imports, "", &chord(code, mods), Record::default(), with(&[Permission::Keyboard]));
+        assert_eq!(result_of(&r), INVALID, "{code:#x} mods {mods:#x}");
+        assert!(r.pressed.is_empty());
+    }
+    // it came with host API 10: an app saying less is refused at install, and says why
+    let manifest = |api: u16| Manifest {
+        id: "org.example.chord".into(),
+        name: "Chord".into(),
+        version: 1,
+        label: "1.0".into(),
+        kind: Kind::Wasm,
+        api,
+        firmware: String::new(),
+        permissions: vec![(Permission::Keyboard, "to press shortcuts".into())],
+        storage_kib: 1,
+        memory_kib: 64,
+        backup: true,
+        description: String::new(),
+        wallet: None,
+    };
+    let code = module(&format!(
+        r#"(module {imports} (memory (export "memory") 1) (func (export "maki_main") (drop {})))"#,
+        chord(0x15, MOD_GUI as i32)
+    ));
+    let err = admit(&manifest(9), &code).unwrap_err();
+    assert!(err.contains("key_chord, which came with host API 10, and its manifest says 9"), "{err}");
+    admit(&manifest(10), &code).unwrap();
 }
 
 #[test]

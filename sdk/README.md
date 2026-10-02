@@ -53,6 +53,10 @@ the `maki` tool that packs, signs, checks and simulates them. The examples:
   first) or a QR code, typed into a field on request; the computer sees their titles alone.
 - **Scanner**: reads a QR code and shows what it says, a page at a time, and types it into the
   computer (camera and keyboard); text that would press Enter or Tab waits for the centre first.
+- **Macro Pad**: keystrokes maki types into a computer at the press of a button — text, keys and
+  DuckyScript (1.0, plus STRINGLN), loaded from maki desktop (the link permission). Host API 10's
+  `chord` presses shortcuts (Gui+R, Ctrl+Alt+Delete), so it can open and run programs; it runs
+  attended, on maki's screen, with you holding the device.
 - **Snake**: the game, steered the way it's to go with the jog dial and left and right, timed
   with `wait`.
 - **2048** and **Minesweeper**: the games, with the jog dial for up and down. Minesweeper's
@@ -248,7 +252,11 @@ function whose permission it didn't ask for):
   in maki's bar. The owner is warned at install: it could type commands. Host API 8 adds keys
   beyond text, `keyboard::press(Key::PageDown)`: Enter, Escape, Backspace, Tab, Space, F1 to F12,
   Insert, Delete, Home, End, Page Up, Page Down and the arrows, and `press_shifted` with Shift
-  held. There's no Ctrl, Alt or Command: shortcuts are the owner's to press.
+  held. Host API 10 adds `keyboard::chord(code, mods)` (and `chord_key`, and `usage` to turn a
+  character into a HID code): a key with Ctrl, Alt or Gui (the Command or Windows key) held — a
+  shortcut such as Gui+R or Ctrl+Alt+Delete, which `press` won't make. From API 10 maki warns at
+  install that the keyboard permission can press shortcuts and open programs; the app's own reason
+  says what it does.
 - **`link`**: messages with software on the computer, through maki desktop. The software sends
   one (maki desktop's local socket takes `{"id":1,"type":"appMessage","app":"your.app.id",
   "data":"<base64>"}`), the app gets `Event::Message`, `link::read`s it and `link::reply`s once

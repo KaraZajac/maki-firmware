@@ -1,0 +1,13 @@
+[package]
+name = "macropad"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+# std, for an allocator: scripts are Strings
+maki-app = { path = "../../maki-app", default-features = false, features = ["std"] }

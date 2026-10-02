@@ -19,8 +19,8 @@ struct Record {
     answers: VecDeque<Answer>,
     asks: Vec<Ask>,
     typed: Vec<String>,
-    /// keys beyond text pressed, and whether with Shift
-    pressed: Vec<(u8, bool)>,
+    /// keys pressed and the modifiers held (`MOD_*`)
+    pressed: Vec<(u8, u8)>,
     inbox: VecDeque<Vec<u8>>,
     current: Option<Vec<u8>>,
     replies: Vec<Vec<u8>>,
@@ -114,8 +114,8 @@ impl Platform for Script {
         true
     }
 
-    fn press_key(&mut self, code: u8, shift: bool) -> bool {
-        self.0.borrow_mut().pressed.push((code, shift));
+    fn press_key(&mut self, code: u8, mods: u8) -> bool {
+        self.0.borrow_mut().pressed.push((code, mods));
         true
     }
 
@@ -371,22 +371,15 @@ fn presenter_turns_slides_blanks_the_screen_and_starts_the_show() {
     );
     assert_eq!(stop, Stop::Finished);
     // Page Down, Page Up; B blanks; F5 and Shift+F5 start the show, Esc ends it
+    // the modifier bitmask: 0 for none, MOD_SHIFT (1) for Shift
     assert_eq!(
         r.pressed,
-        [
-            (0x4e, false),
-            (0x4b, false),
-            (0x4e, false),
-            (0x4b, false),
-            (0x3e, false),
-            (0x3e, true),
-            (0x29, false)
-        ]
+        [(0x4e, 0), (0x4b, 0), (0x4e, 0), (0x4b, 0), (0x3e, 0), (0x3e, MOD_SHIFT), (0x29, 0)]
     );
     assert_eq!(r.typed, ["b"]);
     // the dial held down repeats: the same way at once is one turn
     let (_, r) = run_fixture("presenter", &[Down, Down, Down], BTreeMap::new());
-    assert_eq!(r.pressed, [(0x4e, false)]);
+    assert_eq!(r.pressed, [(0x4e, 0)]);
 }
 
 #[test]
@@ -670,7 +663,7 @@ fn morse_keys_letters_and_types_them_a_line_waiting_for_the_centre() {
     let (stop, r) = run_record("morse", record);
     assert_eq!(stop, Stop::Finished);
     assert_eq!(r.typed, ["s", "o", "s", " ", "\n", "t"]);
-    assert_eq!(r.pressed, [(0x2a, false)], "Backspace");
+    assert_eq!(r.pressed, [(0x2a, 0)], "Backspace");
     assert_eq!(&r.storage["morse"][4..], b"sos \n");
 }
 
@@ -3623,4 +3616,100 @@ fn childseeds_keeps_the_choice_and_which_were_seen() {
     );
     assert!(locked.backups.is_empty());
     assert_ne!(locked.frames[0], locked.frames[1], "a note says why");
+}
+
+/// Scripts serialized as the Macro Pad keeps them: each a u16-length name and body.
+fn kept_scripts(scripts: &[(&str, &str)]) -> BTreeMap<String, Vec<u8>> {
+    let mut b = Vec::new();
+    for (name, body) in scripts {
+        for part in [name.as_bytes(), body.as_bytes()] {
+            b.extend_from_slice(&(part.len() as u16).to_le_bytes());
+            b.extend_from_slice(part);
+        }
+    }
+    BTreeMap::from([("scripts".to_string(), b)])
+}
+
+#[test]
+fn macropad_takes_a_script_from_the_computer_and_keeps_it() {
+    use Event::*;
+    let script = b"Login\nSTRING hi\nENTER".to_vec();
+    let mut r = Record { events: [Message].into(), ..Default::default() };
+    r.inbox.push_back(script.clone());
+    let (stop, r) = run_record("macropad", r);
+    assert_eq!(stop, Stop::Finished);
+    assert_eq!(r.menu, ["Delete this", "Clear all"]);
+    // maki answered maki desktop, and kept it
+    assert_eq!(r.replies, [b"ok 1".to_vec()]);
+    assert_eq!(r.storage["scripts"], kept_scripts(&[("Login", "STRING hi\nENTER")])["scripts"]);
+    // sending the same name again replaces it, not adds
+    let mut again = Record { events: [Message].into(), storage: r.storage.clone(), ..Default::default() };
+    again.inbox.push_back(b"Login\nSTRING bye".to_vec());
+    let (_, again) = run_record("macropad", again);
+    assert_eq!(again.storage["scripts"], kept_scripts(&[("Login", "STRING bye")])["scripts"]);
+    assert_eq!(again.replies, [b"ok 1".to_vec()]);
+}
+
+#[test]
+fn macropad_types_text_presses_keys_and_chords() {
+    use Event::*;
+    // open the one script (Centre on the list), then run it (Centre on its page)
+    let body = "REM a comment\nSTRING hello\nENTER\nGUI r\nCTRL ALT DELETE\nREPEAT 2";
+    let (stop, r) = run_fixture("macropad", &[Centre, Centre], kept_scripts(&[("Demo", body)]));
+    assert_eq!(stop, Stop::Finished);
+    assert_eq!(r.typed, ["hello"]);
+    // Enter (no mods); Gui+R; Ctrl+Alt+Delete, then REPEAT does that line twice more
+    assert_eq!(
+        r.pressed,
+        [
+            (0x28, 0),
+            (0x15, MOD_GUI),
+            (0x4c, MOD_CTRL | MOD_ALT),
+            (0x4c, MOD_CTRL | MOD_ALT),
+            (0x4c, MOD_CTRL | MOD_ALT),
+        ]
+    );
+}
+
+#[test]
+fn macropad_waits_for_delays_and_stringln_adds_enter() {
+    use Event::*;
+    // DELAY needs maki's clock: one Timeout lets the whole wait pass
+    let r = Record {
+        events: [Centre, Centre, Timeout].into(),
+        clock: true,
+        storage: kept_scripts(&[("d", "DELAY 50\nSTRINGLN hey")]),
+        ..Default::default()
+    };
+    let (stop, r) = run_record("macropad", r);
+    assert_eq!(stop, Stop::Finished);
+    assert_eq!(r.typed, ["hey"]);
+    assert_eq!(r.pressed, [(0x28, 0)], "STRINGLN pressed Enter");
+    assert!(r.now >= 50, "it waited the DELAY: {} ms", r.now);
+}
+
+#[test]
+fn macropad_skips_what_it_cannot_press_and_carries_on() {
+    use Event::*;
+    // a lone modifier and an unknown key maki can't press are skipped; Caps Lock and Print Screen
+    // it can (through a chord, no modifiers); the STRING still types
+    let body = "GUI\nNUMLOCK\nCAPSLOCK\nPRINTSCREEN\nSTRING ok";
+    let (_, r) = run_fixture("macropad", &[Centre, Centre], kept_scripts(&[("x", body)]));
+    assert_eq!(r.typed, ["ok"]);
+    assert_eq!(r.pressed, [(0x39, 0), (0x46, 0)], "Caps Lock and Print Screen");
+}
+
+#[test]
+fn macropad_fills_up_and_can_be_cleared() {
+    use Event::*;
+    let many: Vec<(String, String)> = (0..12).map(|i| (format!("s{i}"), format!("STRING {i}"))).collect();
+    let refs: Vec<(&str, &str)> = many.iter().map(|(n, b)| (n.as_str(), b.as_str())).collect();
+    // a thirteenth, new name: no room
+    let mut r = Record { events: [Message].into(), storage: kept_scripts(&refs), ..Default::default() };
+    r.inbox.push_back(b"new\nSTRING x".to_vec());
+    let (_, r) = run_record("macropad", r);
+    assert_eq!(r.replies, [b"full".to_vec()]);
+    // Clear all empties the pad
+    let (_, cleared) = run_fixture("macropad", &[Menu(1)], kept_scripts(&refs));
+    assert!(!cleared.storage.contains_key("scripts"));
 }
