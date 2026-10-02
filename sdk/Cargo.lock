@@ -167,6 +167,14 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fc652a48c352aef3ea3aed32080501cf3ef6ed5da78602a020c991775b0aff04"
 
 [[package]]
+name = "cardano"
+version = "0.1.0"
+dependencies = [
+ "maki-ada",
+ "maki-app",
+]
+
+[[package]]
 name = "cfg-if"
 version = "1.0.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -832,6 +840,13 @@ dependencies = [
  "serde_json",
  "sha2",
  "toml",
+]
+
+[[package]]
+name = "maki-ada"
+version = "0.1.0"
+dependencies = [
+ "blake2",
 ]
 
 [[package]]

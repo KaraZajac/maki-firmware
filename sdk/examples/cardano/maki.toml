@@ -1,0 +1,18 @@
+id = "com.leviathan.maki.cardano"
+name = "Cardano"
+version = 1
+label = "1.0"
+api = 11
+storage = 0
+memory = 1024
+backup = true
+icon = "icon.pbm"
+description = "Your Cardano account, from maki's recovery phrase, as Eternl, Lace, Yoroi and Ledger make it: for maki desktop's wallet. Every payment and token, the change, staking, vote delegation, rewards and the fee are shown on maki before it signs; nothing for scripts, pools or governance is signed at all."
+
+[permissions]
+link = "So maki desktop can ask for your account, addresses and signatures."
+wallet = "To sign the transactions you approve on maki's screen, and nothing else."
+
+[wallet]
+curve = "bip32-ed25519"
+paths = ["m/1852'/1815'"]

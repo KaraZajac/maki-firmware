@@ -5269,6 +5269,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "maki-ada"
+version = "0.1.0"
+dependencies = [
+ "blake2",
+ "maki-hd",
+ "maki-seed",
+ "serde_json",
+]
+
+[[package]]
 name = "maki-app-host"
 version = "0.1.0"
 dependencies = [
@@ -5639,6 +5649,7 @@ dependencies = [
  "hkdf",
  "k256",
  "log",
+ "maki-ada",
  "maki-apt",
  "maki-bundle",
  "maki-eth",
