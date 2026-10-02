@@ -113,7 +113,7 @@ the `maki` tool that packs, signs, checks and simulates them. The examples:
 - **Child Seeds**: new recovery phrases made from maki's by BIP-85, each a wallet of its own:
   a number and a length chosen here, and the words shown by maki itself (`show_backup` on a
   child seed's path, host API 9), never the app.
-- **Passwords**: BIP-85's passwords, typed or shown by maki itself (host API 12's
+- **Password Maker**: BIP-85's passwords, typed or shown by maki itself (host API 12's
   `type_password` and `show_password`), never the app, which keeps only which is which: a site, a
   username and a number, sent from maki desktop (the link permission) once maki's owner says yes.
   By number, the passwords a Coldcard's Type Passwords types.

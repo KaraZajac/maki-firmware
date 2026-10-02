@@ -1,4 +1,4 @@
-//! Passwords (sdk/examples/passwords), run as maki runs it: entries from maki desktop once the
+//! Password Maker (sdk/examples/passwords), run as maki runs it: entries from maki desktop once the
 //! owner says yes, and passwords typed and shown by maki itself, never handed to the app. The
 //! passwords here are the BIP39 test phrase's, as an independent BIP-32 and BIP-85 (Python's
 //! hashlib and base64, from the BIP's text) makes them.

@@ -1,4 +1,4 @@
-//! Passwords: maki as a password manager with nothing secret to keep. Each password is made by
+//! Password Maker: maki as a password manager with nothing secret to keep. Each password is made by
 //! maki from the recovery phrase, as BIP-85 makes them (base64 or base85, 10 to 86 characters, a
 //! number for each), so restoring maki restores every one, and anything else that follows BIP-85
 //! makes the same: number N in base64 at 21 characters is a Coldcard's Type Passwords' number N.
