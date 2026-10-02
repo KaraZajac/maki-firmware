@@ -664,3 +664,42 @@ fn app_replies_carry_only_what_the_answer_allows() {
     let (_, body) = reply::store_update(true, Approval::Locked, state, "ignored");
     assert_eq!(body, [&[1, Approval::Locked as u8][..], &[0; 16], &[0]].concat());
 }
+
+/// A platform that says which wallet wallet apps have.
+struct Wallet((WalletKind, u32));
+
+impl Platform for Wallet {
+    fn fill_random(&mut self, buf: &mut [u8]) { buf.fill(7) }
+
+    fn uptime_ms(&self) -> u64 { 0 }
+
+    fn utc_ms(&self) -> Option<u64> { None }
+
+    fn set_time(&mut self, _: u64, _: i32) {}
+
+    fn wallet(&mut self) -> (WalletKind, u32) { self.0 }
+}
+
+#[test]
+fn wallet_status_says_which_wallet_and_its_fingerprint() {
+    for (wallet, body) in [
+        ((WalletKind::Standard, 0x73c5_da0a), [1, 0x0a, 0xda, 0xc5, 0x73]),
+        ((WalletKind::Passphrase, 0x1234_5678), [2, 0x78, 0x56, 0x34, 0x12]),
+        // locked: none, and no fingerprint even if the platform had one
+        ((WalletKind::None, 0x1234_5678), [0, 0, 0, 0, 0]),
+    ] {
+        let mut d = Device::new(Wallet(wallet), "maki", "0.1.0".into());
+        match d.handle(&Packet { kind: kind::WALLET_STATUS, id: 1, body: vec![] }) {
+            Handled::Reply(k, b) => assert_eq!((k, b), (kind::WALLET_STATUS | kind::REPLY, body.to_vec())),
+            other => panic!("{other:?}"),
+        }
+        // nothing after the kind: malformed
+        match d.handle(&Packet { kind: kind::WALLET_STATUS, id: 2, body: vec![0] }) {
+            Handled::Reply(k, _) => assert_eq!(k, kind::ERROR),
+            other => panic!("{other:?}"),
+        }
+    }
+    // a platform that doesn't say: none
+    let (k, body) = ask(&mut device(), kind::WALLET_STATUS, vec![]);
+    assert_eq!((k, body), (kind::WALLET_STATUS | kind::REPLY, vec![0, 0, 0, 0, 0]));
+}

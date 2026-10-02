@@ -97,8 +97,9 @@ pub fn to_entropy(words: &[&str]) -> Result<Vec<u8>, Error> {
 }
 
 /// The BIP39 seed: PBKDF2-HMAC-SHA512 over the phrase, 2048 rounds, salted with "mnemonic" and
-/// the passphrase (maki has none: an empty one). The words are ASCII, so the normalization the
-/// BIP asks for changes nothing.
+/// the passphrase (none, an empty one, for maki's own keys and its standard wallet; a passphrase
+/// wallet's own). The words are ASCII, and so are the passphrases maki takes, so the
+/// normalization the BIP asks for changes nothing.
 pub fn seed(words: &[&str], passphrase: &str) -> [u8; 64] {
     // all its room at once: a string that grows leaves copies of its start behind
     let mut phrase = String::with_capacity(words.iter().map(|w| w.len() + 1).sum());
@@ -108,11 +109,14 @@ pub fn seed(words: &[&str], passphrase: &str) -> [u8; 64] {
         }
         phrase.push_str(w);
     }
-    let mut salt = String::from("mnemonic");
+    // a passphrase is a secret too
+    let mut salt = String::with_capacity(8 + passphrase.len());
+    salt.push_str("mnemonic");
     salt.push_str(passphrase);
     let mut out = [0u8; 64];
     pbkdf2::pbkdf2_hmac::<Sha512>(phrase.as_bytes(), salt.as_bytes(), 2048, &mut out);
     phrase.zeroize();
+    salt.zeroize();
     out
 }
 

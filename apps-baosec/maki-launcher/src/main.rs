@@ -17,9 +17,11 @@ mod api;
 mod ask;
 mod clock_face;
 mod menu;
+mod passphrase;
 mod pin;
 mod saver;
 mod setup;
+mod shares;
 mod splash;
 use api::*;
 use ask::Asking;
@@ -28,8 +30,10 @@ use maki_keys::{Keys, PinResult, State};
 use maki_ui as ui;
 use menu::Menu;
 use num_traits::{FromPrimitive, ToPrimitive};
+use passphrase::{PassphraseEntry, PassphraseStep};
 use pin::PinPad;
 use setup::{CheckStep, EntryStep, Phrase, PhraseCheck, PhraseStep, WordEntry};
+use shares::{PickStep, ShareEntry, SharesCheck, SharesPick, SharesShow, ShowStep};
 use ui::{Key, LINE, Screen, W};
 use xous_ipc::Buffer;
 
@@ -111,6 +115,27 @@ struct App {
 }
 
 /// Overwrite a PIN before letting it go.
+/// Text in lines of at most `width` characters, broken at spaces where it can be: for a page's
+/// lines, which are short.
+fn wrap(text: &str, width: usize) -> Vec<String> {
+    let mut lines = Vec::new();
+    let mut line = String::new();
+    for word in text.split(' ') {
+        if !line.is_empty() && line.chars().count() + 1 + word.chars().count() > width {
+            lines.push(std::mem::take(&mut line));
+        }
+        if !line.is_empty() {
+            line.push(' ');
+        }
+        line.push_str(word);
+    }
+    if !line.is_empty() {
+        lines.push(line);
+    }
+    lines.truncate(5);
+    lines
+}
+
 fn forget(pin: String) {
     let mut bytes = pin.into_bytes();
     bytes.fill(0);
@@ -194,6 +219,16 @@ enum PinFor {
     NewAgain(String),
     /// the current one, which authorizes the change (holding the new one)
     Current(String),
+    /// to make shares of the phrase from maki's menu: so many needed, of so many
+    Shares(u8, u8),
+}
+
+/// Who shares are made for: setup, making the phrase as them, or maki's menu, splitting the
+/// phrase it has.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum SharesFor {
+    Setup,
+    Menu,
 }
 
 /// Where a page of text goes when the owner confirms it.
@@ -209,6 +244,22 @@ enum Next {
     ReviewPhrase,
     /// type in a phrase of this many words
     Words(usize),
+    /// type a passphrase, for a passphrase wallet
+    Passphrase,
+    /// open the passphrase wallet of the passphrase just typed
+    OpenWallet,
+    /// back to the standard wallet
+    CloseWallet,
+    /// ask for a passphrase at each unlock, or not
+    AskPassphrase(bool),
+    /// choose how many shares, then make them: at setup, or from maki's menu
+    Shares(SharesFor),
+    /// back to the shares' words, after a wrong answer in their check
+    ReviewShares(SharesFor),
+    /// type shares in, to restore
+    RestoreShares,
+    /// back to typing shares in, after a word of it said something's wrong
+    ResumeShares,
 }
 
 /// What's on screen. Asks go over any of these, once maki is unlocked.
@@ -229,14 +280,24 @@ enum View {
     PhraseCheck(PhraseCheck),
     /// typing a recovery phrase in, to restore
     WordEntry(WordEntry),
+    /// typing a passphrase, for a passphrase wallet
+    Passphrase(PassphraseEntry),
+    /// Shamir shares: how many, their words, their check, and typing them in
+    SharesPick(SharesPick, SharesFor),
+    SharesShow(SharesShow, SharesFor),
+    SharesCheck(SharesCheck, SharesFor),
+    ShareEntry(ShareEntry),
     /// an app is in front and draws for itself
     App(usize),
     /// the screen resting: a clock over what was there, which any key brings back
     Saver(Box<View>),
 }
 
+/// The page where a passphrase just typed is checked before it opens a wallet.
+const CHECK_PASSPHRASE: &str = "Open this wallet?";
+
 /// maki's own menu.
-const MAKI_MENU: [&str; 4] = ["Lock", "Change PIN", "About", "Close"];
+const MAKI_MENU: [&str; 6] = ["Lock", "Wallets", "Shares", "Change PIN", "About", "Close"];
 
 struct System {
     screen: Screen,
@@ -262,6 +323,14 @@ struct System {
     restoring: bool,
     /// the phrase being shown and checked, at setup
     phrase: Option<Vec<String>>,
+    /// a passphrase just typed, until it opens its wallet (or doesn't)
+    typed_passphrase: Option<String>,
+    /// shares just made, their words, until they're checked
+    shares: Option<Vec<Vec<String>>>,
+    /// shares being typed in, while a page says something about them
+    share_entry: Option<ShareEntry>,
+    /// the passphrase wallet open, by its fingerprint: wallet apps have it until maki locks
+    wallet: Option<u32>,
     tt: ticktimer_server::Ticktimer,
     /// when a key was last pressed (ticktimer milliseconds): a minute after, the screen rests
     last_key_ms: u64,
@@ -271,7 +340,11 @@ impl System {
     fn draw_home(&self) {
         let s = &self.screen;
         s.begin();
-        s.status_bar(&self.clock, self.linked);
+        // a passphrase wallet open: its fingerprint, as wallets write it, in place of maki's name
+        match self.wallet {
+            Some(fp) => s.titled_bar(&format!("{fp:08x}"), &self.clock, self.linked),
+            None => s.status_bar(&self.clock, self.linked),
+        }
         let top = s.bar + 6;
         match self.apps.get(self.selected) {
             None => s.text(top + 24, LINE, GlyphStyle::Regular, false, true, "Starting…"),
@@ -336,20 +409,24 @@ impl System {
         if self.restoring {
             self.choose(
                 "Restore",
-                &["How many words is", "your recovery phrase?"],
-                vec![("24 words", Next::Words(24)), ("12 words", Next::Words(12))],
+                &["Your recovery phrase:", "how many words? Or", "shares of it."],
+                vec![
+                    ("24 words", Next::Words(24)),
+                    ("12 words", Next::Words(12)),
+                    ("shares", Next::RestoreShares),
+                ],
             );
         } else {
-            self.info(
+            self.choose(
                 "Recovery phrase",
                 &[
                     "24 words that bring back",
                     "your wallet and backups if",
-                    "maki is lost or wiped.",
+                    "maki is lost or wiped; or",
+                    "shares, a few of which do.",
                     "Have paper and a pen.",
                 ],
-                "show my words",
-                Next::ShowPhrase,
+                vec![("show my words", Next::ShowPhrase), ("shares instead", Next::Shares(SharesFor::Setup))],
             );
         }
     }
@@ -405,13 +482,107 @@ impl System {
                 &["Setup stopped before the", "recovery phrase was made."],
                 vec![
                     ("make one now", Next::ShowPhrase),
+                    ("make it as shares", Next::Shares(SharesFor::Setup)),
                     ("restore 24 words", Next::Words(24)),
                     ("restore 12 words", Next::Words(12)),
+                    ("restore shares", Next::RestoreShares),
                 ],
+            );
+        }
+        // a passphrase wallet each time, if the owner asked for that
+        if self.keys.as_ref().is_some_and(|k| k.asks_passphrase()) {
+            return self.choose(
+                "Which wallet?",
+                &["Your phrase's own, or", "the one a passphrase", "opens."],
+                vec![("type a passphrase", Next::Passphrase), ("phrase's own", Next::Home)],
             );
         }
         self.go_home();
         self.start_asking();
+    }
+
+    /// The Wallets page in maki's menu: which wallet wallet apps have, and the ways to another.
+    /// `on_ask`: with "ask at unlock" chosen (just flipped: so its new state shows).
+    fn wallets_page(&mut self, on_ask: bool) {
+        let asks = self.keys.as_ref().is_some_and(|k| k.asks_passphrase());
+        let ask = if asks {
+            ("ask at unlock: on", Next::AskPassphrase(false))
+        } else {
+            ("ask at unlock: off", Next::AskPassphrase(true))
+        };
+        match self.wallet {
+            Some(fp) => self.choose(
+                &format!("Wallet {fp:08x}"),
+                &["A passphrase wallet is", "open: wallet apps have", "it until maki locks."],
+                vec![
+                    ("phrase's own wallet", Next::CloseWallet),
+                    ("another passphrase", Next::Passphrase),
+                    ask,
+                    ("close", Next::Home),
+                ],
+            ),
+            None => self.choose(
+                "Wallets",
+                &[
+                    "Your phrase's own is",
+                    "open. A passphrase opens",
+                    "another wallet, made",
+                    "from your phrase and it.",
+                ],
+                vec![("type a passphrase", Next::Passphrase), ask, ("close", Next::Home)],
+            ),
+        }
+        if let View::Info { actions, selected, .. } = &mut self.view {
+            if on_ask {
+                *selected = actions.iter().position(|(a, _)| a.starts_with("ask at unlock")).unwrap_or(0);
+                self.redraw();
+            }
+        }
+    }
+
+    /// Shares maki-keys made (or why not): their words to write down, then their check.
+    fn shares_made(&mut self, made: Result<Vec<Vec<String>>, (u32, u32)>, whose: SharesFor) {
+        match made {
+            Ok(shares) => {
+                self.view = View::SharesShow(SharesShow::new(shares.clone()), whose);
+                self.shares = Some(shares);
+                self.redraw();
+            }
+            Err((maki_keys::RESULT_WRONG, left)) => {
+                let tries = if left == 1 {
+                    "1 try left before".to_string()
+                } else {
+                    format!("{left} tries left before")
+                };
+                self.info(
+                    "Wrong PIN",
+                    &["No shares made.", &tries, "maki wipes its secrets."],
+                    "continue",
+                    Next::Home,
+                )
+            }
+            Err((maki_keys::RESULT_WIPED, _)) => {
+                self.unlocked = false;
+                self.asks_open = false;
+                self.wallet = None;
+                self.info(
+                    "Too many tries",
+                    &["maki's secrets were wiped.", "Unplug maki, then set it", "up again from your phrase."],
+                    "",
+                    Next::Home,
+                )
+            }
+            Err(_) => self.info("Couldn't make them", &["Nothing changed."], "continue", Next::Home),
+        }
+    }
+
+    /// Forget shares made and shown.
+    fn forget_shares(&mut self) {
+        for share in self.shares.take().into_iter().flatten() {
+            for w in share {
+                forget(w);
+            }
+        }
     }
 
     /// The PIN pad handed over a PIN.
@@ -488,6 +659,12 @@ impl System {
                 };
                 self.pin_pad("Current PIN", &note, PinFor::Current(pin))
             }
+            PinFor::Shares(needed, made) => {
+                self.busy("Making shares…");
+                let made_shares = keys.new_shares(needed, made, &pin);
+                forget(pin);
+                self.shares_made(made_shares, SharesFor::Menu);
+            }
             PinFor::Current(new) => {
                 self.busy("Changing…");
                 let result = keys.change_pin(&pin, &new);
@@ -551,12 +728,28 @@ impl System {
             View::Phrase(p) => p.draw(&self.screen, &self.clock, self.linked),
             View::PhraseCheck(c) => c.draw(&self.screen, &self.clock, self.linked),
             View::WordEntry(e) => e.draw(&self.screen, &self.clock, self.linked),
+            View::Passphrase(e) => e.draw(&self.screen, &self.clock, self.linked),
+            View::SharesPick(p, _) => p.draw(&self.screen, &self.clock, self.linked),
+            View::SharesShow(p, _) => p.draw(&self.screen, &self.clock, self.linked),
+            View::SharesCheck(c, _) => c.draw(&self.screen, &self.clock, self.linked),
+            View::ShareEntry(e) => e.draw(&self.screen, &self.clock, self.linked),
         }
     }
 
     /// The owner is entering a PIN or a phrase: presses are meant for that.
     fn entering(&self) -> bool {
-        matches!(self.view, View::Pin(..) | View::Phrase(_) | View::PhraseCheck(_) | View::WordEntry(_))
+        matches!(
+            self.view,
+            View::Pin(..)
+                | View::Phrase(_)
+                | View::PhraseCheck(_)
+                | View::WordEntry(_)
+                | View::Passphrase(_)
+                | View::SharesPick(..)
+                | View::SharesShow(..)
+                | View::SharesCheck(..)
+                | View::ShareEntry(_)
+        )
     }
 
     /// Take the screen for the next ask waiting, if any. Not before the PIN, nothing being asked
@@ -671,6 +864,14 @@ impl System {
 
     /// Go where a page's action leads.
     fn follow(&mut self, next: Next) {
+        // a passphrase shown to check it goes with its page
+        if let View::Info { title, lines, .. } = &mut self.view {
+            if title == CHECK_PASSPHRASE {
+                for line in lines.drain(..) {
+                    forget(line);
+                }
+            }
+        }
         match next {
             Next::Home if self.unlocked => {
                 self.go_home();
@@ -704,6 +905,86 @@ impl System {
                 self.view = View::WordEntry(WordEntry::new(n));
                 self.redraw();
             }
+            Next::Shares(whose) => {
+                self.view = View::SharesPick(SharesPick::new(), whose);
+                self.redraw();
+            }
+            Next::ReviewShares(whose) => match self.shares.clone() {
+                Some(shares) => {
+                    self.view = View::SharesShow(SharesShow::new(shares), whose);
+                    self.redraw();
+                }
+                None => self.follow(Next::Home),
+            },
+            Next::RestoreShares => {
+                if let Some(mut e) = self.share_entry.take() {
+                    e.clear();
+                }
+                self.view = View::ShareEntry(ShareEntry::new());
+                self.redraw();
+            }
+            Next::ResumeShares => {
+                let entry = self.share_entry.take().unwrap_or_else(ShareEntry::new);
+                self.view = View::ShareEntry(entry);
+                self.redraw();
+            }
+            Next::Passphrase => {
+                self.forget_typed_passphrase();
+                self.view = View::Passphrase(PassphraseEntry::new());
+                self.redraw();
+            }
+            Next::OpenWallet => {
+                let Some(typed) = self.typed_passphrase.take() else { return self.follow(Next::Home) };
+                self.busy("Opening…");
+                let opened = self.keys.as_ref().map(|k| k.open_wallet(&typed));
+                forget(typed);
+                match opened {
+                    Some(Ok(fp)) => {
+                        self.wallet = Some(fp);
+                        self.info(
+                            &format!("Wallet {fp:08x}"),
+                            &[
+                                "is open. Wallet apps have",
+                                "it until maki locks, or",
+                                "you go back from the",
+                                "menu's Wallets.",
+                            ],
+                            "continue",
+                            Next::Home,
+                        )
+                    }
+                    _ => self.info(
+                        "Couldn't open it",
+                        &["Your phrase's own wallet", "is still open."],
+                        "continue",
+                        Next::Home,
+                    ),
+                }
+            }
+            Next::CloseWallet => {
+                if self.keys.as_ref().is_some_and(|k| k.close_wallet()) {
+                    self.wallet = None;
+                }
+                self.info(
+                    "Your phrase's wallet",
+                    &["is open again: wallet", "apps have it now."],
+                    "continue",
+                    Next::Home,
+                )
+            }
+            Next::AskPassphrase(ask) => {
+                if let Some(k) = self.keys.as_ref() {
+                    k.set_asks_passphrase(ask);
+                }
+                self.wallets_page(true)
+            }
+        }
+    }
+
+    /// Forget a passphrase typed and not yet used.
+    fn forget_typed_passphrase(&mut self) {
+        if let Some(p) = self.typed_passphrase.take() {
+            forget(p);
         }
     }
 
@@ -712,6 +993,8 @@ impl System {
         // screen, menus, choices, the phrase's pages), up to the next value where there's one to
         // count up (the PIN's digits, a word's letters)
         let key = match (key, &self.view) {
+            // the passphrase's sets
+            (Key::Up | Key::Down, View::Passphrase(_)) => key,
             (Key::Up, View::Pin(..) | View::WordEntry(_)) => Key::Right,
             (Key::Down, View::Pin(..) | View::WordEntry(_)) => Key::Left,
             (Key::Down, _) => Key::Right,
@@ -813,6 +1096,162 @@ impl System {
                     }
                 }
             },
+            View::Passphrase(e) => match e.key(key) {
+                PassphraseStep::Stay => self.redraw(),
+                PassphraseStep::Cancel => self.follow(Next::Home),
+                PassphraseStep::Done(typed) => {
+                    // the whole of it, to check before it opens a wallet: one typed wrong opens
+                    // another, empty one
+                    let shown: Vec<char> = passphrase::shown(&typed).chars().collect();
+                    let mut lines: Vec<String> = shown.chunks(20).map(|c| c.iter().collect()).collect();
+                    lines.push(format!("{} characters", shown.len()));
+                    self.typed_passphrase = Some(typed);
+                    self.view = View::Info {
+                        title: CHECK_PASSPHRASE.into(),
+                        lines,
+                        actions: vec![
+                            ("open it", Next::OpenWallet),
+                            ("type it again", Next::Passphrase),
+                            ("cancel", Next::Home),
+                        ],
+                        selected: 0,
+                    };
+                    self.redraw();
+                }
+            },
+            View::SharesPick(pick, whose) => match pick.key(key) {
+                PickStep::Stay => self.redraw(),
+                PickStep::Done { needed, made } => match *whose {
+                    // after setup, the PIN says it's the owner asking: maki asks it again
+                    SharesFor::Menu => {
+                        self.pin_pad("Enter your PIN", "to make shares", PinFor::Shares(needed, made))
+                    }
+                    SharesFor::Setup => {
+                        self.busy("Making shares…");
+                        let made_shares = self
+                            .keys
+                            .as_ref()
+                            .map(|k| k.new_shares(needed, made, ""))
+                            .unwrap_or(Err((maki_keys::RESULT_FAILED, 0)));
+                        self.shares_made(made_shares, SharesFor::Setup);
+                    }
+                },
+            },
+            View::SharesShow(show, whose) => match show.key(key) {
+                ShowStep::Stay => self.redraw(),
+                ShowStep::Done => {
+                    let whose = *whose;
+                    if let View::SharesShow(mut show, _) = std::mem::replace(&mut self.view, View::Splash) {
+                        show.clear();
+                    }
+                    match &self.shares {
+                        Some(shares) => {
+                            self.view = View::SharesCheck(SharesCheck::new(shares), whose);
+                            self.redraw();
+                        }
+                        None => self.follow(Next::Home),
+                    }
+                }
+            },
+            View::SharesCheck(check, whose) => {
+                let whose = *whose;
+                let Some(shares) = self.shares.clone() else { return self.follow(Next::Home) };
+                let step = check.key(key, &shares);
+                for share in shares {
+                    for w in share {
+                        forget(w);
+                    }
+                }
+                match step {
+                    shares::CheckStep::Stay => self.redraw(),
+                    shares::CheckStep::Wrong { share, word } => {
+                        let title = format!("Not word {word} of share {share}");
+                        self.info(
+                            &title,
+                            &["Look at what you wrote,", "then check again."],
+                            "see the shares",
+                            Next::ReviewShares(whose),
+                        )
+                    }
+                    shares::CheckStep::Passed => {
+                        self.forget_shares();
+                        match whose {
+                            SharesFor::Setup => self.setup_done(),
+                            SharesFor::Menu => self.info(
+                                "Shares made",
+                                &[
+                                    "Keep them apart: no one",
+                                    "place or person should",
+                                    "hold enough of them.",
+                                ],
+                                "continue",
+                                Next::Home,
+                            ),
+                        }
+                    }
+                }
+            }
+            View::ShareEntry(entry) => match entry.key(key) {
+                shares::EntryStep::Stay => self.redraw(),
+                shares::EntryStep::Problem(why) => {
+                    let View::ShareEntry(entry) = std::mem::replace(&mut self.view, View::Splash) else {
+                        return;
+                    };
+                    self.share_entry = Some(entry);
+                    let lines = wrap(&why, 24);
+                    let lines: Vec<&str> = lines.iter().map(|l| l.as_str()).collect();
+                    self.info("Not that word", &lines, "back to it", Next::ResumeShares)
+                }
+                shares::EntryStep::ShareRead { have, need } => {
+                    let View::ShareEntry(entry) = std::mem::replace(&mut self.view, View::Splash) else {
+                        return;
+                    };
+                    self.share_entry = Some(entry);
+                    let title = format!("Share {have} read");
+                    let line = if need == 0 {
+                        "More, from another group.".to_string()
+                    } else {
+                        format!("{have} of the {need} it takes.")
+                    };
+                    self.info(&title, &[&line], "next share", Next::ResumeShares)
+                }
+                shares::EntryStep::Done(words) => {
+                    self.busy("Checking…");
+                    let restored = self
+                        .keys
+                        .as_ref()
+                        .map(|k| k.restore_shares(&words))
+                        .unwrap_or(Err((maki_keys::RESULT_FAILED, String::new())));
+                    for share in words {
+                        for w in share {
+                            forget(w);
+                        }
+                    }
+                    match restored {
+                        Ok(()) => {
+                            self.restoring = false;
+                            self.info(
+                                "Phrase restored",
+                                &[
+                                    "Your wallet keys are back.",
+                                    "Restore logins and codes",
+                                    "from maki desktop.",
+                                ],
+                                "continue",
+                                Next::Home,
+                            )
+                        }
+                        Err((maki_keys::RESULT_BAD_PHRASE, why)) => {
+                            let lines = wrap(&why, 24);
+                            let lines: Vec<&str> = lines.iter().map(|l| l.as_str()).collect();
+                            self.info("They don't fit", &lines, "enter them again", Next::RestoreShares)
+                        }
+                        Err(_) => {
+                            self.info("Couldn't save it", &["Unplug maki and try again."], "", Next::Home)
+                        }
+                    }
+                }
+            },
             View::Pin(pad, _) => {
                 if let Some(pin) = pad.key(key) {
                     let View::Pin(_, purpose) = std::mem::replace(&mut self.view, View::Splash) else {
@@ -853,10 +1292,23 @@ impl System {
     fn maki_menu(&mut self, picked: usize) {
         match MAKI_MENU.get(picked) {
             Some(&"Change PIN") => self.pin_pad("New PIN", "6 to 12 digits", PinFor::NewPin),
+            Some(&"Wallets") => self.wallets_page(false),
+            Some(&"Shares") => self.choose(
+                "Shares",
+                &[
+                    "Your phrase as shares:",
+                    "a few of them bring it",
+                    "back, and fewer show",
+                    "nothing of it. maki asks",
+                    "your PIN first.",
+                ],
+                vec![("make shares", Next::Shares(SharesFor::Menu)), ("close", Next::Home)],
+            ),
             Some(&"Lock") => {
                 if self.keys.as_ref().map(|k| k.lock()).unwrap_or(false) {
                     self.unlocked = false;
                     self.asks_open = false;
+                    self.wallet = None;
                     self.pin_pad("Enter your PIN", "", PinFor::Enter);
                 } else {
                     self.go_home();
@@ -972,6 +1424,10 @@ fn main() -> ! {
         asks_open: false,
         restoring: false,
         phrase: None,
+        typed_passphrase: None,
+        shares: None,
+        share_entry: None,
+        wallet: None,
         tt: ticktimer_server::Ticktimer::new().unwrap(),
         last_key_ms: 0,
     };

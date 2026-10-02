@@ -186,6 +186,9 @@ enum Work {
     Install(xous::MessageEnvelope, Install, Vec<u8>),
     Remove(xous::MessageEnvelope, Remove),
     Unlocked(bool),
+    /// The wallet wallet apps have changed (maki-keys' wallet word): a passphrase wallet opened,
+    /// closed or changed for another.
+    WalletChanged,
 }
 
 /// Checks a bundle that's all arrived, asks the owner, and installs it: the result, and why if
@@ -502,22 +505,47 @@ fn worker(work: Receiver<Work>, shared: Arc<Mutex<Shared>>, to_runner: Sender<To
                 }
                 unlocked = now;
             }
+            Ok(Work::WalletChanged) => {
+                if w.shared.lock().unwrap().running_wallet {
+                    log::info!("another wallet: the running wallet app ends");
+                    tell(&w.to_runner, &w.shared, ToRunner::Stop);
+                }
+            }
             Err(_) => return,
         }
     }
 }
 
-/// Tells the worker when maki locks or unlocks. maki-keys answers when it happens: polling for
-/// it woke three processes every time (this one, maki-keys and the PDDB), and RAM is short.
+/// Tells the worker when maki locks or unlocks, and when the wallet changes while it's unlocked.
+/// maki-keys answers when it happens: polling for it woke three processes every time (this one,
+/// maki-keys and the PDDB), and RAM is short.
 fn watch_lock(to_worker: Sender<Work>) {
     let xns = xous_names::XousNames::new().unwrap();
     let keys = maki_keys::Keys::new(&xns).expect("couldn't connect to maki-keys");
     let mut seen = keys.status().0;
+    let mut word = keys.wallet_status().word;
+    if to_worker.send(Work::Unlocked(seen == maki_keys::State::Unlocked)).is_err() {
+        return;
+    }
     loop {
-        if to_worker.send(Work::Unlocked(seen == maki_keys::State::Unlocked)).is_err() {
+        let (state, now) = keys.wait_status(seen, word);
+        let sent = if state != seen {
+            to_worker.send(Work::Unlocked(state == maki_keys::State::Unlocked))
+        } else {
+            Ok(())
+        };
+        // a lock ends the running app anyway; another wallet while unlocked ends a wallet app
+        let sent = sent.and_then(|_| {
+            if now != word && state == maki_keys::State::Unlocked && seen == state {
+                to_worker.send(Work::WalletChanged)
+            } else {
+                Ok(())
+            }
+        });
+        if sent.is_err() {
             return;
         }
-        seen = keys.wait_change(seen);
+        (seen, word) = (state, now);
     }
 }
 

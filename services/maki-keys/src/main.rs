@@ -19,6 +19,7 @@ use std::sync::atomic::Ordering;
 
 use aes_gcm_siv::aead::{Aead, KeyInit, Payload};
 use aes_gcm_siv::{Aes256GcmSiv, Nonce};
+use maki_hd::Keys as _;
 use maki_keys_api::*;
 use num_traits::{FromPrimitive, ToPrimitive};
 use pddb::{BasisRetentionPolicy, PDDB_DEFAULT_SYSTEM_BASIS, Pddb};
@@ -49,6 +50,9 @@ const KEY_NAME: &str = "name";
 /// In the secret basis: the recovery phrase's entropy.
 const SEED_DICT: &str = "maki.seed";
 const KEY_ENTROPY: &str = "entropy";
+/// Present (one byte, 1) when maki asks for a passphrase each time it's unlocked: in the secret
+/// basis, beside the phrase, since it says a passphrase wallet is in use.
+const KEY_ASK_PASSPHRASE: &str = "ask_passphrase";
 
 /// What a backup holds: the vault's dictionaries, record by record, as the vault stores them, and
 /// the FIDO authenticator's resident credentials and signature counter (see passkeys.rs). An
@@ -430,6 +434,32 @@ fn wallet_op(
     maki_hd::seed::answer(keys, op, path, digest, &random())
 }
 
+/// Why shares couldn't be made or put back, in words, for the screen.
+fn alloc_reason(e: &maki_sskr::Error) -> String { format!("{e}") }
+
+/// Forget a passphrase wallet's passphrase, if one's open: whether one was.
+fn forget_passphrase(passphrase: &mut Option<String>) -> bool {
+    match passphrase.take() {
+        Some(mut p) => {
+            p.zeroize();
+            true
+        }
+        None => false,
+    }
+}
+
+/// The wallet word (`WalletStatus`): the kind of wallet wallet apps have, and how many times it has
+/// changed. Unlocked without a phrase yet is the standard wallet's kind too: wallet apps hear
+/// there's no phrase when they ask, and no store is read to say so here.
+fn wallet_word(state: State, passphrase: &Option<String>, changes: usize) -> usize {
+    let kind = match (state, passphrase) {
+        (State::Unlocked, Some(_)) => WALLET_PASSPHRASE,
+        (State::Unlocked, None) => WALLET_STANDARD,
+        _ => WALLET_NONE,
+    };
+    kind | (changes & 0xff_ffff) << WALLET_GENERATION_SHIFT
+}
+
 fn random<const N: usize>() -> [u8; N] {
     let mut b = [0u8; N];
     getrandom::getrandom(&mut b).expect("TRNG unavailable");
@@ -539,6 +569,32 @@ impl Store {
         )?;
         k.write_all(entropy)?;
         drop(k);
+        self.pddb.sync()
+    }
+
+    /// Whether maki asks for a passphrase each time it's unlocked (`KEY_ASK_PASSPHRASE`).
+    fn asks_passphrase(&self, basis: &str) -> bool {
+        self.pddb
+            .get(SEED_DICT, KEY_ASK_PASSPHRASE, Some(basis), false, false, None, None::<fn()>)
+            .ok()
+            .and_then(read_whole)
+            .is_some_and(|v| v == [1])
+    }
+
+    fn set_asks_passphrase(&self, basis: &str, ask: bool) -> std::io::Result<()> {
+        self.pddb.delete_key(SEED_DICT, KEY_ASK_PASSPHRASE, Some(basis)).ok();
+        if ask {
+            let mut k = self.pddb.get(
+                SEED_DICT,
+                KEY_ASK_PASSPHRASE,
+                Some(basis),
+                true,
+                true,
+                Some(1),
+                None::<fn()>,
+            )?;
+            k.write_all(&[1])?;
+        }
         self.pddb.sync()
     }
 
@@ -869,8 +925,17 @@ fn main() -> ! {
     let mut incoming: Vec<u8> = Vec::new();
     let mut incoming_total: u32 = 0;
     let mut seed = SeedCache(None);
-    // wallet apps' keys (maki_hd), from the seed, while unlocked
+    // wallet apps' keys (maki_hd), from the seed, while unlocked: the phrase's alone (the standard
+    // wallet), or with a passphrase
     let mut wallet: Option<maki_hd::seed::SeedKeys> = None;
+    // a passphrase wallet's passphrase (BIP39's), while one is open, until CloseWallet or Lock:
+    // kept for Cardano's keys, made from it the first time they're asked for
+    let mut passphrase: Option<String> = None;
+    // how many times wallet apps' wallet has changed, in the wallet word, so that one passphrase
+    // wallet changing for another shows too
+    let mut wallet_changes: usize = 0;
+    // and who's waiting for the state or the wallet to change: see `WaitStatus`
+    let mut watching_status: Vec<(xous::MessageSender, usize, usize)> = Vec::new();
     // bumped when a restore writes to the FIDO store behind the vault's back
     let generation = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
     // who's waiting for the secrets to open (and whether for the phrase too): see `WaitUnlocked`
@@ -1264,20 +1329,34 @@ fn main() -> ! {
                             s.zeroize();
                         }
                     }
-                    // Cardano's keys come from the phrase's entropy, not its seed (Icarus): made
-                    // the first time they're asked for, and kept with the others until Lock
+                    // Cardano's keys come from the phrase's entropy, not its seed (Icarus), with
+                    // the passphrase wallet's passphrase if one's open: made the first time
+                    // they're asked for, and kept with the others until Lock
                     if matches!(req.op, WALLET_CARDANO_PUBLIC | WALLET_CARDANO_SIGN) {
                         if let (Some(keys), Some(lock)) = (
                             wallet.as_mut().filter(|k| !k.has_cardano()),
                             store.lock().filter(|_| state == State::Unlocked),
                         ) {
                             if let Some(mut entropy) = store.entropy(&lock.basis) {
-                                keys.with_cardano(&entropy);
+                                let p = passphrase.as_deref().unwrap_or("");
+                                keys.with_cardano_passphrase(&entropy, p.as_bytes());
                                 entropy.zeroize();
                             }
                         }
                     }
-                    match &wallet {
+                    // BIP-85's child seeds and passwords are the phrase's alone, whichever
+                    // wallet is open: a passphrase doesn't change them
+                    let standard = match (&passphrase, req.op) {
+                        (Some(_), WALLET_BIP85_WORDS | WALLET_BIP85_PASSWORD) => {
+                            seed.get(&store, state).and_then(|mut s| {
+                                let keys = maki_hd::seed::SeedKeys::from_seed(&s).ok();
+                                s.zeroize();
+                                keys
+                            })
+                        }
+                        _ => None,
+                    };
+                    match standard.as_ref().or(wallet.as_ref()) {
                         None if state == State::Unlocked => RESULT_NO_PHRASE,
                         None => RESULT_NOT_NOW,
                         Some(keys) => match wallet_op(keys, req.op, &req.path, &req.digest) {
@@ -1327,12 +1406,148 @@ fn main() -> ! {
                 }
                 xous::return_scalar(msg.sender, (msg.sender.pid() == screen) as usize).ok();
             }
+            Some(op @ (KeysOp::NewShares | KeysOp::RestoreShares)) => {
+                let Some(mem) = msg.body.memory_message_mut() else { continue };
+                let mut buffer = unsafe { Buffer::from_memory_message_mut(mem) };
+                let Ok(mut req) = buffer.to_original::<SharesRequest, _>() else { continue };
+                req.result = RESULT_NOT_NOW;
+                req.tries_left = 0;
+                let restoring = matches!(op, KeysOp::RestoreShares);
+                let lock = store.lock().filter(|_| from_screen && state == State::Unlocked);
+                match (op, lock) {
+                    (_, None) => {}
+                    (KeysOp::NewShares, Some(_))
+                        if !(MIN_NEEDED..=MAX_SHARES).contains(&req.needed)
+                            || !(req.needed..=MAX_SHARES).contains(&req.made) =>
+                    {
+                        req.result = RESULT_FAILED;
+                    }
+                    (KeysOp::NewShares, Some(lock)) => {
+                        let made_now = store.entropy(&lock.basis).is_none();
+                        // setup: a new phrase, kept, then split; after it, the phrase as it is,
+                        // once the PIN says it's the owner asking
+                        let entropy = if made_now {
+                            let entropy: [u8; 32] = random();
+                            match store.set_entropy(&lock.basis, &entropy) {
+                                Ok(()) => {
+                                    log::info!("recovery phrase made, as shares");
+                                    seed.forget();
+                                    wallet = None;
+                                    forget_passphrase(&mut passphrase);
+                                    Some(entropy.to_vec())
+                                }
+                                Err(_) => None,
+                            }
+                        } else if !pin_is_valid(&req.pin) {
+                            // not a PIN at all: refused before it's tried, so it costs no try
+                            req.result = RESULT_BAD_PIN;
+                            None
+                        } else {
+                            match try_pin(&store, &chip, &req.pin) {
+                                Ok((mut key, _)) => {
+                                    key.zeroize();
+                                    store.entropy(&lock.basis)
+                                }
+                                Err((RESULT_WIPED, _)) => {
+                                    // as a wrong PIN changing it: the key is gone, start over
+                                    store.pddb.lock_basis(&lock.basis).ok();
+                                    if let Some(mut b) = sealed.take() {
+                                        b.zeroize();
+                                    }
+                                    wallet = None;
+                                    forget_passphrase(&mut passphrase);
+                                    seed.forget();
+                                    state = State::Unset;
+                                    req.result = RESULT_WIPED;
+                                    None
+                                }
+                                Err((code, left)) => {
+                                    req.result = code;
+                                    req.tries_left = left;
+                                    None
+                                }
+                            }
+                        };
+                        if let Some(mut entropy) = entropy {
+                            let split =
+                                maki_sskr::split(&entropy, req.needed as usize, req.made as usize, |b| {
+                                    getrandom::getrandom(b).expect("TRNG unavailable")
+                                });
+                            entropy.zeroize();
+                            match split {
+                                Ok(shares) => {
+                                    req.shares = shares
+                                        .iter()
+                                        .map(|s| s.words().iter().map(String::from).collect())
+                                        .collect();
+                                    req.result = RESULT_OK;
+                                    req.tries_left = MAX_TRIES;
+                                    log::info!("the phrase as {} of {} shares", req.needed, req.made);
+                                }
+                                Err(e) => {
+                                    req.result = RESULT_FAILED;
+                                    req.reason = alloc_reason(&e);
+                                }
+                            }
+                        } else if req.result == RESULT_NOT_NOW {
+                            req.result = RESULT_FAILED;
+                        }
+                    }
+                    (_, Some(lock)) => {
+                        let read: Result<Vec<maki_sskr::Share>, maki_sskr::Error> = req
+                            .shares
+                            .iter()
+                            .map(|w| {
+                                maki_sskr::Share::from_words(
+                                    &w.iter().map(|s| s.as_str()).collect::<Vec<_>>(),
+                                )
+                            })
+                            .collect();
+                        match read.and_then(|shares| maki_sskr::combine(&shares)) {
+                            // a phrase of 12 to 24 words
+                            Ok(secret) if secret.len() % 4 == 0 => {
+                                seed.forget();
+                                wallet = None;
+                                forget_passphrase(&mut passphrase);
+                                match store.set_entropy(&lock.basis, secret.as_bytes()) {
+                                    Ok(()) => {
+                                        log::info!("recovery phrase restored from shares");
+                                        req.result = RESULT_OK;
+                                    }
+                                    Err(_) => req.result = RESULT_FAILED,
+                                }
+                            }
+                            Ok(_) => {
+                                req.result = RESULT_BAD_PHRASE;
+                                req.reason = "they make a secret that isn't a recovery phrase".into();
+                            }
+                            Err(e) => {
+                                req.result = RESULT_BAD_PHRASE;
+                                req.reason = alloc_reason(&e);
+                            }
+                        }
+                    }
+                }
+                for share in req.shares.iter_mut().filter(|_| restoring) {
+                    for w in share.iter_mut() {
+                        w.zeroize();
+                    }
+                }
+                if restoring {
+                    req.shares.clear();
+                }
+                req.pin.zeroize();
+                buffer.replace(req).ok();
+            }
             Some(op @ (KeysOp::NewPhrase | KeysOp::RestorePhrase)) => {
                 // whatever was derived before comes from another phrase, if any: the screen's
                 // request alone, or anyone could make the next request derive it all again
                 if from_screen && state == State::Unlocked {
                     seed.forget();
                     wallet = None;
+                    if forget_passphrase(&mut passphrase) {
+                        wallet_changes += 1;
+                    }
                 }
                 let Some(mem) = msg.body.memory_message_mut() else { continue };
                 let mut buffer = unsafe { Buffer::from_memory_message_mut(mem) };
@@ -1448,6 +1663,7 @@ fn main() -> ! {
                                 b.zeroize();
                             }
                             wallet = None;
+                            forget_passphrase(&mut passphrase);
                             seed.forget();
                             state = State::Unset;
                             (RESULT_WIPED, 0)
@@ -1470,6 +1686,7 @@ fn main() -> ! {
                                 b.zeroize();
                             }
                             wallet = None;
+                            forget_passphrase(&mut passphrase);
                             seed.forget();
                             log::info!("locked");
                             true
@@ -1482,6 +1699,88 @@ fn main() -> ! {
                     _ => false,
                 };
                 xous::return_scalar(msg.sender, closed as usize).ok();
+            }
+            Some(KeysOp::OpenWallet) => {
+                let Some(mem) = msg.body.memory_message_mut() else { continue };
+                let mut buffer = unsafe { Buffer::from_memory_message_mut(mem) };
+                let Ok(mut req) = buffer.to_original::<PassphraseRequest, _>() else { continue };
+                let lock = store.lock().filter(|_| from_screen && state == State::Unlocked);
+                let (result, fingerprint) = match lock {
+                    None => (RESULT_NOT_NOW, 0),
+                    Some(_) if !passphrase_is_valid(&req.passphrase) => (RESULT_BAD_PIN, 0),
+                    Some(lock) => match store.entropy(&lock.basis) {
+                        None => (RESULT_NO_PHRASE, 0),
+                        Some(mut entropy) => {
+                            let words = maki_seed::to_words(&entropy);
+                            entropy.zeroize();
+                            let mut s = maki_seed::seed(&words, &req.passphrase);
+                            maki_seed::forget_words(words);
+                            let keys = maki_hd::seed::SeedKeys::from_seed(&s).ok();
+                            s.zeroize();
+                            match keys.and_then(|k| Some((k.fingerprint().ok()?, k))) {
+                                Some((fp, keys)) => {
+                                    forget_passphrase(&mut passphrase);
+                                    passphrase = Some(req.passphrase.clone());
+                                    wallet = Some(keys);
+                                    wallet_changes += 1;
+                                    log::info!("a passphrase wallet is open");
+                                    (RESULT_OK, u32::from_be_bytes(fp))
+                                }
+                                None => (RESULT_FAILED, 0),
+                            }
+                        }
+                    },
+                };
+                req.passphrase.zeroize();
+                req.result = result;
+                req.fingerprint = fingerprint;
+                buffer.replace(req).ok();
+            }
+            Some(KeysOp::CloseWallet) => {
+                let closed = from_screen && forget_passphrase(&mut passphrase);
+                if closed {
+                    // the standard wallet's keys again, made from the seed when next asked for
+                    wallet = None;
+                    wallet_changes += 1;
+                    log::info!("back to the standard wallet");
+                }
+                xous::return_scalar(msg.sender, closed as usize).ok();
+            }
+            Some(KeysOp::WalletStatus) => {
+                if state == State::Unlocked && wallet.is_none() {
+                    if let Some(mut s) = seed.get(&store, state) {
+                        wallet = maki_hd::seed::SeedKeys::from_seed(&s).ok();
+                        s.zeroize();
+                    }
+                }
+                let fingerprint = match &wallet {
+                    Some(keys) if state == State::Unlocked => {
+                        keys.fingerprint().map(u32::from_be_bytes).unwrap_or(0)
+                    }
+                    _ => 0,
+                };
+                let word = wallet_word(state, &passphrase, wallet_changes);
+                xous::return_scalar2(msg.sender, word, fingerprint as usize).ok();
+            }
+            Some(KeysOp::WaitStatus) => {
+                let (seen_state, seen_word) =
+                    msg.body.scalar_message().map(|m| (m.arg1, m.arg2)).unwrap_or((usize::MAX, usize::MAX));
+                watching_status.push((msg.sender, seen_state, seen_word));
+            }
+            Some(KeysOp::AskPassphrase) => {
+                let set = msg.body.scalar_message().map(|m| m.arg1).unwrap_or(0);
+                let asks = match store.lock().filter(|_| state == State::Unlocked) {
+                    None => false,
+                    Some(lock) => {
+                        if from_screen && (set == 1 || set == 2) {
+                            if let Err(e) = store.set_asks_passphrase(&lock.basis, set == 2) {
+                                log::warn!("couldn't keep the passphrase setting: {e:?}");
+                            }
+                        }
+                        store.asks_passphrase(&lock.basis)
+                    }
+                };
+                xous::return_scalar(msg.sender, asks as usize).ok();
             }
             Some(KeysOp::WaitUnlocked) => {
                 let phrase = msg.body.scalar_message().map(|m| m.arg1 != 0).unwrap_or(false);
@@ -1509,6 +1808,14 @@ fn main() -> ! {
                 return true;
             }
             xous::return_scalar(sender, state as usize).ok();
+            false
+        });
+        let word = wallet_word(state, &passphrase, wallet_changes);
+        watching_status.retain(|&(sender, seen_state, seen_word)| {
+            if state as usize == seen_state && word == seen_word {
+                return true;
+            }
+            xous::return_scalar2(sender, state as usize, word).ok();
             false
         });
     }

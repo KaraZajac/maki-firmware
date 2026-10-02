@@ -20,6 +20,10 @@ pub mod kind {
     /// Restart maki into its boot stage's update mode, where maki desktop puts new firmware on
     /// it; answered once the owner decides, and on a yes, maki restarts.
     pub const UPDATE_MODE: u8 = 0x06;
+    /// Which wallet maki's wallet apps have: none (maki is locked), the recovery phrase's own, or
+    /// a passphrase wallet, and its master key's fingerprint, so maki desktop keeps each wallet's
+    /// accounts apart.
+    pub const WALLET_STATUS: u8 = 0x07;
     /// Answered only after the owner approves on maki's screen.
     pub const GET_LOGIN: u8 = 0x10;
     pub const GET_TOTP: u8 = 0x11;

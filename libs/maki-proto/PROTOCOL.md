@@ -55,6 +55,7 @@ bytes. Bodies must be consumed exactly: trailing bytes are an error.
 | `0x04` TIME_PROOF | `tz_offset_s:i32` `count:u8`, then `count` × (`id:u8` `response:bytes16`) | `status:u8` `verified:u8` `utc_ms:u64`, then `count:u8` × (`id:u8` `answer:u8`) |
 | `0x05` TIME_UNVERIFIED | `utc_ms:u64` `tz_offset_s:i32` | `refused:u8` (0 set, 1 refused) |
 | `0x06` UPDATE_MODE | `label:str8` | `approval:u8` |
+| `0x07` WALLET_STATUS | — | `kind:u8` `fingerprint:u32` |
 | `0x10` GET_LOGIN | `site:str8` [`flags:u8`] | `approval:u8` `username:str8` `password:str8` |
 | `0x11` GET_TOTP | `site:str8` | `approval:u8` `code:str8` `valid_for_s:u8` |
 | `0x12` SAVE_LOGIN | `site:str8` `username:str8` `password:str8` | `approval:u8` |
@@ -166,6 +167,17 @@ one-way counter: each change wears it by one of ten thousand), so boot1 waits in
 one start. The host puts `loader.uf2`, `xous.uf2` and `swap.uf2` on the drive, `sync`ing after
 each, then sends `bootwait disable` and `boot` to boot1's console (each ended with `\r`): the
 new firmware starts. maki turns bootwait off too when it starts, in case the host didn't.
+
+## Wallets
+
+WALLET_STATUS says which wallet maki's wallet apps have: `kind` 0 none (maki is locked, or has
+no recovery phrase yet), 1 the phrase's own, 2 a passphrase wallet, one the owner opened on maki
+with a BIP39 passphrase typed there (it never crosses the link); and `fingerprint`, the wallet's
+master key's fingerprint as a number (its eight hex digits are what wallets write, `73c5da0a`), 0
+with none. Wallet apps answer for the wallet open, so a host keeps what each wallet's apps told it
+apart by the fingerprint, and asks again after anything that could have changed it (maki locked or
+unplugged; the owner opens a passphrase wallet from maki's menu, or at unlock). Older firmware
+answers it with ERROR `unknown message kind`: only the phrase's own wallet, then.
 
 ## Backups
 

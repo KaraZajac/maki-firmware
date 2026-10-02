@@ -91,6 +91,35 @@ pub enum KeysOp {
     /// Scalar from maki-keys itself, after `EnterUpdateMode` and the answer: restart. If that
     /// fails, bootwait goes off again, so that a later start isn't caught in update mode.
     RestartIntoUpdateMode = 30,
+    /// Memory message (mutable lend) with a `PassphraseRequest`, from the screen, while unlocked
+    /// with a phrase: a passphrase wallet (the phrase with a BIP39 passphrase) for wallet apps,
+    /// until `CloseWallet` or Lock; its master key's fingerprint back. maki's own keys (apps'
+    /// secrets, the passkeys', the backup's) and BIP-85's child seeds and passwords stay the
+    /// phrase's alone.
+    OpenWallet = 31,
+    /// Blocking scalar from the screen: back to the standard wallet (the phrase alone). Returns 1
+    /// if a passphrase wallet was open.
+    CloseWallet = 32,
+    /// Blocking scalar: the wallet that wallet apps have, as two words: the wallet word (its
+    /// kind, `WALLET_NONE` and so on, and above `WALLET_GENERATION_SHIFT` how many times it has
+    /// changed) and its master key's fingerprint (0 for none).
+    WalletStatus = 33,
+    /// Blocking scalar with the `State` (`arg1`) and the wallet word (`arg2`) last seen: answered
+    /// with both (two words) once either is different. Held rather than polled for.
+    WaitStatus = 34,
+    /// Blocking scalar: whether maki asks for a passphrase each time it's unlocked. `arg1` 0 reads
+    /// it; from the screen while unlocked, 1 turns it off and 2 on. Returns 1 if it asks.
+    AskPassphrase = 35,
+    /// Memory message (mutable lend) with a `SharesRequest`, from the screen, while unlocked: the
+    /// recovery phrase as Shamir shares (SSKR, any `needed` of `made`), their words back, to show.
+    /// With no phrase yet (setup), a phrase is made and split, as `NewPhrase` makes one; with one,
+    /// `pin` must be maki's PIN (a wrong one counts toward the wipe, as `ChangePin`'s does), and
+    /// it's split as it is. The phrase itself is never shown again.
+    NewShares = 36,
+    /// Memory message (mutable lend) with a `SharesRequest`, from the screen: shares' words to put
+    /// back together and keep as the recovery phrase (a restore, as `RestorePhrase` is), or why
+    /// not (`reason`).
+    RestoreShares = 37,
 }
 
 /// `FidoKeys`' answer: `keys` is 128 bytes (encryption, authentication, CredRandom).
@@ -275,6 +304,88 @@ pub const RESULT_NO_PHRASE: u32 = 10;
 /// A PSBT maki won't sign (not this wallet's, or missing what it needs to check it): `reason`
 /// says why. The owner wasn't asked.
 pub const RESULT_REFUSED: u32 = 11;
+
+/// A passphrase for `OpenWallet`, and on the way back what became of it (`result`, `RESULT_*`)
+/// and the wallet's fingerprint.
+#[derive(Debug, Default, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
+pub struct PassphraseRequest {
+    pub passphrase: String,
+    pub result: u32,
+    /// the master key's fingerprint, big-endian as wallets write it, when `result` is `RESULT_OK`
+    pub fingerprint: u32,
+}
+
+impl Drop for PassphraseRequest {
+    fn drop(&mut self) { zeroize::Zeroize::zeroize(&mut self.passphrase) }
+}
+
+/// Shamir shares of the recovery phrase, either way, and what became of them.
+#[derive(Debug, Default, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
+pub struct SharesRequest {
+    /// how many shares bring the phrase back, and how many there are (`NewShares`)
+    pub needed: u8,
+    pub made: u8,
+    /// maki's PIN, for shares of a phrase maki has (`NewShares` after setup)
+    pub pin: String,
+    /// each share's words (ByteWords)
+    pub shares: Vec<Vec<String>>,
+    pub result: u32,
+    pub tries_left: u32,
+    /// why not, in words, when `result` isn't `RESULT_OK`
+    pub reason: String,
+}
+
+impl Drop for SharesRequest {
+    fn drop(&mut self) {
+        zeroize::Zeroize::zeroize(&mut self.pin);
+        for share in self.shares.iter_mut() {
+            for w in share.iter_mut() {
+                zeroize::Zeroize::zeroize(w);
+            }
+        }
+    }
+}
+
+/// The most shares a split has (SSKR's), and the fewest it may take to put back: one would be
+/// the phrase itself, in every share.
+pub const MAX_SHARES: u8 = 16;
+pub const MIN_NEEDED: u8 = 2;
+
+/// The most characters a passphrase has: printable ASCII, as maki's screen types it (so BIP39's
+/// normalization changes nothing).
+pub const MAX_PASSPHRASE: usize = 100;
+
+/// One to `MAX_PASSPHRASE` printable ASCII characters, spaces among them.
+pub fn passphrase_is_valid(passphrase: &str) -> bool {
+    !passphrase.is_empty()
+        && passphrase.len() <= MAX_PASSPHRASE
+        && passphrase.bytes().all(|b| (0x20..0x7f).contains(&b))
+}
+
+/// The wallet word's kinds (`WalletStatus`): none (maki is locked, or has no phrase), the standard
+/// wallet (the phrase alone), or a passphrase wallet.
+pub const WALLET_NONE: usize = 0;
+pub const WALLET_STANDARD: usize = 1;
+pub const WALLET_PASSPHRASE: usize = 2;
+pub const WALLET_KIND_MASK: usize = 0xff;
+/// Above the kind: how many times the wallet has changed since maki started, so that one
+/// passphrase wallet changing for another shows too.
+pub const WALLET_GENERATION_SHIFT: usize = 8;
+
+/// The wallet that wallet apps have (`WalletStatus`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WalletState {
+    /// `WALLET_NONE`, `WALLET_STANDARD` or `WALLET_PASSPHRASE`
+    pub kind: usize,
+    /// changes each time the wallet does
+    pub word: usize,
+    /// the master key's fingerprint, big-endian as wallets write it; 0 for none
+    pub fingerprint: u32,
+}
+
+impl WalletState {
+    pub fn passphrase(&self) -> bool { self.kind == WALLET_PASSPHRASE }
+}
 
 /// Set in the second word of `Status`'s answer when a recovery phrase exists.
 pub const HAS_PHRASE: usize = 1 << 16;
@@ -573,6 +684,108 @@ impl Keys {
     /// wipe), then the new one. Twice as slow as an unlock.
     pub fn change_pin(&self, current: &str, new: &str) -> PinResult {
         self.call_with(KeysOp::ChangePin, current, new)
+    }
+
+    /// Open a passphrase wallet for wallet apps (from the screen): its fingerprint, or a
+    /// `RESULT_*` code (`RESULT_BAD_PIN` for a passphrase `passphrase_is_valid` refuses). Slow:
+    /// BIP39's key stretching, again.
+    pub fn open_wallet(&self, passphrase: &str) -> Result<u32, u32> {
+        let request =
+            PassphraseRequest { passphrase: passphrase.into(), result: RESULT_FAILED, fingerprint: 0 };
+        let mut buf = Buffer::into_buf(request).map_err(|_| RESULT_FAILED)?;
+        buf.lend_mut(self.conn, KeysOp::OpenWallet.to_u32().unwrap()).map_err(|_| RESULT_FAILED)?;
+        let answer = buf.to_original::<PassphraseRequest, _>().map_err(|_| RESULT_FAILED)?;
+        match answer.result {
+            RESULT_OK => Ok(answer.fingerprint),
+            code => Err(code),
+        }
+    }
+
+    /// Back to the standard wallet (from the screen). Whether a passphrase wallet was open.
+    pub fn close_wallet(&self) -> bool { self.scalar(KeysOp::CloseWallet, 0, 0) == Some(1) }
+
+    /// The wallet that wallet apps have.
+    pub fn wallet_status(&self) -> WalletState {
+        match xous::send_message(
+            self.conn,
+            xous::Message::new_blocking_scalar(KeysOp::WalletStatus.to_usize().unwrap(), 0, 0, 0, 0),
+        ) {
+            Ok(xous::Result::Scalar2(word, fingerprint)) => {
+                WalletState { kind: word & WALLET_KIND_MASK, word, fingerprint: fingerprint as u32 }
+            }
+            _ => WalletState { kind: WALLET_NONE, word: 0, fingerprint: 0 },
+        }
+    }
+
+    /// Blocks until the state or the wallet word is no longer what was `seen`; both, as they are.
+    pub fn wait_status(&self, seen: State, wallet_word: usize) -> (State, usize) {
+        match xous::send_message(
+            self.conn,
+            xous::Message::new_blocking_scalar(
+                KeysOp::WaitStatus.to_usize().unwrap(),
+                seen as usize,
+                wallet_word,
+                0,
+                0,
+            ),
+        ) {
+            Ok(xous::Result::Scalar2(s, word)) => {
+                (num_traits::FromPrimitive::from_usize(s).unwrap_or(State::Locked), word)
+            }
+            _ => (self.status().0, self.wallet_status().word),
+        }
+    }
+
+    /// Whether maki asks for a passphrase each time it's unlocked (known only while unlocked).
+    pub fn asks_passphrase(&self) -> bool { self.scalar(KeysOp::AskPassphrase, 0, 0) == Some(1) }
+
+    /// Have maki ask for a passphrase each time it's unlocked, or not (from the screen). Whether
+    /// it asks now.
+    pub fn set_asks_passphrase(&self, ask: bool) -> bool {
+        self.scalar(KeysOp::AskPassphrase, if ask { 2 } else { 1 }, 0) == Some(1)
+    }
+
+    fn scalar(&self, op: KeysOp, arg1: usize, arg2: usize) -> Option<usize> {
+        match xous::send_message(
+            self.conn,
+            xous::Message::new_blocking_scalar(op.to_usize().unwrap(), arg1, arg2, 0, 0),
+        ) {
+            Ok(xous::Result::Scalar1(r)) => Some(r),
+            _ => None,
+        }
+    }
+
+    /// The recovery phrase as shares, `needed` of `made`, to show (see `KeysOp::NewShares`): each
+    /// share's words, or a `RESULT_*` code and the tries left (`RESULT_WRONG` for a wrong PIN).
+    /// Slow: the PIN's key derivation, when one's checked.
+    pub fn new_shares(&self, needed: u8, made: u8, pin: &str) -> Result<Vec<Vec<String>>, (u32, u32)> {
+        let mut request = SharesRequest::default();
+        (request.needed, request.made, request.pin, request.result) =
+            (needed, made, pin.into(), RESULT_FAILED);
+        let mut answer = self.shares_call(KeysOp::NewShares, request).map_err(|e| (e, 0))?;
+        match answer.result {
+            RESULT_OK => Ok(core::mem::take(&mut answer.shares)),
+            code => Err((code, answer.tries_left)),
+        }
+    }
+
+    /// Keep the phrase these shares put back together (a restore): or a `RESULT_*` code and why.
+    pub fn restore_shares(&self, shares: &[Vec<String>]) -> Result<(), (u32, String)> {
+        let mut request = SharesRequest::default();
+        (request.shares, request.result) = (shares.to_vec(), RESULT_FAILED);
+        let mut answer = self.shares_call(KeysOp::RestoreShares, request).map_err(|e| (e, String::new()))?;
+        match answer.result {
+            RESULT_OK => Ok(()),
+            code => Err((code, core::mem::take(&mut answer.reason))),
+        }
+    }
+
+    fn shares_call(&self, op: KeysOp, request: SharesRequest) -> Result<SharesRequest, u32> {
+        // sixteen shares of 46 words don't fit in a page: room for them, either way
+        let mut buf = Buffer::new(8 * 4096);
+        buf.replace(request).map_err(|_| RESULT_FAILED)?;
+        buf.lend_mut(self.conn, op.to_u32().unwrap()).map_err(|_| RESULT_FAILED)?;
+        buf.to_original::<SharesRequest, _>().map_err(|_| RESULT_FAILED)
     }
 
     /// Close the secrets until the PIN is entered again. Returns whether they were open.

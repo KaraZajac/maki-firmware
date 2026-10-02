@@ -121,3 +121,35 @@ fn cardanos_keys_are_cardanos_alone_and_only_once_made() {
         assert_eq!(keys.cardano_public(&path(p)), Err(Error::Path), "{p}");
     }
 }
+
+/// A passphrase wallet's Cardano keys: Icarus takes the BIP39 passphrase as PBKDF2's password, as
+/// cardano-serialization-lib 17.0.0's `Bip32PrivateKey.from_bip39_entropy(entropy, passphrase)`
+/// makes them (and Trezor): the test phrase's first account, with none, "TREZOR" (BIP39's own
+/// vectors' passphrase) and another.
+#[test]
+fn a_passphrase_wallets_keys_are_cardano_serialization_libs_too() {
+    let words: Vec<&str> =
+        "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about"
+            .split(' ')
+            .collect();
+    let entropy = maki_seed::to_entropy(&words).unwrap();
+    for (passphrase, account) in [
+        (
+            "",
+            "beb7e770b3d0f1932b0a2f3a63285bf9ef7d3e461d55446d6a3911d8f0ee55c0b0e2df16538508046649d0e6d5b32969555a23f2f1ebf2db2819359b0d88bd16",
+        ),
+        (
+            "TREZOR",
+            "5bb6c3570740996de8a87a5146fa5f4679f0af1c7175328af754df625b346f5886a4f832d326a6fe09b6bf608c9b208d1479ff23ae30e5215ccd6de102e232cb",
+        ),
+        (
+            "maki passphrase",
+            "c7db220a489a06bbc24d9e1d6550761c150513bac5b5f97d2f7dfc89356656a7f7b362346939521d0840d5d5d1c8e4bd59fe1f7b76564565d7134cb231737a20",
+        ),
+    ] {
+        let mut keys = SeedKeys::from_seed(&maki_seed::seed(&words, passphrase)).unwrap();
+        keys.with_cardano_passphrase(&entropy, passphrase.as_bytes());
+        let got = keys.cardano_public(&path("m/1852'/1815'/0'")).unwrap();
+        assert_eq!(got.to_vec(), unhex(account), "{passphrase:?}");
+    }
+}

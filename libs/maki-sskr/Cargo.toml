@@ -1,0 +1,16 @@
+[package]
+name = "maki-sskr"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "maki's Shamir backup: a recovery phrase's entropy split into SSKR shares (Blockchain Commons' Sharded Secret Key Reconstruction), written as ByteWords, and put back together"
+
+[dependencies]
+# the digest share's check: HMAC-SHA256, as bc-shamir makes it
+sha2 = { version = "0.10.8", default-features = false }
+zeroize = { version = "1.8.1", default-features = false, features = ["alloc"] }
+
+[dev-dependencies]
+serde_json = "1"
+# seedtool's --deterministic randomness, to make the shares its manual shows again
+hkdf = "0.12.4"

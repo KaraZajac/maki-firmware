@@ -5458,6 +5458,7 @@ dependencies = [
  "maki-launcher",
  "maki-proto",
  "maki-seed",
+ "maki-sskr",
  "maki-xmr",
  "num-derive 0.4.2",
  "num-traits",
@@ -5499,6 +5500,7 @@ dependencies = [
  "maki-keys-api",
  "maki-proto",
  "maki-seed",
+ "maki-sskr",
  "maki-ui",
  "num-derive 0.4.2",
  "num-traits",
@@ -5601,6 +5603,16 @@ version = "0.1.0"
 dependencies = [
  "maki-native",
  "xous",
+]
+
+[[package]]
+name = "maki-sskr"
+version = "0.1.0"
+dependencies = [
+ "hkdf",
+ "serde_json",
+ "sha2 0.10.8",
+ "zeroize",
 ]
 
 [[package]]

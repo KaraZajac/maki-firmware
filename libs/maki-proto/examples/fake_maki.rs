@@ -31,7 +31,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use hmac::{Hmac, Mac};
 use maki_proto::device::{
     AppEntry, AppSpace, Approval, Apps, Ask, BACKUP_PIECE, Backup, Device, Handled, Platform, StoreState,
-    TimeState, reply,
+    TimeState, WalletKind, reply,
 };
 use maki_proto::frame::{self, Deframer};
 use maki_proto::site;
@@ -39,6 +39,8 @@ use maki_proto::site;
 struct Host {
     start: Instant,
     clock: Option<(u64, Instant)>,
+    /// which wallet wallet apps have: the phrase's own, or `--passphrase`'s
+    wallet: (WalletKind, u32),
 }
 
 fn host_utc_ms() -> u64 { SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis() as u64 }
@@ -61,6 +63,8 @@ impl Platform for Host {
     fn time_state_changed(&mut self, state: TimeState) {
         println!("  time is now {state:?}");
     }
+
+    fn wallet(&mut self) -> (WalletKind, u32) { self.wallet }
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -145,12 +149,22 @@ type Inbox = std::sync::mpsc::Sender<(Vec<u8>, ReplyTo)>;
 const APP_IDLE: Duration = Duration::from_secs(30);
 
 /// The phrase's secrets: its seed, and its entropy (up to 32 bytes; `len` of them), which
-/// Cardano's keys come from (Icarus) where everything else comes from the seed.
+/// Cardano's keys come from (Icarus) where everything else comes from the seed. With
+/// `--passphrase`, wallet apps have a passphrase wallet, as on a maki where one's open: its seed,
+/// and its passphrase (`passphrase_len` bytes) for Cardano's; maki's own keys stay the phrase's.
 #[derive(Clone, Copy)]
 struct Secrets {
     seed: [u8; 64],
     entropy: [u8; 32],
     len: usize,
+    wallet_seed: [u8; 64],
+    passphrase: [u8; maki_keys_api_max::MAX_PASSPHRASE],
+    passphrase_len: usize,
+}
+
+/// maki-keys' limit, which the fake holds `--passphrase` to.
+mod maki_keys_api_max {
+    pub const MAX_PASSPHRASE: usize = 100;
 }
 
 /// What a running app has instead of maki's app host: messages from the computer, asks answered
@@ -262,31 +276,33 @@ impl maki_wasm::Platform for FakeApp {
     /// randomness in its Schnorr signatures, as in the simulator: the same every time, so tests
     /// can hold them to the fixtures' (maki adds fresh randomness, as BIP340 advises).
     fn wallet(&mut self, op: u8, path: &[u32], digest: &[u8]) -> Result<Vec<u8>, i32> {
-        if self.keys.is_none() {
-            let mut keys =
-                maki_hd::seed::SeedKeys::from_seed(&self.secrets.seed).map_err(|_| maki_wasm::FAILED)?;
-            keys.with_cardano(&self.secrets.entropy[..self.secrets.len]);
-            self.keys = Some(keys);
-        }
-        maki_hd::seed::answer(self.keys.as_ref().unwrap(), op, path, digest, &[0; 32]).map_err(|e| match e {
+        let refused = |e| match e {
             maki_hd::Error::Path => maki_wasm::REFUSED,
             _ => maki_wasm::FAILED,
-        })
+        };
+        // BIP-85's child seeds and passwords are the phrase's alone, whichever wallet is open
+        if matches!(op, maki_hd::op::BIP85_WORDS | maki_hd::op::BIP85_PASSWORD) {
+            let keys =
+                maki_hd::seed::SeedKeys::from_seed(&self.secrets.seed).map_err(|_| maki_wasm::FAILED)?;
+            return maki_hd::seed::answer(&keys, op, path, digest, &[0; 32]).map_err(refused);
+        }
+        if self.keys.is_none() {
+            let s = &self.secrets;
+            let mut keys =
+                maki_hd::seed::SeedKeys::from_seed(&s.wallet_seed).map_err(|_| maki_wasm::FAILED)?;
+            keys.with_cardano_passphrase(&s.entropy[..s.len], &s.passphrase[..s.passphrase_len]);
+            self.keys = Some(keys);
+        }
+        maki_hd::seed::answer(self.keys.as_ref().unwrap(), op, path, digest, &[0; 32]).map_err(refused)
     }
 
     /// A wallet's backup words: asked about by the policy, then "shown" (the fake has no screen,
     /// and doesn't print them: its phrase can be someone's). The app hears only the answer.
     fn show_backup(&mut self, path: &[u32]) -> Result<maki_wasm::Answer, i32> {
-        if self.keys.is_none() {
-            self.keys =
-                Some(maki_hd::seed::SeedKeys::from_seed(&self.secrets.seed).map_err(|_| maki_wasm::FAILED)?);
-        }
-        let words =
-            maki_hd::seed::answer(self.keys.as_ref().unwrap(), maki_hd::words_op(path), path, &[], &[0; 32])
-                .map_err(|e| match e {
-                    maki_hd::Error::Path => maki_wasm::NOT_FOUND,
-                    _ => maki_wasm::FAILED,
-                })?;
+        let words = self.wallet(maki_hd::words_op(path), path, &[]).map_err(|e| match e {
+            maki_wasm::REFUSED => maki_wasm::NOT_FOUND,
+            e => e,
+        })?;
         match approve(self.policy, &format!("{}: show its backup words?", self.name)) {
             Approval::Approved => {
                 println!("  maki shows its owner {} backup words", words.split(|b| *b == b' ').count());
@@ -773,7 +789,35 @@ fn main() {
         let entropy = maki_seed::to_entropy(&words).expect("--phrase isn't a BIP39 phrase");
         let mut e = [0u8; 32];
         e[..entropy.len()].copy_from_slice(&entropy);
-        Secrets { seed: maki_seed::seed(&words, ""), entropy: e, len: entropy.len() }
+        // a passphrase wallet open: --passphrase TEXT
+        let passphrase =
+            args.windows(2).find(|w| w[0] == "--passphrase").map(|w| w[1].clone()).unwrap_or_default();
+        assert!(
+            passphrase.len() <= maki_keys_api_max::MAX_PASSPHRASE
+                && passphrase.bytes().all(|b| (0x20..0x7f).contains(&b)),
+            "--passphrase: up to 100 printable ASCII characters"
+        );
+        let mut p = [0u8; maki_keys_api_max::MAX_PASSPHRASE];
+        p[..passphrase.len()].copy_from_slice(passphrase.as_bytes());
+        Secrets {
+            seed: maki_seed::seed(&words, ""),
+            entropy: e,
+            len: entropy.len(),
+            wallet_seed: maki_seed::seed(&words, &passphrase),
+            passphrase: p,
+            passphrase_len: passphrase.len(),
+        }
+    };
+    let wallet = {
+        use maki_hd::Keys;
+        let keys = maki_hd::seed::SeedKeys::from_seed(&secrets.wallet_seed).expect("the wallet's keys");
+        let fp = u32::from_be_bytes(keys.fingerprint().expect("its fingerprint"));
+        let kind = if secrets.passphrase_len > 0 { WalletKind::Passphrase } else { WalletKind::Standard };
+        println!(
+            "wallet apps have {} wallet {fp:08x}",
+            if kind == WalletKind::Passphrase { "the passphrase's" } else { "the phrase's own" }
+        );
+        (kind, fp)
     };
     // a passkey for a site, which its login request is answered with: --passkey github.com
     for rp in args.windows(2).filter(|w| w[0] == "--passkey").map(|w| &w[1]) {
@@ -814,7 +858,8 @@ fn main() {
             maki_proto::names::pick((nanos >> 10) as u8).to_string()
         });
     println!("this maki is {name}");
-    let mut device = Device::new(Host { start: Instant::now(), clock: None }, name, "0.2.0-fake".into());
+    let mut device =
+        Device::new(Host { start: Instant::now(), clock: None, wallet }, name, "0.2.0-fake".into());
     if args.iter().any(|a| a == "--clock-verified") {
         device.handle(&frame::Packet {
             kind: maki_proto::kind::TIME_UNVERIFIED,

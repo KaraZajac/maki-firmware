@@ -91,6 +91,9 @@ pub struct Shared {
     /// Each running app's own menu items.
     pub menus: HashMap<usize, Vec<String>>,
     pub running: Option<usize>,
+    /// The running app has the wallet permission: it ends when the wallet changes (a passphrase
+    /// wallet opened or closed), so that nothing it worked out from the other one stays on screen.
+    pub running_wallet: bool,
     /// 0 unset, 1 unverified, 2 verified, as maki-link says.
     pub time_state: u8,
     /// maki is unlocked, as maki-keys last told the worker. Kept here so an app's storage calls
@@ -1255,7 +1258,11 @@ fn run(ctx: &Rc<Ctx>, slot: usize, message: Option<(xous::MessageEnvelope, Vec<u
     };
     // the bar goes up at once, before the app's first frame (if it's on screen)
     device.draw_frame();
-    ctx.shared.lock().unwrap().running = Some(slot);
+    {
+        let mut shared = ctx.shared.lock().unwrap();
+        shared.running = Some(slot);
+        shared.running_wallet = device.wallet().is_some();
+    }
     log::info!("running {}", info.id);
     let stop = match code {
         Code::Wasm(app) => app.run(Box::new(device)),
@@ -1265,6 +1272,7 @@ fn run(ctx: &Rc<Ctx>, slot: usize, message: Option<(xous::MessageEnvelope, Vec<u
     {
         let mut shared = ctx.shared.lock().unwrap();
         shared.running = None;
+        shared.running_wallet = false;
         shared.menus.remove(&slot);
     }
     log::info!("{} stopped: {:?}", info.id, stop);

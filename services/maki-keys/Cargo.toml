@@ -28,6 +28,8 @@ pbkdf2 = { version = "0.12.2", default-features = false, features = ["hmac"] }
 aes-gcm-siv = { version = "0.11.1", default-features = false, features = ["alloc", "aes"] }
 zeroize = "1.8.1"
 maki-seed = { path = "../../libs/maki-seed" }
+# Shamir shares of the recovery phrase (SSKR): made at setup or from the menu, and restored
+maki-sskr = { path = "../../libs/maki-sskr" }
 maki-hd = { path = "../../libs/maki-hd", features = ["seed"] }
 # Monero's spending: key images, outputs and signatures
 maki-xmr = { path = "../../libs/maki-xmr", features = ["keys"] }

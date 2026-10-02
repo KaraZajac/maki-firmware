@@ -134,6 +134,7 @@ members = [
   "services/maki-keys",
   "libs/maki-keys-api",
   "libs/maki-seed",
+  "libs/maki-sskr",
   "libs/maki-btc",
   "libs/maki-hd",
   "libs/maki-xmr",

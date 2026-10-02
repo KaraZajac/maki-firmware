@@ -221,10 +221,11 @@ impl Drop for Icarus {
 
 impl Icarus {
     /// Icarus's master key (CIP-3): 96 bytes of PBKDF2-HMAC-SHA512, 4096 rounds, the phrase's
-    /// entropy the salt and its passphrase (none, on maki) the password; the scalar clamped.
-    fn master(entropy: &[u8]) -> Icarus {
+    /// entropy the salt and its BIP39 passphrase (none, for the standard wallet) the password;
+    /// the scalar clamped.
+    fn master(entropy: &[u8], passphrase: &[u8]) -> Icarus {
         let mut out = [0u8; 96];
-        pbkdf2::pbkdf2_hmac::<Sha512>(b"", entropy, 4096, &mut out);
+        pbkdf2::pbkdf2_hmac::<Sha512>(passphrase, entropy, 4096, &mut out);
         out[0] &= 0b1111_1000;
         out[31] &= 0b0001_1111;
         out[31] |= 0b0100_0000;
@@ -378,7 +379,13 @@ impl SeedKeys {
 
     /// Cardano's keys too, from the phrase's entropy (the same phrase as the seed's: the caller's
     /// to see to). Until then `op::CARDANO_*` are `Error::Locked`.
-    pub fn with_cardano(&mut self, entropy: &[u8]) { self.cardano = Some(Icarus::master(entropy)); }
+    pub fn with_cardano(&mut self, entropy: &[u8]) { self.with_cardano_passphrase(entropy, b"") }
+
+    /// The same for a passphrase wallet: Icarus takes the BIP39 passphrase as its password, as
+    /// Trezor and cardano-serialization-lib do (the seed's own passphrase: the caller's to see to).
+    pub fn with_cardano_passphrase(&mut self, entropy: &[u8], passphrase: &[u8]) {
+        self.cardano = Some(Icarus::master(entropy, passphrase));
+    }
 
     /// Whether Cardano's keys are made yet.
     pub fn has_cardano(&self) -> bool { self.cardano.is_some() }

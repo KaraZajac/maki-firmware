@@ -12,7 +12,8 @@ use std::sync::{Arc, Mutex};
 
 use maki_app_host_api as app_host;
 use maki_proto::device::{
-    AppEntry, AppSpace, Approval, Apps, Ask, Backup, Device, Handled, Platform, StoreState, TimeState, reply,
+    AppEntry, AppSpace, Approval, Apps, Ask, Backup, Device, Handled, Platform, StoreState, TimeState,
+    WalletKind, reply,
 };
 use maki_proto::frame::{self, Deframer};
 use num_traits::ToPrimitive;
@@ -263,6 +264,8 @@ struct Badge {
     time_state: Arc<AtomicU32>,
     #[cfg(feature = "board-baosec")]
     time_conn: xous::CID,
+    /// for WALLET_STATUS: which wallet wallet apps have
+    keys: maki_keys::Keys,
 }
 
 #[cfg(feature = "board-baosec")]
@@ -322,6 +325,18 @@ impl Platform for Badge {
         self.launcher.set_time_state(state as u8).ok();
         self.time_state.store(state as u32, Ordering::SeqCst);
     }
+
+    /// maki-keys' word for it: a wallet with no fingerprint (unlocked, no phrase yet) is none.
+    fn wallet(&mut self) -> (WalletKind, u32) {
+        let w = self.keys.wallet_status();
+        let kind = match w.kind {
+            _ if w.fingerprint == 0 => WalletKind::None,
+            maki_keys::WALLET_STANDARD => WalletKind::Standard,
+            maki_keys::WALLET_PASSPHRASE => WalletKind::Passphrase,
+            _ => WalletKind::None,
+        };
+        (kind, w.fingerprint)
+    }
 }
 
 /// For the emulator's demos (MAKI_DEMO_APP, MAKI_DEMO_PERMS): the app host, once maki has
@@ -372,6 +387,7 @@ fn main() -> ! {
         tt: ticktimer_server::Ticktimer::new().unwrap(),
         launcher: maki_launcher::Launcher::new(&xns).expect("couldn't connect to the launcher"),
         time_state: time_state.clone(),
+        keys: maki_keys::Keys::new(&xns).expect("couldn't connect to maki-keys"),
         #[cfg(feature = "board-baosec")]
         time_conn: xous::connect(xous::SID::from_bytes(bao1x_hal_service::api::TIME_SERVER_PUBLIC).unwrap())
             .unwrap(),
@@ -1069,6 +1085,7 @@ fn main() -> ! {
             tt: ticktimer_server::Ticktimer::new().unwrap(),
             launcher: maki_launcher::Launcher::new(&xns).expect("couldn't connect to the launcher"),
             time_state: time_state.clone(),
+            keys: maki_keys::Keys::new(&xns).expect("couldn't connect to maki-keys"),
             #[cfg(feature = "board-baosec")]
             time_conn: xous::connect(
                 xous::SID::from_bytes(bao1x_hal_service::api::TIME_SERVER_PUBLIC).unwrap(),

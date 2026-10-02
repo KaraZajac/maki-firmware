@@ -447,6 +447,21 @@ pub trait Platform {
     fn set_time(&mut self, utc_ms: u64, tz_offset_s: i32);
     /// Called after every change, for anything that displays the time (the launcher's clock).
     fn time_state_changed(&mut self, _state: TimeState) {}
+    /// The wallet wallet apps have (`kind::WALLET_STATUS`): `WalletKind` and the master key's
+    /// fingerprint (big-endian, as wallets write it), or none while maki is locked.
+    fn wallet(&mut self) -> (WalletKind, u32) { (WalletKind::None, 0) }
+}
+
+/// Which wallet wallet apps have, as `WALLET_STATUS` says.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(u8)]
+pub enum WalletKind {
+    /// maki is locked, or has no recovery phrase yet
+    None = 0,
+    /// the recovery phrase's own
+    Standard = 1,
+    /// the phrase with a BIP39 passphrase, typed on maki
+    Passphrase = 2,
 }
 
 struct Challenge {
@@ -503,6 +518,7 @@ impl<P: Platform> Device<P> {
         let result = match packet.kind {
             kind::HELLO => self.hello(body),
             kind::STATUS => self.status(body),
+            kind::WALLET_STATUS => self.wallet_status(body),
             kind::TIME_CHALLENGE => self.time_challenge(body),
             kind::TIME_PROOF => self.time_proof(body),
             kind::TIME_UNVERIFIED => self.time_unverified(body),
@@ -683,6 +699,14 @@ impl<P: Platform> Device<P> {
         let reply =
             Writer::new().u8(crate::frame::PROTOCOL_VERSION).str8(&self.name).str8(&self.version).finish();
         Ok((kind::HELLO | kind::REPLY, reply))
+    }
+
+    fn wallet_status(&mut self, body: &[u8]) -> Result<Reply, Truncated> {
+        Reader::new(body).end()?;
+        let (kind, fingerprint) = self.platform.wallet();
+        let fingerprint = if kind == WalletKind::None { 0 } else { fingerprint };
+        let reply = Writer::new().u8(kind as u8).u32(fingerprint).finish();
+        Ok((kind::WALLET_STATUS | kind::REPLY, reply))
     }
 
     fn status(&mut self, body: &[u8]) -> Result<Reply, Truncated> {

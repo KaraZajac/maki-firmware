@@ -27,6 +27,8 @@ maki-ui = { path = "../../libs/maki-ui" }
 bao1x-api = { path = "../../libs/bao1x-api" }
 maki-keys = { package = "maki-keys-api", path = "../../libs/maki-keys-api" }
 maki-seed = { path = "../../libs/maki-seed" }
+# Shamir shares typed in to restore, read whole as they come (SSKR, ByteWords)
+maki-sskr = { path = "../../libs/maki-sskr" }
 getrandom = "0.2"
 bao1x-hal-service = { path = "../../services/bao1x-hal-service", optional = true }
 
