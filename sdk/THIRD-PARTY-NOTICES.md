@@ -1,10 +1,10 @@
 # Third-party notices
 
-For the maki store's apps, built from `sdk/`, from maki-firmware at `a998b9a9e`. Made by `tools/maki-notices.py sdk`.
+For the maki store's apps, built from `sdk/`, from maki-firmware at `1e8d15dca`. Made by `tools/maki-notices.py sdk`.
 
 Xous is licensed under the Apache License 2.0 (`LICENSE`), maki's own code under the MIT License (`LICENSES/MIT.txt`): see `NOTICE.md`. What follows is everything else compiled in, with its license and its authors' notices. Where a crate offers a choice of licenses, the notice is for the one taken here (MIT, where offered). None is under a copyleft license.
 
-## 49 components
+## 50 components
 
 | Crate | Version | License | Source |
 |---|---|---|---|
@@ -14,6 +14,7 @@ Xous is licensed under the Apache License 2.0 (`LICENSE`), maki's own code under
 | bech32 | 0.11.1 | MIT | https://github.com/rust-bitcoin/rust-bech32 |
 | bitcoin-private | 0.1.0 | CC0-1.0 | https://github.com/rust-bitcoin/rust-bitcoin/ |
 | bitcoin_hashes | 0.12.0 | CC0-1.0 | https://github.com/rust-bitcoin/bitcoin_hashes/ |
+| blake2 | 0.10.6 | MIT OR Apache-2.0 | https://github.com/RustCrypto/hashes |
 | block-buffer | 0.10.4 | MIT OR Apache-2.0 | https://github.com/RustCrypto/utils |
 | cfg-if | 1.0.5 | MIT OR Apache-2.0 | https://github.com/rust-lang/cfg-if |
 | chacha20 | 0.9.1 | Apache-2.0 OR MIT | https://github.com/RustCrypto/stream-ciphers |
@@ -320,6 +321,37 @@ DEALINGS IN THE SOFTWARE.
 
 ```
 Copyright (c) 2017 Clark Moody
+
+Permission is hereby granted, free of charge, to any
+person obtaining a copy of this software and associated
+documentation files (the "Software"), to deal in the
+Software without restriction, including without
+limitation the rights to use, copy, modify, merge,
+publish, distribute, sublicense, and/or sell copies of
+the Software, and to permit persons to whom the Software
+is furnished to do so, subject to the following
+conditions:
+
+The above copyright notice and this permission notice
+shall be included in all copies or substantial portions
+of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF
+ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED
+TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT
+SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
+IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+DEALINGS IN THE SOFTWARE.
+```
+
+### MIT: blake2 0.10.6
+
+```
+Copyright (c) 2015-2016 The blake2-rfc Developers, Cesar Barros
+Copyright (c) 2017 Artyom Pavlov
 
 Permission is hereby granted, free of charge, to any
 person obtaining a copy of this software and associated
