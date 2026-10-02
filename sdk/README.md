@@ -62,6 +62,10 @@ the `maki` tool that packs, signs, checks and simulates them. The examples:
 - **2048** and **Minesweeper**: the games, with the jog dial for up and down. Minesweeper's
   first step is always safe, its clock stops while you're away, and both keep the game you left
   and your best.
+- **Sudoku**: puzzles made on maki, each with one solution, graded easy to expert by the
+  techniques solving it takes, made ahead while you're still (the work cut into steps that wait
+  between them); pencil marks, and best times kept. **Sokoban**: David W. Skinner's Microban, 148
+  levels, each drawn as big as it fits, with undo.
 - **Name Tag**: your name as big as it fits (host API 9's `text_scaled`), on as many lines as
   that takes, with a line under it and a link of yours as a QR code people can scan, all read
   from a QR code you make.
@@ -124,6 +128,15 @@ the `maki` tool that packs, signs, checks and simulates them. The examples:
   code (`maki-sol`), as Solana's runtime does: SOL and tokens sent, spelled out, a token's
   recipient as their own address when the transaction proves the token account is theirs, the most
   the fee can be, and anything else flagged, with whether it's given the account's signature.
+- **More wallets**, each the account its coin's usual wallets make from the same phrase, each with
+  a library that reads what it signs strictly before the app shows it: **Litecoin**, **Dogecoin**,
+  **Bitcoin Cash**, **Dash** and **DigiByte** (`maki-btc`'s networks, with the Bitcoin app's
+  protocol), **Zcash**'s transparent addresses (`maki-zec`, ZIP-244), **Kaspa** (`maki-kas`),
+  **XRP** (`maki-xrp`), **Stellar** (`maki-xlm`), **Tron** (`maki-trx`), **TON** (`maki-ton`, its
+  v4R2 and W5 wallets), **Cosmos** (`maki-atom`, the Hub and nine chains), **NEAR**
+  (`maki-near`), **Sui** (`maki-sui`), **Aptos** (`maki-apt`) and **Cardano** (`maki-ada`, host
+  API 11's BIP32-Ed25519 keys). Each answers maki desktop over the link, and its tests hold it to
+  the coin's own software, byte for byte.
 - **Hello Native**, Hello built as a native app, and **Pomodoro**, a native focus timer whose
   pie empties like a clock while you work and fills back up while you rest; the jog dial sets its
   minutes.
