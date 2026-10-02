@@ -66,3 +66,5 @@ maki-sol = { path = "../maki-sol" }
 serde_json = "1"
 # the OpenPGP example's fingerprint
 sha1_smol = "1"
+# Tron: what its app shows, checked against its library
+maki-trx = { path = "../maki-trx" }

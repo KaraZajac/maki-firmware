@@ -5559,6 +5559,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "maki-trx"
+version = "0.1.0"
+dependencies = [
+ "maki-hd",
+ "maki-seed",
+ "serde_json",
+ "sha2 0.10.8",
+ "sha3 0.10.8",
+]
+
+[[package]]
 name = "maki-ui"
 version = "0.1.0"
 dependencies = [
@@ -5601,6 +5612,7 @@ dependencies = [
  "maki-native",
  "maki-seed",
  "maki-sol",
+ "maki-trx",
  "maki-xmr",
  "minicbor",
  "qrcode",

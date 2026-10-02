@@ -1,0 +1,17 @@
+id = "com.leviathan.maki.tron"
+name = "Tron"
+version = 1
+label = "1.0"
+api = 3
+storage = 0
+memory = 1024
+backup = true
+icon = "icon.pbm"
+description = "Your Tron account, from maki's recovery phrase, as TronLink and Ledger make it: for maki desktop's wallet. Every TRX and token payment, stake, vote and fee is shown on maki before it signs, and nothing that would hand the account to another is signed at all."
+
+[permissions]
+link = "So maki desktop can ask for your account and signatures."
+wallet = "To sign the transactions you approve on maki's screen, and nothing else."
+
+[wallet]
+paths = ["m/44'/195'"]

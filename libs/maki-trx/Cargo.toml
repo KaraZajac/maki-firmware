@@ -1,0 +1,17 @@
+[package]
+name = "maki-trx"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "maki's Tron account: its addresses, and what it signs, read strictly and shown first"
+
+[dependencies]
+# a transaction's ID (what's signed), and base58check's checksum
+sha2 = { version = "0.10.8", default-features = false }
+# an address: the last 20 bytes of the key's Keccak-256
+sha3 = { version = "0.10.8", default-features = false }
+
+[dev-dependencies]
+maki-hd = { path = "../maki-hd", features = ["seed"] }
+maki-seed = { path = "../maki-seed" }
+serde_json = "1"

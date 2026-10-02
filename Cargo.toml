@@ -141,6 +141,7 @@ members = [
   "libs/maki-fido",
   "libs/maki-eth",
   "libs/maki-sol",
+  "libs/maki-trx",
   "libs/maki-bundle",
   "libs/maki-store",
   "libs/maki-native",
