@@ -1,3 +1,4 @@
+// Added for maki (a fork of Xous: github.com/KaraZajac/maki-firmware) in 2026, under its crate's license.
 //! FIDO while maki is locked. OpenSK keeps its store in the secret basis, which the PIN opens:
 //! until then nothing that reads it can run (the store would read, and even write, the system
 //! basis instead). But a computer looking for an authenticator sends CTAPHID_INIT first, and
