@@ -1,0 +1,16 @@
+[package]
+name = "maki-sui"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "maki's Sui account: its addresses, and what it signs, read strictly and shown first"
+
+[dependencies]
+# BLAKE2b-256: an address (of its key), what's signed (of the intent message), and the field that
+# holds an address balance (which a coin reservation names)
+blake2 = { version = "0.10.6", default-features = false }
+
+[dev-dependencies]
+maki-hd = { path = "../maki-hd", features = ["seed"] }
+maki-seed = { path = "../maki-seed" }
+serde_json = "1"

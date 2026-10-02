@@ -1,0 +1,18 @@
+id = "com.leviathan.maki.sui"
+name = "Sui"
+version = 1
+label = "1.0"
+api = 6
+storage = 0
+memory = 256
+backup = true
+icon = "icon.pbm"
+description = "Your Sui account, from maki's recovery phrase, as Slush and Ledger make it: for maki desktop's wallet. Every SUI and token payment, object sent, stake and fee is shown on maki before it signs; a Move call it can't read is flagged with what it's given, and nothing handing the account over is signed."
+
+[permissions]
+link = "So maki desktop can ask for your account, show you its address, and ask for signatures."
+wallet = "To sign the Sui transactions you approve on maki's screen, and nothing else."
+
+[wallet]
+curve = "ed25519"
+paths = ["m/44'/784'"]

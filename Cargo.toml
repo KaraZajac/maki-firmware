@@ -148,6 +148,7 @@ members = [
   "libs/maki-apt",
   "libs/maki-near",
   "libs/maki-ada",
+  "libs/maki-sui",
   "libs/maki-bundle",
   "libs/maki-store",
   "libs/maki-native",

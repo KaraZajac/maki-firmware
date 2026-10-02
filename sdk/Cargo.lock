@@ -960,6 +960,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "maki-sui"
+version = "0.1.0"
+dependencies = [
+ "blake2",
+]
+
+[[package]]
 name = "maki-trx"
 version = "0.1.0"
 dependencies = [
@@ -1781,6 +1788,14 @@ name = "sudo"
 version = "0.1.0"
 dependencies = [
  "maki-app",
+]
+
+[[package]]
+name = "sui"
+version = "0.1.0"
+dependencies = [
+ "maki-app",
+ "maki-sui",
 ]
 
 [[package]]

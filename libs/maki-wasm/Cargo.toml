@@ -80,3 +80,5 @@ maki-apt = { path = "../maki-apt" }
 maki-near = { path = "../maki-near" }
 # Cardano: what its app shows, checked against its library
 maki-ada = { path = "../maki-ada" }
+# Sui: what its app shows, checked against its library
+maki-sui = { path = "../maki-sui" }

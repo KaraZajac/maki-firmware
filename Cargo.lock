@@ -5602,6 +5602,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "maki-sui"
+version = "0.1.0"
+dependencies = [
+ "blake2",
+ "maki-hd",
+ "maki-seed",
+ "serde_json",
+]
+
+[[package]]
 name = "maki-trx"
 version = "0.1.0"
 dependencies = [
@@ -5659,6 +5669,7 @@ dependencies = [
  "maki-near",
  "maki-seed",
  "maki-sol",
+ "maki-sui",
  "maki-trx",
  "maki-xlm",
  "maki-xmr",
