@@ -229,9 +229,18 @@ pub fn coin(prefix: &[u32]) -> Option<&'static str> {
         2 => "Litecoin",
         3 => "Dogecoin",
         60 => "Ethereum",
+        118 => "Cosmos",
         128 => "Monero",
+        144 => "XRP",
         145 => "Bitcoin Cash",
+        148 => "Stellar",
+        195 => "Tron",
+        397 => "NEAR",
         501 => "Solana",
+        637 => "Aptos",
+        784 => "Sui",
+        1815 => "Cardano",
+        111111 => "Kaspa",
         _ => return None,
     })
 }
@@ -266,6 +275,9 @@ mod tests {
         assert!(!under(&parse_path("m/84'").unwrap(), &p));
         assert_eq!(coin(&p), Some("Bitcoin"));
         assert_eq!(coin(&parse_path("m/44'/60'").unwrap()), Some("Ethereum"));
+        assert_eq!(coin(&parse_path("m/84'/2'").unwrap()), Some("Litecoin"));
+        assert_eq!(coin(&parse_path("m/44'/111111'").unwrap()), Some("Kaspa"));
+        assert_eq!(coin(&parse_path("m/1852'/1815'").unwrap()), Some("Cardano"));
         assert_eq!(coin(&parse_path("m/44'/99999'").unwrap()), None);
     }
 }
