@@ -295,6 +295,7 @@ pub fn coin(prefix: &[u32]) -> Option<&'static str> {
         195 => "Tron",
         397 => "NEAR",
         501 => "Solana",
+        607 => "TON",
         637 => "Aptos",
         784 => "Sui",
         1815 => "Cardano",

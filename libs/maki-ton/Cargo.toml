@@ -1,0 +1,15 @@
+[package]
+name = "maki-ton"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "maki's TON account: its wallets' addresses, and what they sign, read strictly and shown first"
+
+[dependencies]
+# what names a cell, and so an address and what a signature signs: SHA-256 of what's in it
+sha2 = { version = "0.10.8", default-features = false }
+
+[dev-dependencies]
+maki-hd = { path = "../maki-hd", features = ["seed"] }
+maki-seed = { path = "../maki-seed" }
+serde_json = "1"
