@@ -1,0 +1,17 @@
+[package]
+name = "kaspa"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+# std, for an allocator: the wallet's code (maki-kas) works in Vecs and Strings
+maki-app = { path = "../../maki-app", default-features = false, features = ["std", "wallet"] }
+# the wallet: transactions read strictly, checked against the account and shown; maki holds the keys
+maki-kas = { path = "../../../libs/maki-kas" }
+# what maki's keys say when they can't
+maki-hd = { path = "../../../libs/maki-hd" }

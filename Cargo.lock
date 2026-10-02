@@ -5400,6 +5400,17 @@ name = "maki-icons"
 version = "0.1.0"
 
 [[package]]
+name = "maki-kas"
+version = "0.1.0"
+dependencies = [
+ "blake2",
+ "k256",
+ "maki-hd",
+ "maki-seed",
+ "serde_json",
+]
+
+[[package]]
 name = "maki-keys"
 version = "0.1.0"
 dependencies = [
@@ -5609,6 +5620,7 @@ dependencies = [
  "maki-bundle",
  "maki-eth",
  "maki-hd",
+ "maki-kas",
  "maki-native",
  "maki-seed",
  "maki-sol",

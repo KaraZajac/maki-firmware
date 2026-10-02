@@ -143,6 +143,7 @@ members = [
   "libs/maki-sol",
   "libs/maki-trx",
   "libs/maki-xrp",
+  "libs/maki-kas",
   "libs/maki-bundle",
   "libs/maki-store",
   "libs/maki-native",

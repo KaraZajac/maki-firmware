@@ -45,6 +45,8 @@ with it contains `maki-app`, whose MIT notice goes with it.
   Monero's test vectors, with Monero's license beside them (`tests/monero-crypto.LICENSE`).
 - `libs/maki-seed`: BIP 39's English word list (MIT, Copyright (c) 2013 Marek Palatinus, Pavol
   Rusnak, Aaron Voisine, Sean Bowe: `LICENSE-bip39`).
+- `libs/maki-kas`: its signature hash is ported from rusty-kaspa v2.1.0 (ISC, Copyright (c)
+  2022-2024 Kaspa developers: `LICENSE-rusty-kaspa`).
 - `apps-baosec/maki-spawn/build.rs` is adapted from cortex-m's (MIT, Copyright (c) 2016 Jorge
   Aparicio and The Embedded Devices Working Group Developers).
 - `sdk/examples/passphrase` uses the EFF's Long Wordlist, under the Creative Commons Attribution

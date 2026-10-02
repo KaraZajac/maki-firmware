@@ -1,0 +1,19 @@
+[package]
+name = "maki-kas"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "maki's Kaspa account: its addresses, and what it signs, read strictly and shown first"
+
+[dependencies]
+# the account's keys, through maki: public keys and BIP340 signatures by path (`maki_hd::Keys`)
+maki-hd = { path = "../maki-hd" }
+# Kaspa's hashes: BLAKE2b-256, keyed with what each one hashes (the signature hash's)
+blake2 = { version = "0.10.6", default-features = false }
+
+[dev-dependencies]
+maki-hd = { path = "../maki-hd", features = ["seed"] }
+maki-seed = { path = "../maki-seed" }
+# the SDK's own signatures (random aux), checked against maki's signature hash
+k256 = { version = "0.13", default-features = false, features = ["schnorr"] }
+serde_json = "1"

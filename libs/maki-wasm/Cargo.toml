@@ -70,3 +70,5 @@ sha1_smol = "1"
 maki-trx = { path = "../maki-trx" }
 # XRP: what its app shows, checked against its library
 maki-xrp = { path = "../maki-xrp" }
+# Kaspa: what its app shows, checked against its library
+maki-kas = { path = "../maki-kas" }
