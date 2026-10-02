@@ -1,0 +1,10 @@
+id = "com.leviathan.maki.sokoban"
+name = "Sokoban"
+version = 1
+label = "1.0"
+api = 8
+storage = 1
+memory = 64
+backup = true
+description = "Push every box onto a goal: left and right and the jog dial on maki's side walk, and the centre takes moves back. The levels are David W. Skinner's Microban, 148 small puzzles, each drawn as big as it fits. Keeps the level you left and each level's fewest moves."
+icon = "icon.pbm"

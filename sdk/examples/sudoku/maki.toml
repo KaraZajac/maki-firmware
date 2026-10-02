@@ -1,0 +1,10 @@
+id = "com.leviathan.maki.sudoku"
+name = "Sudoku"
+version = 1
+label = "1.0"
+api = 8
+storage = 1
+memory = 64
+backup = true
+description = "Sudoku made on maki: every puzzle is new, has one solution, and is graded easy to expert by what solving it takes. Left, right and the jog dial move; the centre opens a picker to write a digit or pencil marks in. Keeps the puzzle you left and your best times; shows mistakes only if you ask."
+icon = "icon.pbm"

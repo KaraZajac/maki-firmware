@@ -54,6 +54,9 @@ with it contains `maki-app`, whose MIT notice goes with it.
   Aparicio and The Embedded Devices Working Group Developers).
 - `sdk/examples/passphrase` uses the EFF's Long Wordlist, under the Creative Commons Attribution
   3.0 US License, as its `README.md` says.
+- `sdk/examples/sokoban` ships 148 of David W. Skinner's Microban levels, unchanged, which he lets
+  anyone distribute "provided they remain properly credited": his name and email are with them, at
+  the top of `src/microban.txt`, and the app credits him on its Levels screen.
 
 ## What's in the firmware you flash
 
