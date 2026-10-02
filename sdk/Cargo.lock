@@ -947,6 +947,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "maki-xlm"
+version = "0.1.0"
+dependencies = [
+ "sha2",
+]
+
+[[package]]
 name = "maki-xmr"
 version = "0.1.0"
 dependencies = [
@@ -1696,6 +1703,14 @@ name = "status"
 version = "0.1.0"
 dependencies = [
  "maki-app",
+]
+
+[[package]]
+name = "stellar"
+version = "0.1.0"
+dependencies = [
+ "maki-app",
+ "maki-xlm",
 ]
 
 [[package]]

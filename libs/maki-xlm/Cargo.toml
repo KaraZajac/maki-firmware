@@ -1,0 +1,17 @@
+[package]
+name = "maki-xlm"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "maki's Stellar account: its addresses, and what it signs, read strictly and shown first"
+
+[dependencies]
+# the network's ID, what a signature signs (SHA-256 of the transaction and the network), and a
+# liquidity pool's and a Stellar asset contract's IDs
+sha2 = { version = "0.10.8", default-features = false }
+
+[dev-dependencies]
+maki-hd = { path = "../maki-hd", features = ["seed"] }
+maki-seed = { path = "../maki-seed" }
+ed25519-dalek = { package = "ed25519-dalek-compat", path = "../../bao1x-boot/ed25519-dalek-compat", default-features = false, features = ["zeroize"] }
+serde_json = "1"

@@ -5625,6 +5625,7 @@ dependencies = [
  "maki-seed",
  "maki-sol",
  "maki-trx",
+ "maki-xlm",
  "maki-xmr",
  "maki-xrp",
  "minicbor",
@@ -5638,6 +5639,17 @@ dependencies = [
  "wat",
  "x25519-dalek",
  "zeroize",
+]
+
+[[package]]
+name = "maki-xlm"
+version = "0.1.0"
+dependencies = [
+ "ed25519-dalek-compat",
+ "maki-hd",
+ "maki-seed",
+ "serde_json",
+ "sha2 0.10.8",
 ]
 
 [[package]]
