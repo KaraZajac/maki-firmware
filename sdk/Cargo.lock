@@ -908,6 +908,15 @@ name = "maki-native"
 version = "0.1.0"
 
 [[package]]
+name = "maki-near"
+version = "0.1.0"
+dependencies = [
+ "curve25519-dalek-bao1x",
+ "sha2",
+ "sha3",
+]
+
+[[package]]
 name = "maki-seed"
 version = "0.1.0"
 dependencies = [
@@ -1106,6 +1115,14 @@ name = "nametag"
 version = "0.1.0"
 dependencies = [
  "maki-app",
+]
+
+[[package]]
+name = "near"
+version = "0.1.0"
+dependencies = [
+ "maki-app",
+ "maki-near",
 ]
 
 [[package]]

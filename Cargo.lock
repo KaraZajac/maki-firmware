@@ -5524,6 +5524,18 @@ name = "maki-native"
 version = "0.1.0"
 
 [[package]]
+name = "maki-near"
+version = "0.1.0"
+dependencies = [
+ "curve25519-dalek-bao1x",
+ "maki-hd",
+ "maki-seed",
+ "serde_json",
+ "sha2 0.10.8",
+ "sha3 0.10.8",
+]
+
+[[package]]
 name = "maki-proto"
 version = "0.1.0"
 dependencies = [
@@ -5633,6 +5645,7 @@ dependencies = [
  "maki-hd",
  "maki-kas",
  "maki-native",
+ "maki-near",
  "maki-seed",
  "maki-sol",
  "maki-trx",

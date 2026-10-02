@@ -1,0 +1,19 @@
+[package]
+name = "maki-near"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "maki's NEAR account: its addresses, and what it signs, read strictly and shown first"
+
+[dependencies]
+# a transaction's hash (what's signed), and a contract's code hash
+sha2 = { version = "0.10.8", default-features = false }
+# a post-quantum key's hash, which NEAR lists the key by
+sha3 = { version = "0.10.8", default-features = false }
+# a validator's key, which NEAR takes only if it's a point of the curve's prime-order group
+curve25519-dalek = { package = "curve25519-dalek-bao1x", path = "../../bao1x-boot/curve25519-dalek-bao1x", default-features = false }
+
+[dev-dependencies]
+maki-hd = { path = "../maki-hd", features = ["seed"] }
+maki-seed = { path = "../maki-seed" }
+serde_json = "1"

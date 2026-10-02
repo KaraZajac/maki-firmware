@@ -76,3 +76,5 @@ maki-kas = { path = "../maki-kas" }
 maki-xlm = { path = "../maki-xlm" }
 # Aptos: what its app shows, checked against its library
 maki-apt = { path = "../maki-apt" }
+# NEAR: what its app shows, checked against its library
+maki-near = { path = "../maki-near" }
