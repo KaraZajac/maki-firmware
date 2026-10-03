@@ -9,6 +9,8 @@
 //! "about"), which everyone knows: never send real coins to either's wallets. Wallet apps (the
 //! store's Bitcoin, Ethereum and Monero) get their keys from it, as on maki.
 //! Approvals are automatic unless `--deny` (refuse everything) or `--ask` (ask on this terminal).
+//! Imports from other password managers (IMPORT_PUT) are read and checked as maki does, and what
+//! the fake hasn't got kept in memory beside the rest, by the same rules; VAULT_STATUS counts it.
 //! It calls itself a maki roll, picked at random as a badge picks its name, unless `--name` says.
 //! Codes need a verified clock, as on the badge: sync through Roughtime first, or start with
 //! `--clock-verified` to take this computer's clock as verified (tests, offline work).
@@ -30,10 +32,11 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use hmac::{Hmac, Mac};
 use maki_proto::device::{
-    AppEntry, AppSpace, Approval, Apps, Ask, BACKUP_PIECE, Backup, Device, Handled, Platform, StoreState,
-    TimeState, WalletKind, reply,
+    AppEntry, AppSpace, Approval, Apps, Ask, BACKUP_PIECE, Backup, Device, Handled, ImportAdded, Platform,
+    StoreState, TimeState, VaultCounts, WalletKind, reply,
 };
 use maki_proto::frame::{self, Deframer};
+use maki_proto::import::{self, opensk, vault};
 use maki_proto::site;
 
 struct Host {
@@ -41,6 +44,8 @@ struct Host {
     clock: Option<(u64, Instant)>,
     /// which wallet wallet apps have: the phrase's own, or `--passphrase`'s
     wallet: (WalletKind, u32),
+    /// what the vault holds, for VAULT_STATUS
+    store: Arc<Mutex<Store>>,
 }
 
 fn host_utc_ms() -> u64 { SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis() as u64 }
@@ -65,6 +70,18 @@ impl Platform for Host {
     }
 
     fn wallet(&mut self) -> (WalletKind, u32) { self.wallet }
+
+    /// Always unlocked, with a phrase: the counts.
+    fn vault(&mut self) -> Option<(Approval, VaultCounts)> {
+        let st = self.store.lock().unwrap();
+        let counts = VaultCounts {
+            logins: st.logins.len() as u32,
+            codes: (st.totp.len() + st.codes.len()) as u32,
+            passkeys: (st.passkeys.len() + st.imported.len()) as u32,
+            imported: st.imported.len() as u32,
+        };
+        Some((Approval::Approved, counts))
+    }
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -80,6 +97,12 @@ struct Store {
     /// the sites (RP IDs) maki holds a passkey for (`--passkey`)
     passkeys: Vec<String>,
     totp: Vec<(String, Vec<u8>)>,
+    /// codes an import gave it, as the Authenticator keeps them
+    codes: Vec<Code>,
+    /// passkeys an import gave it: each one's site (RP ID), credential ID and user handle
+    imported: Vec<(String, Vec<u8>, Vec<u8>)>,
+    /// an import coming in
+    import_incoming: Vec<u8>,
     /// the backup being read out, and one coming in
     sealed: Vec<u8>,
     incoming: Vec<u8>,
@@ -94,6 +117,18 @@ struct Store {
     store_root: Option<maki_store::Root>,
     revocations: Option<maki_store::SignedRevocations>,
     store_incoming: Vec<u8>,
+}
+
+/// A code from an import: the name it shows under, how it's made, and the site it was picked for
+/// (none until a site asks, as on maki).
+struct Code {
+    name: String,
+    issuer: String,
+    secret: Vec<u8>,
+    algorithm: import::Algorithm,
+    digits: u8,
+    period_s: u16,
+    site: Option<String>,
 }
 
 /// maki's room for apps, as its app host has it (`maki-app-host-api`).
@@ -507,12 +542,215 @@ fn base32(s: &str) -> Option<Vec<u8>> {
 
 /// RFC 6238 with HMAC-SHA1, 30 s steps, 6 digits: what the vault computes for a default entry.
 fn totp(secret: &[u8], unix_s: u64) -> (String, u8) {
-    let mut mac = Hmac::<sha1::Sha1>::new_from_slice(secret).unwrap();
-    mac.update(&(unix_s / 30).to_be_bytes());
-    let h = mac.finalize().into_bytes();
-    let o = (h[19] & 0x0f) as usize;
+    code_at(secret, import::Algorithm::Sha1, 6, 30, unix_s)
+}
+
+/// RFC 6238, as the vault computes a code of any algorithm, length and period: the code, and the
+/// seconds it's good for (at most 255).
+fn code_at(
+    secret: &[u8],
+    algorithm: import::Algorithm,
+    digits: u8,
+    period_s: u16,
+    unix_s: u64,
+) -> (String, u8) {
+    let step = (unix_s / period_s as u64).to_be_bytes();
+    let h: Vec<u8> = match algorithm {
+        import::Algorithm::Sha1 => {
+            let mut mac = Hmac::<sha1::Sha1>::new_from_slice(secret).unwrap();
+            mac.update(&step);
+            mac.finalize().into_bytes().to_vec()
+        }
+        import::Algorithm::Sha256 => {
+            let mut mac = Hmac::<sha2::Sha256>::new_from_slice(secret).unwrap();
+            mac.update(&step);
+            mac.finalize().into_bytes().to_vec()
+        }
+        import::Algorithm::Sha512 => {
+            let mut mac = Hmac::<sha2::Sha512>::new_from_slice(secret).unwrap();
+            mac.update(&step);
+            mac.finalize().into_bytes().to_vec()
+        }
+    };
+    let o = (h[h.len() - 1] & 0x0f) as usize;
     let bin = u32::from_be_bytes([h[o] & 0x7f, h[o + 1], h[o + 2], h[o + 3]]);
-    (format!("{:06}", bin % 1_000_000), (30 - unix_s % 30) as u8)
+    let code = format!("{:0width$}", bin % 10u32.pow(digits as u32), width = digits as usize);
+    (code, (period_s as u64 - unix_s % period_s as u64).min(255) as u8)
+}
+
+/// What maki says of imported passkeys before its owner says yes to them (maki-keys' words).
+const PASSKEYS: &str = "Their keys were made elsewhere and have been in a file on this computer. They don’t come \
+                        from maki’s recovery phrase, so only a backup brings them back to a restored maki.";
+
+/// What the fake's vault has, as an import's plan needs it, its records counted as maki writes
+/// them.
+fn have_of(st: &Store) -> import::Have {
+    let mut have = import::Have::default();
+    for (site, user, pass) in &st.logins {
+        have.logins.insert((site::normalize(site), user.clone()));
+        have.login_keys.insert(vault::login_key(site, user));
+        let login = import::Login {
+            site: site.clone(),
+            username: user.clone(),
+            password: pass.clone(),
+            title: String::new(),
+        };
+        have.used += import::cost(vault::login_record(&login, 0).len());
+    }
+    let code = |secret: &[u8], algorithm, digits, period_s| import::Code {
+        issuer: String::new(),
+        account: String::new(),
+        secret: secret.to_vec(),
+        algorithm,
+        digits,
+        period_s,
+    };
+    for (site, secret) in &st.totp {
+        have.code_keys.insert(vault::code_key(site));
+        have.code_secrets.push(secret.clone());
+        let record = vault::code_record(site, &code(secret, import::Algorithm::Sha1, 6, 30), 0);
+        have.used += import::cost(record.len());
+    }
+    for c in &st.codes {
+        have.code_keys.insert(vault::code_key(&c.name));
+        have.code_secrets.push(c.secret.clone());
+        let record = vault::code_record(&c.name, &code(&c.secret, c.algorithm, c.digits, c.period_s), 0);
+        have.used += import::cost(record.len());
+    }
+    for (rp_id, id, handle) in &st.imported {
+        have.credential_ids.insert(id.clone());
+        have.accounts.insert((rp_id.clone(), handle.clone()));
+        let passkey = import::Passkey {
+            rp_id: rp_id.clone(),
+            credential_id: id.clone(),
+            user_handle: handle.clone(),
+            user_name: String::new(),
+            display_name: String::new(),
+            private_key: [1; 32],
+        };
+        have.used += import::cost(opensk::credential(&passkey, 0).len()) + import::cost(id.len());
+    }
+    have.passkey_room = import::MAX_PASSKEYS.saturating_sub(st.passkeys.len() + st.imported.len());
+    have
+}
+
+/// The last piece of an import: read and checked as maki does, every record; then, if there's
+/// anything new, the owner asked (the question maki shows printed), and what's new kept.
+fn finish_import(mut blob: Vec<u8>, store: &Mutex<Store>, policy: Policy) -> (u8, Vec<u8>) {
+    let parsed = import::parse(&blob);
+    blob.fill(0);
+    let refused = |why: String| {
+        println!("  import refused: {why}");
+        reply::import_piece(true, Approval::Refused, ImportAdded::default(), &why)
+    };
+    let import = match parsed {
+        Ok(import) => import,
+        Err(why) => return refused(why),
+    };
+    let have = have_of(&store.lock().unwrap());
+    let plan = import::plan(&import, &have);
+    if let Err(why) = import::check_room(&plan, &have) {
+        return refused(why);
+    }
+    let n = |v: usize| v.min(u16::MAX as usize) as u16;
+    let skipped = n(plan.skipped as usize);
+    if plan.is_empty() {
+        println!("  import from {}: nothing new, {} records it has", import.source, plan.skipped);
+        return reply::import_piece(
+            true,
+            Approval::Approved,
+            ImportAdded { skipped, ..Default::default() },
+            "",
+        );
+    }
+    let count = |n: usize, one: &str| format!("{n} {one}{}", if n == 1 { "" } else { "s" });
+    let what: Vec<String> =
+        [(plan.logins.len(), "login"), (plan.codes.len(), "code"), (plan.passkeys.len(), "passkey")]
+            .into_iter()
+            .filter(|(n, _)| *n > 0)
+            .map(|(n, one)| count(n, one))
+            .collect();
+    println!(
+        "  maki shows [Import] from {} {} ({} records it has)",
+        import.source,
+        what.join(", "),
+        plan.skipped
+    );
+    if !plan.passkeys.is_empty() {
+        println!("  maki shows [Passkeys] made elsewhere: {PASSKEYS}");
+    }
+    let a = approve(policy, &format!("Import from {}: {}?", import.source, what.join(", ")));
+    if a != Approval::Approved {
+        return reply::import_piece(true, a, ImportAdded::default(), "");
+    }
+    let mut st = store.lock().unwrap();
+    for l in &plan.logins {
+        st.logins.push((l.site.clone(), l.username.clone(), l.password.clone()));
+    }
+    for (name, c) in &plan.codes {
+        st.codes.push(Code {
+            name: name.clone(),
+            issuer: c.issuer.clone(),
+            secret: c.secret.clone(),
+            algorithm: c.algorithm,
+            digits: c.digits,
+            period_s: c.period_s,
+            site: None,
+        });
+    }
+    for p in &plan.passkeys {
+        st.imported.push((p.rp_id.clone(), p.credential_id.clone(), p.user_handle.clone()));
+    }
+    let added = ImportAdded {
+        logins: n(plan.logins.len()),
+        codes: n(plan.codes.len()),
+        passkeys: n(plan.passkeys.len()),
+        skipped,
+    };
+    reply::import_piece(true, Approval::Approved, added, "")
+}
+
+/// A code from an import, for `site`: the one picked for it before, or, the first time, the one
+/// the owner picks of them all, which maki lists the likeliest first (a name that mentions the
+/// site), and keeps for the site from then on. None if an import gave none.
+fn imported_code(s: &str, store: &Mutex<Store>, policy: Policy) -> Option<(u8, Vec<u8>)> {
+    let mut st = store.lock().unwrap();
+    if st.codes.is_empty() {
+        return None;
+    }
+    let bound = st.codes.iter().position(|c| c.site.as_deref().is_some_and(|b| site::covers(b, s)));
+    let i = match bound {
+        Some(i) => i,
+        None => {
+            let host = site::normalize(s);
+            let labels: Vec<&str> = host.split('.').collect();
+            let words: Vec<&str> =
+                labels[..labels.len().saturating_sub(1)].iter().copied().filter(|l| l.len() >= 3).collect();
+            let score = |c: &Code| {
+                let text = format!("{} {}", c.name, c.issuer).to_ascii_lowercase();
+                words.iter().filter(|w| text.contains(*w)).count()
+            };
+            (0..st.codes.len())
+                .max_by(|&a, &b| {
+                    score(&st.codes[a])
+                        .cmp(&score(&st.codes[b]))
+                        .then(st.codes[b].name.cmp(&st.codes[a].name))
+                })
+                .unwrap_or(0)
+        }
+    };
+    let question = if bound.is_some() {
+        format!("code for {s}?")
+    } else {
+        format!("code for {s} from {}?", st.codes[i].name)
+    };
+    let a = approve(policy, &question);
+    if a == Approval::Approved && bound.is_none() {
+        st.codes[i].site = Some(s.to_string());
+    }
+    let c = &st.codes[i];
+    let (code, left) = code_at(&c.secret, c.algorithm, c.digits, c.period_s, host_utc_ms() / 1000);
+    Some(reply::totp(a, &code, left))
 }
 
 fn approve(policy: Policy, prompt: &str) -> Approval {
@@ -718,7 +956,8 @@ fn answer(ask: Ask, store: &Mutex<Store>, policy: Policy) -> (u8, Vec<u8>) {
                 let st = store.lock().unwrap();
                 (
                     st.logins.iter().find(|(saved, _, _)| site::covers(saved, &s)).cloned(),
-                    st.passkeys.iter().any(|rp| site::covers(rp, &s)),
+                    st.passkeys.iter().any(|rp| site::covers(rp, &s))
+                        || st.imported.iter().any(|(rp, _, _)| site::covers(rp, &s)),
                 )
             };
             match found {
@@ -732,7 +971,9 @@ fn answer(ask: Ask, store: &Mutex<Store>, policy: Policy) -> (u8, Vec<u8>) {
         Ask::Totp { site: s } => {
             let found = store.lock().unwrap().totp.iter().find(|(saved, _)| site::covers(saved, &s)).cloned();
             match found {
-                None => reply::totp(Approval::NoMatch, "", 0),
+                None => {
+                    imported_code(&s, store, policy).unwrap_or_else(|| reply::totp(Approval::NoMatch, "", 0))
+                }
                 Some((_, secret)) => {
                     let a = approve(policy, &format!("code for {s}?"));
                     let (code, left) = totp(&secret, host_utc_ms() / 1000);
@@ -858,8 +1099,8 @@ fn main() {
             maki_proto::names::pick((nanos >> 10) as u8).to_string()
         });
     println!("this maki is {name}");
-    let mut device =
-        Device::new(Host { start: Instant::now(), clock: None, wallet }, name, "0.2.0-fake".into());
+    let host = Host { start: Instant::now(), clock: None, wallet, store: store.clone() };
+    let mut device = Device::new(host, name, "0.2.0-fake".into());
     if args.iter().any(|a| a == "--clock-verified") {
         device.handle(&frame::Packet {
             kind: maki_proto::kind::TIME_UNVERIFIED,
@@ -944,6 +1185,43 @@ fn main() {
                                 let (writer, store, id) = (writer.clone(), store.clone(), packet.id);
                                 std::thread::spawn(move || {
                                     let (kind, body) = finish_restore(blob, &store, policy);
+                                    writer.lock().unwrap().write_all(&frame::encode(kind, id, &body)).ok();
+                                });
+                            }
+                        }
+                    }
+                    Handled::Import { total, offset, data } => {
+                        let finished = {
+                            let mut st = store.lock().unwrap();
+                            if offset == 0 {
+                                st.import_incoming.fill(0);
+                                st.import_incoming.clear();
+                            }
+                            if offset as usize != st.import_incoming.len() {
+                                st.import_incoming.fill(0);
+                                st.import_incoming.clear();
+                                None
+                            } else {
+                                st.import_incoming.extend_from_slice(&data);
+                                Some(st.import_incoming.len() as u32 == total)
+                            }
+                        };
+                        let answer = |done, a| reply::import_piece(done, a, ImportAdded::default(), "");
+                        match finished {
+                            None => {
+                                let (kind, body) = answer(true, Approval::Unavailable);
+                                writer.lock().unwrap().write_all(&frame::encode(kind, packet.id, &body)).ok();
+                            }
+                            Some(false) => {
+                                let (kind, body) = answer(false, Approval::Approved);
+                                writer.lock().unwrap().write_all(&frame::encode(kind, packet.id, &body)).ok();
+                            }
+                            // like an ask: answered once the owner decides, from another thread
+                            Some(true) => {
+                                let blob = std::mem::take(&mut store.lock().unwrap().import_incoming);
+                                let (writer, store, id) = (writer.clone(), store.clone(), packet.id);
+                                std::thread::spawn(move || {
+                                    let (kind, body) = finish_import(blob, &store, policy);
                                     writer.lock().unwrap().write_all(&frame::encode(kind, id, &body)).ok();
                                 });
                             }

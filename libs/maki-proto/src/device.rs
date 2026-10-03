@@ -113,6 +113,36 @@ pub enum Handled {
     /// Installed apps: the glue passes these to maki's app host, which checks bundles and asks
     /// the owner, and answers with `reply::app_*`.
     Apps(Apps),
+    /// A piece of an import from another password manager (`crate::import`): the glue passes it
+    /// to maki-keys, which keeps the pieces, checks the whole and asks the owner, and answers
+    /// with [`reply::import_piece`].
+    Import { total: u32, offset: u32, data: Vec<u8> },
+}
+
+/// Pieces of an import are at most this big.
+pub const IMPORT_PIECE: usize = 4096;
+/// The biggest import maki takes in.
+pub const MAX_IMPORT: u32 = 512 * 1024;
+
+/// What the vault holds, as VAULT_STATUS says: its logins, its codes, its passkeys (the FIDO
+/// authenticator's resident credentials), and how many of those were imported rather than made
+/// on maki.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct VaultCounts {
+    pub logins: u32,
+    pub codes: u32,
+    pub passkeys: u32,
+    pub imported: u32,
+}
+
+/// What an import added, as IMPORT_PUT's last reply says, and `skipped`: the records maki had
+/// already (or that came twice), which it kept as they were.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct ImportAdded {
+    pub logins: u16,
+    pub codes: u16,
+    pub passkeys: u16,
+    pub skipped: u16,
 }
 
 /// Installed apps (ARCHITECTURE.md, "Apps you can install").
@@ -346,6 +376,49 @@ pub mod reply {
         (kind::BACKUP_PUT | kind::REPLY, body)
     }
 
+    /// What the vault holds: `status` is `Approved` with the counts, or why not (`Locked`,
+    /// `NoPhrase`, `Unavailable`) with none.
+    pub fn vault_status(status: Approval, counts: &super::VaultCounts) -> (u8, Vec<u8>) {
+        let c = if status == Approval::Approved { *counts } else { super::VaultCounts::default() };
+        let body = Writer::new()
+            .u8(status as u8)
+            .u32(c.logins)
+            .u32(c.codes)
+            .u32(c.passkeys)
+            .u32(c.imported)
+            .finish();
+        (kind::VAULT_STATUS | kind::REPLY, body)
+    }
+
+    /// A piece of an import taken in (`done` false, `Approved`), or the import's outcome: the
+    /// owner's answer and, approved, what was added and how many maki had already; or `Refused`
+    /// with maki's reason (at most 255 bytes, cut at a character), when nothing was asked.
+    pub fn import_piece(
+        done: bool,
+        approval: Approval,
+        added: super::ImportAdded,
+        reason: &str,
+    ) -> (u8, Vec<u8>) {
+        let a = if done && approval == Approval::Approved { added } else { super::ImportAdded::default() };
+        // why it wouldn't take it; or, once it took it, why it added less than it was given
+        let said = approval == Approval::Refused || (done && approval == Approval::Approved);
+        let reason = if said { reason } else { "" };
+        let mut end = reason.len().min(255);
+        while !reason.is_char_boundary(end) {
+            end -= 1;
+        }
+        let body = Writer::new()
+            .u8(done as u8)
+            .u8(approval as u8)
+            .u16(a.logins)
+            .u16(a.codes)
+            .u16(a.passkeys)
+            .u16(a.skipped)
+            .str8(&reason[..end])
+            .finish();
+        (kind::IMPORT_PUT | kind::REPLY, body)
+    }
+
     /// How many apps are installed, and the one asked for if there's one at that index;
     /// `status` is `Approved`, or why not (`Locked`, `Unavailable`) with nothing.
     pub fn app_list(status: Approval, count: u32, entry: Option<&super::AppEntry>) -> (u8, Vec<u8>) {
@@ -450,6 +523,10 @@ pub trait Platform {
     /// The wallet wallet apps have (`kind::WALLET_STATUS`): `WalletKind` and the master key's
     /// fingerprint (big-endian, as wallets write it), or none while maki is locked.
     fn wallet(&mut self) -> (WalletKind, u32) { (WalletKind::None, 0) }
+    /// What the vault holds (`kind::VAULT_STATUS`): `Approved` with the counts, or why not
+    /// (`Locked`, `NoPhrase`, `Unavailable`). None for a maki with no vault to count, which
+    /// answers VAULT_STATUS as firmware from before it did: an unknown kind.
+    fn vault(&mut self) -> Option<(Approval, VaultCounts)> { None }
 }
 
 /// Which wallet wallet apps have, as `WALLET_STATUS` says.
@@ -525,6 +602,8 @@ impl<P: Platform> Device<P> {
             kind::GET_LOGIN | kind::GET_TOTP | kind::SAVE_LOGIN => return self.ask(packet.kind, body),
             kind::UPDATE_MODE => return Self::update_mode(body),
             kind::BACKUP_GET | kind::BACKUP_PUT => return Self::backup(packet.kind, body),
+            kind::VAULT_STATUS => return self.vault_status(body),
+            kind::IMPORT_PUT => return Self::import(body),
             kind::APP_LIST
             | kind::APP_INSTALL
             | kind::APP_REMOVE
@@ -691,6 +770,44 @@ impl<P: Platform> Device<P> {
                 Handled::Reply(k, b)
             }
             Ok(request) => Handled::Backup(request),
+        }
+    }
+
+    /// Answered from the platform's count, or, by a platform without a vault, as an unknown kind.
+    fn vault_status(&mut self, body: &[u8]) -> Handled {
+        let Some((status, counts)) = self.platform.vault() else {
+            let (k, b) = error(ErrorCode::UnknownKind, "unknown message kind");
+            return Handled::Reply(k, b);
+        };
+        let (k, b) = match Reader::new(body).end() {
+            Ok(()) => reply::vault_status(status, &counts),
+            Err(t) => malformed(t),
+        };
+        Handled::Reply(k, b)
+    }
+
+    fn import(body: &[u8]) -> Handled {
+        let parsed = (|| {
+            let mut r = Reader::new(body);
+            let (total, offset, data) = (r.u32()?, r.u32()?, r.bytes16()?.to_vec());
+            r.end()?;
+            Ok::<_, Truncated>((total, offset, data))
+        })();
+        match parsed {
+            Err(t) => {
+                let (k, b) = malformed(t);
+                Handled::Reply(k, b)
+            }
+            Ok((total, offset, data))
+                if total == 0
+                    || total > MAX_IMPORT
+                    || data.len() > IMPORT_PIECE
+                    || offset as u64 + data.len() as u64 > total as u64 =>
+            {
+                let (k, b) = error(ErrorCode::BadArgument, "import piece out of range");
+                Handled::Reply(k, b)
+            }
+            Ok((total, offset, data)) => Handled::Import { total, offset, data },
         }
     }
 

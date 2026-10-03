@@ -7,8 +7,15 @@ description = "maki's serial protocol: framing, messages, and the device-side lo
 
 [dependencies]
 roughtime = { path = "../roughtime" }
+# imports: the names the vault keeps records under, and the secrets wiped when they go
+sha2 = { version = "0.10.8" }
+zeroize = "1.8.1"
 
 [dev-dependencies]
+# OpenSK's own CBOR reader and writer, to hold the passkeys maki writes to what OpenSK takes
+cbor = { path = "../../apps-baosec/vault2/libraries/cbor", package = "cbor-vault2" }
+# and P-256, as OpenSK's signing has it, to hold maki's check of a private key to
+p256 = { version = "0.11.1", default-features = false, features = ["ecdsa", "ecdh", "std"] }
 # fake_maki computes real TOTP codes, the way the vault does, and makes wallet apps' keys as maki-keys does
 hmac = "0.12.1"
 sha1 = "0.10.6"

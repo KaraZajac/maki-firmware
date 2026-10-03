@@ -32,7 +32,7 @@ impl Platform for Host {
     fn time_state_changed(&mut self, _: TimeState) {}
 }
 
-const KINDS: [u8; 15] = [
+const KINDS: [u8; 17] = [
     kind::HELLO,
     kind::STATUS,
     kind::TIME_CHALLENGE,
@@ -48,6 +48,8 @@ const KINDS: [u8; 15] = [
     kind::APP_REMOVE,
     kind::APP_MESSAGE,
     kind::STORE_UPDATE,
+    kind::VAULT_STATUS,
+    kind::IMPORT_PUT,
 ];
 
 #[test]
@@ -82,5 +84,53 @@ fn nothing_the_host_sends_panics_maki() {
             let _ = deframer.push(&noise);
         }));
         assert!(outcome.is_ok(), "panicked on kind 0x{kind:02x} body {body:02x?}");
+    }
+}
+
+/// An import is read by maki-keys from whatever the host sent: a broken one is refused with a
+/// reason, never a panic. Real imports, damaged and cut, and noise after the magic.
+#[test]
+fn no_import_panics_maki() {
+    use maki_proto::import::{MAGIC, parse};
+    let mut rng = Rng(0x0bad_cafe_f00d_1234);
+    // one of each record, as maki desktop writes them
+    let mut good = MAGIC.to_vec();
+    good.extend([9]);
+    good.extend(b"Bitwarden");
+    good.extend(3u32.to_le_bytes());
+    good.extend([1, 11]);
+    good.extend(b"example.com");
+    good.extend([4, b'k', b'a', b'r', b'a', 2, b'p', b'w', 0]);
+    good.extend([2, 6]);
+    good.extend(b"GitHub");
+    good.extend([0, 10, 0]);
+    good.extend([0x5a; 10]);
+    good.extend([1, 6, 30, 0]);
+    good.extend([3, 11]);
+    good.extend(b"example.com");
+    good.extend([16, 0]);
+    good.extend([0x11; 16]);
+    good.extend([1, 0, 0x22, 0, 0, 32, 0]);
+    good.extend([0x01; 32]);
+    assert!(parse(&good).is_ok());
+    for i in 0..100_000 {
+        let mut blob = if i % 4 == 0 {
+            let mut b = MAGIC.to_vec();
+            b.extend((0..rng.below(300)).map(|_| rng.next() as u8));
+            b
+        } else {
+            good.clone()
+        };
+        for _ in 0..rng.below(4) {
+            let at = rng.below(blob.len());
+            blob[at] ^= 1 << rng.below(8);
+        }
+        if i % 3 == 0 {
+            blob.truncate(rng.below(blob.len() + 1));
+        }
+        let outcome = catch_unwind(AssertUnwindSafe(|| {
+            let _ = parse(&blob);
+        }));
+        assert!(outcome.is_ok(), "panicked on {blob:02x?}");
     }
 }

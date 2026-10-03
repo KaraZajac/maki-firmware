@@ -626,6 +626,12 @@ fn main() -> ! {
 
     // maki: the pumper starts when the vault comes to the front (see `totp::Pace`)
     let mut menu_active = false;
+    // maki: records maki-keys writes behind the vault's back (a backup restored, an import from
+    // another password manager) bump its store's generation: the lists are loaded again the next
+    // time the vault comes to the front, so what's new shows
+    let keys =
+        maki_keys::Keys::new(&xous_names::XousNames::new().unwrap()).expect("couldn't connect to maki-keys");
+    let mut listed = keys.status_and_generation().1;
     loop {
         let mut msg = xous::receive_message(sid).unwrap();
         log::trace!("Got message: {:?}", msg.body.id());
@@ -634,6 +640,7 @@ fn main() -> ! {
                 vault_ui.redraw();
             }
             Some(VaultOp::ReloadDbAndFullRedraw) => {
+                listed = keys.status_and_generation().1;
                 xous::send_message(
                     actions_conn,
                     xous::Message::new_blocking_scalar(ActionOp::ReloadDb.to_usize().unwrap(), 0, 0, 0, 0),
@@ -648,6 +655,21 @@ fn main() -> ! {
                     vault_ui.set_focus(foreground);
                     pace.focused.store(foreground, Ordering::SeqCst);
                     if foreground {
+                        let now = keys.status_and_generation().1;
+                        if now != listed {
+                            listed = now;
+                            xous::send_message(
+                                actions_conn,
+                                xous::Message::new_blocking_scalar(
+                                    ActionOp::ReloadDb.to_usize().unwrap(),
+                                    0,
+                                    0,
+                                    0,
+                                    0,
+                                ),
+                            )
+                            .ok();
+                        }
                         let wanted = if matches!(op, VaultOp::FocusPasswords) {
                             VaultMode::Password
                         } else {

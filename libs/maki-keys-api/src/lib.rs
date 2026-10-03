@@ -120,6 +120,15 @@ pub enum KeysOp {
     /// back together and keep as the recovery phrase (a restore, as `RestorePhrase` is), or why
     /// not (`reason`).
     RestoreShares = 37,
+    /// Memory message (mutable lend) with a `VaultCounts`: what the vault holds, for maki desktop
+    /// (VAULT_STATUS): its logins, codes and passkeys, and of the passkeys, how many were imported.
+    /// Once unlocked with a phrase; counted on a thread, so other requests keep being answered.
+    VaultStatus = 38,
+    /// Memory message (mutable lend) with an `ImportPiece`: a piece of an import from another
+    /// password manager (`maki_proto::import`), for maki desktop (IMPORT_PUT). The last piece is
+    /// read whole and every record checked, the owner asked on screen, and what maki doesn't
+    /// have added; it's answered once that's done.
+    ImportChunk = 39,
 }
 
 /// `FidoKeys`' answer: `keys` is 128 bytes (encryption, authentication, CredRandom).
@@ -139,6 +148,43 @@ impl Drop for FidoSecret {
 pub const CHUNK: usize = 4096;
 /// Bigger than any vault maki could hold, and a bound on what a restore will take in.
 pub const MAX_BACKUP: usize = 512 * 1024;
+
+/// The biggest import maki takes in (`maki_proto::device::MAX_IMPORT`).
+pub const MAX_IMPORT: usize = 512 * 1024;
+
+/// `VaultStatus`'s answer: `result` (`RESULT_OK`, `RESULT_NOT_NOW` while locked,
+/// `RESULT_NO_PHRASE`), and with `RESULT_OK`, how many of each the vault holds.
+#[derive(Debug, Default, Clone, Copy, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
+pub struct VaultCounts {
+    pub result: u32,
+    pub logins: u32,
+    pub codes: u32,
+    pub passkeys: u32,
+    /// of the passkeys, how many were imported rather than made on maki
+    pub imported: u32,
+}
+
+/// A piece of an import, in order, with the same `total` each time. On the way back: `result`
+/// and whether that was the last (`done`); and for the last, what was added and how many records
+/// maki had already (`skipped`), or why it was refused (`reason`, with `RESULT_REFUSED`).
+#[derive(Debug, Default, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
+pub struct ImportPiece {
+    pub offset: u32,
+    pub total: u32,
+    pub data: Vec<u8>,
+    pub result: u32,
+    pub done: bool,
+    pub logins: u32,
+    pub codes: u32,
+    pub passkeys: u32,
+    pub skipped: u32,
+    pub reason: String,
+}
+
+// an import's pieces hold passwords, codes' secrets and passkeys' keys
+impl Drop for ImportPiece {
+    fn drop(&mut self) { zeroize::Zeroize::zeroize(&mut self.data) }
+}
 
 /// `UpdateMode`'s request: what maki desktop will install, for the owner to read (the desktop's
 /// word for it: maki can't see the files), and on the way back, `result` (`RESULT_*`).
@@ -524,6 +570,40 @@ impl Keys {
         self.chunk_call(KeysOp::RestoreChunk, Chunk { offset, total, data, ..Default::default() })
     }
 
+    /// What the vault holds (for VAULT_STATUS). Blocks while maki-keys counts: a moment.
+    pub fn vault_status(&self) -> VaultCounts {
+        let failed = VaultCounts { result: RESULT_FAILED, ..Default::default() };
+        let Ok(mut buf) = Buffer::into_buf(failed) else { return failed };
+        if buf.lend_mut(self.conn, KeysOp::VaultStatus.to_u32().unwrap()).is_err() {
+            return failed;
+        }
+        buf.to_original::<VaultCounts, _>().unwrap_or(failed)
+    }
+
+    /// A piece of an import (`maki_proto::import`). The last one blocks while maki reads it,
+    /// the owner decides and maki adds what it's given.
+    pub fn import_chunk(&self, total: u32, offset: u32, data: Vec<u8>) -> ImportPiece {
+        let failed = || {
+            let mut piece = ImportPiece::default();
+            (piece.result, piece.done) = (RESULT_FAILED, true);
+            piece
+        };
+        // failed and done, unless maki-keys says otherwise: a request it couldn't read comes back so
+        let mut request = ImportPiece::default();
+        (request.offset, request.total, request.data, request.result, request.done) =
+            (offset, total, data, RESULT_FAILED, true);
+        // a piece and a reason don't fit in the one page `into_buf` would take: two, as for
+        // backups' pieces
+        let mut buf = Buffer::new(2 * CHUNK);
+        if buf.replace(request).is_err() {
+            return failed();
+        }
+        if buf.lend_mut(self.conn, KeysOp::ImportChunk.to_u32().unwrap()).is_err() {
+            return failed();
+        }
+        buf.to_original::<ImportPiece, _>().unwrap_or_else(|_| failed())
+    }
+
     /// Take the FIDO authenticator's role (the vault, at boot). See `KeysOp::ClaimFido`.
     pub fn claim_fido(&self) -> bool {
         matches!(
@@ -797,5 +877,45 @@ impl Keys {
             ),
             Ok(xous::Result::Scalar1(1))
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use core::mem::MaybeUninit;
+
+    use rkyv::rancor::Failure;
+    use rkyv::ser::allocator::SubAllocator;
+    use rkyv::ser::writer::Buffer as Writer;
+
+    use super::*;
+
+    /// How many bytes it takes, serialized as xous-ipc's `Buffer::replace` does it (with 256 bytes
+    /// of scratch), or None if that fails.
+    fn through_ipc<T>(value: &T) -> Option<usize>
+    where
+        T: for<'a> rkyv::Serialize<rkyv::api::low::LowSerializer<Writer<'a>, SubAllocator<'a>, Failure>>,
+    {
+        let mut out = vec![0u8; 64 * 1024];
+        let mut scratch = [MaybeUninit::<u8>::uninit(); 256];
+        rkyv::api::low::to_bytes_in_with_alloc::<_, _, Failure>(
+            value,
+            Writer::from(&mut out[..]),
+            SubAllocator::new(&mut scratch),
+        )
+        .ok()
+        .map(|w| w.len())
+    }
+
+    #[test]
+    fn an_import_piece_and_its_answer_go_through_ipc() {
+        // the biggest piece, and the longest reason, in the two pages `import_chunk` lends
+        let mut piece = ImportPiece::default();
+        (piece.offset, piece.total, piece.data) = (4096, MAX_IMPORT as u32, vec![0x5a; CHUNK]);
+        piece.reason = "’".repeat(85);
+        let len = through_ipc(&piece).expect("an import's piece goes through");
+        assert!(len <= 2 * CHUNK, "{len} bytes");
+        let counts = VaultCounts { result: RESULT_OK, logins: 500, codes: 250, passkeys: 150, imported: 150 };
+        assert!(through_ipc(&counts).is_some_and(|len| len <= 4096));
     }
 }

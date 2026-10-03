@@ -12,8 +12,8 @@ use std::sync::{Arc, Mutex};
 
 use maki_app_host_api as app_host;
 use maki_proto::device::{
-    AppEntry, AppSpace, Approval, Apps, Ask, Backup, Device, Handled, Platform, StoreState, TimeState,
-    WalletKind, reply,
+    AppEntry, AppSpace, Approval, Apps, Ask, Backup, Device, Handled, ImportAdded, Platform, StoreState,
+    TimeState, VaultCounts, WalletKind, reply,
 };
 use maki_proto::frame::{self, Deframer};
 use num_traits::ToPrimitive;
@@ -93,6 +93,26 @@ enum Work {
         app: String,
         message: Vec<u8>,
     },
+    /// The last piece of an import, which maki-keys reads, checks and asks the owner about:
+    /// `tail` as for a restore's
+    Import {
+        id: u16,
+        total: u32,
+        offset: u32,
+        data: Vec<u8>,
+        tail: Arc<AtomicBool>,
+    },
+}
+
+/// What maki-keys says an import added, as the protocol has it: no more than a u16 of each.
+fn import_added(piece: &maki_keys::ImportPiece) -> ImportAdded {
+    let n = |v: u32| v.min(u16::MAX as u32) as u16;
+    ImportAdded {
+        logins: n(piece.logins),
+        codes: n(piece.codes),
+        passkeys: n(piece.passkeys),
+        skipped: n(piece.skipped),
+    }
 }
 
 /// The app host's answers, as the protocol's.
@@ -204,6 +224,14 @@ fn vault_worker(work: mpsc::Receiver<Work>, waiting: Arc<AtomicU32>, send_lock: 
                     c.codes as u16,
                     c.passkeys as u16,
                 );
+                waiting.fetch_sub(1, Ordering::SeqCst);
+                send(&usb, &send_lock, &frame::encode(kind, id, &body));
+                continue;
+            }
+            Work::Import { id, total, offset, data, tail } => {
+                let c = keys.import_chunk(total, offset, data);
+                tail.store(false, Ordering::SeqCst);
+                let (kind, body) = reply::import_piece(true, approval(c.result), import_added(&c), &c.reason);
                 waiting.fetch_sub(1, Ordering::SeqCst);
                 send(&usb, &send_lock, &frame::encode(kind, id, &body));
                 continue;
@@ -324,6 +352,14 @@ impl Platform for Badge {
         log::info!("time is now {:?}", state);
         self.launcher.set_time_state(state as u8).ok();
         self.time_state.store(state as u32, Ordering::SeqCst);
+    }
+
+    /// maki-keys counts them (VAULT_STATUS), and says if maki is locked or has no phrase yet.
+    fn vault(&mut self) -> Option<(Approval, VaultCounts)> {
+        let v = self.keys.vault_status();
+        let counts =
+            VaultCounts { logins: v.logins, codes: v.codes, passkeys: v.passkeys, imported: v.imported };
+        Some((approval(v.result), counts))
     }
 
     /// maki-keys' word for it: a wallet with no fingerprint (unlocked, no phrase yet) is none.
@@ -475,6 +511,8 @@ fn main() -> ! {
         }
     });
     let install_tail = Arc::new(AtomicBool::new(false));
+    // and an import's, the same way
+    let import_tail = Arc::new(AtomicBool::new(false));
     let (to_vault, asks) = mpsc::channel::<Work>();
     std::thread::spawn({
         let (waiting, send_lock) = (waiting.clone(), send_lock.clone());
@@ -1215,6 +1253,36 @@ fn main() -> ! {
                                         restore_tail.store(false, Ordering::SeqCst);
                                         waiting.fetch_sub(1, Ordering::SeqCst);
                                         reply::restore_piece(true, Approval::Unavailable, 0, 0, 0)
+                                    }
+                                }
+                            }
+                        }
+                        // an import: its pieces kept by maki-keys, the last one waiting for the owner
+                        Handled::Import { .. } if import_tail.load(Ordering::SeqCst) => {
+                            reply::import_piece(true, Approval::Unavailable, ImportAdded::default(), "")
+                        }
+                        Handled::Import { total, offset, data } => {
+                            if offset as usize + data.len() < total as usize {
+                                let c = keys.import_chunk(total, offset, data);
+                                reply::import_piece(c.done, approval(c.result), import_added(&c), &c.reason)
+                            } else if waiting.fetch_add(1, Ordering::SeqCst) >= MAX_WAITING_ASKS {
+                                waiting.fetch_sub(1, Ordering::SeqCst);
+                                reply::import_piece(true, Approval::Unavailable, ImportAdded::default(), "")
+                            } else {
+                                import_tail.store(true, Ordering::SeqCst);
+                                let tail = import_tail.clone();
+                                match to_vault.send(Work::Import { id: packet.id, total, offset, data, tail })
+                                {
+                                    Ok(()) => continue,
+                                    Err(_) => {
+                                        import_tail.store(false, Ordering::SeqCst);
+                                        waiting.fetch_sub(1, Ordering::SeqCst);
+                                        reply::import_piece(
+                                            true,
+                                            Approval::Unavailable,
+                                            ImportAdded::default(),
+                                            "",
+                                        )
                                     }
                                 }
                             }

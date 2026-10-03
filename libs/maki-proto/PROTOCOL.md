@@ -59,8 +59,10 @@ bytes. Bodies must be consumed exactly: trailing bytes are an error.
 | `0x10` GET_LOGIN | `site:str8` [`flags:u8`] | `approval:u8` `username:str8` `password:str8` |
 | `0x11` GET_TOTP | `site:str8` | `approval:u8` `code:str8` `valid_for_s:u8` |
 | `0x12` SAVE_LOGIN | `site:str8` `username:str8` `password:str8` | `approval:u8` |
+| `0x13` VAULT_STATUS | — | `status:u8` `logins:u32` `codes:u32` `passkeys:u32` `imported:u32` |
 | `0x20` BACKUP_GET | `offset:u32` | `status:u8` `total:u32` `offset:u32` `piece:bytes16` |
 | `0x21` BACKUP_PUT | `total:u32` `offset:u32` `piece:bytes16` | `done:u8` `approval:u8` `logins:u16` `codes:u16` `passkeys:u16` |
+| `0x22` IMPORT_PUT | `total:u32` `offset:u32` `piece:bytes16` | `done:u8` `approval:u8` `logins:u16` `codes:u16` `passkeys:u16` `skipped:u16` `reason:str8` |
 | `0x50` APP_LIST | `index:u32` | `status:u8` `count:u32` `present:u8`, then if present: `id:str8` `name:str8` `version:u32` `label:str8` `developer:bytes16` `from_store:u8` `backup:u8` `used:u32` `icon:bytes16` `bundle:u32` `storage:u32` |
 | `0x51` APP_INSTALL | `total:u32` `offset:u32` `piece:bytes16` | `done:u8` `approval:u8` `reason:str8` |
 | `0x52` APP_REMOVE | `id:str8` | `approval:u8` |
@@ -195,10 +197,117 @@ the phrase too, so the phrase and a backup are all a new maki needs.
   each time (at most 512 KiB). A piece before the last is answered `done` = 0 at once. The last
   is answered once maki has opened the backup and asked the owner (what it would add: logins,
   codes, passkeys): `done` = 1, then the approval and what was added. maki only adds records it
-  doesn't have (passkeys are matched by credential ID); what it has, it keeps. A signature
-  counter higher than maki's is taken, so sites never see it go back. A backup maki can't open
-  is `7` not yours, and nothing is asked. If there's nothing new, nothing is asked either:
-  approved, with nothing added.
+  doesn't have (passkeys are matched by credential ID, and one for an account maki has another
+  passkey for is left out: maki's authenticator keeps one passkey an account, a site's and user's,
+  and a site that made a new one since has replaced the old); what it has, it keeps. A signature
+  counter higher than maki's is taken, so sites never see it go back. Which passkeys were imported
+  (below) comes back too. A backup maki can't open is `7` not yours, and nothing is asked. If
+  there's nothing new, nothing is asked either: approved, with nothing added.
+
+## Importing from other password managers
+
+maki desktop reads another manager's export (Bitwarden's, 1Password's, Proton Pass's...) and
+hands maki its logins, codes and passkeys in maki's own format, below. maki checks every record,
+asks its owner once for the whole import on its own screen, and adds what it doesn't have.
+
+- **VAULT_STATUS** says what the vault holds: its logins, its codes (the Authenticator's
+  entries), its passkeys (the FIDO authenticator's resident credentials), and of the passkeys,
+  how many were imported, given to maki rather than made on it. `status` is 0 with the counts, or
+  6 locked or 8 no phrase yet, the counts 0 (4 if maki couldn't read its vault just then). Nothing
+  is asked. Firmware from before answers ERROR `unknown message kind`: the host says nothing of
+  the counts then.
+- **IMPORT_PUT** sends the import in pieces of up to 4096 bytes, in order, with the same `total`
+  each time (at most 512 KiB). A piece before the last is answered at once: `done` 0, approval 0,
+  the counts 0, `reason` empty. The last is answered once maki has read the whole, checked it and
+  asked its owner: `done` 1, then the approval: 0 approved, 1 denied, 3 timed out (nobody
+  answered), or 9 refused, with `reason` (maki's words, for the host to show: nothing was asked).
+  Approved, the counts are how many logins, codes and passkeys were added, and `skipped` how many
+  records maki had already (or that came twice in the import); `reason` is empty, unless maki
+  added less than it was given, and then it says why (its database full: maki stops at the first
+  record it can't write, keeping what it wrote). The last piece's answer takes as
+  long as the owner does (up to 60 s), and some seconds more for maki to read its vault and write
+  what's new: a host waits at least two minutes for it. maki can answer `done` 1 before the last piece, and
+  the import is over then: 6 locked, 8 no phrase yet, or 4 when the pieces came out of order,
+  another import's last piece waits for the owner, or three requests do already (start again
+  later).
+
+The import, its pieces joined:
+
+```
+magic   8 bytes, "MAKIIMP1"
+source  str8: the manager it's from, as maki shows it ("Bitwarden"): 1 to 32 bytes
+count   u32: then `count` records (1 to 2000), each a kind:u8 and its fields:
+
+kind 1, a login
+  site      str8     a hostname as GET_LOGIN takes it (an international domain in its xn-- form),
+                     or an IPv4 address
+  username  str8     may be empty (some sites take a password alone)
+  password  str8     1 to 255 bytes
+  title     str8     the entry's name in the old manager ("GitHub (work)"), may be empty: maki
+                     keeps it as the login's notes
+
+kind 2, a code (TOTP, RFC 6238)
+  issuer    str8     may be empty
+  account   str8     may be empty, but not both
+  secret    bytes16  10 to 64 bytes: the key itself (the host decodes base32)
+  algorithm u8       1 SHA-1, 2 SHA-256, 3 SHA-512
+  digits    u8       6 to 8
+  period    u16      15 to 300 seconds
+
+kind 3, a passkey (a WebAuthn resident credential, ES256 only)
+  rp_id         str8     the relying party ID, a hostname as for a login's site
+  credential_id bytes16  16 to 255 bytes
+  user_handle   bytes16  1 to 64 bytes
+  user_name     str8     may be empty
+  display_name  str8     may be empty
+  private_key   bytes16  exactly 32 bytes: the P-256 private scalar, big-endian (as PKCS#8 and
+                         JWK's `d` have it), from 1 to one less than the group's order
+```
+
+Strings are UTF-8 with no control characters (they go on maki's screen, and into the vault's
+records, which are lines of text). maki checks every record before it asks anything, and one it
+won't take refuses the whole import: approval 9, `reason` naming it, records counted from 1
+("record 12: a password with a control character"). Hosts are expected to send only records that
+pass; the check on maki is the last word.
+
+- **maki keeps what it has.** It adds what it doesn't have, and keeps, as it is, a login it has
+  for the same site (without `www.`) and username, a code with the same secret, a passkey with the
+  same credential ID, or one for an account (the same site and user handle) it has a passkey for
+  already: its authenticator keeps one passkey an account. An import never overwrites anything.
+  If there's nothing new, nothing is asked: approved, with everything skipped.
+- **The question.** A page headed "Import" says where the import is from ("from Bitwarden") and
+  what it adds ("312 logins", "40 codes", "5 passkeys"), and how many of its records maki has
+  already. When there are passkeys, a second page says what's different about them: their keys
+  were made elsewhere and have been in a file on the computer, and since they don't come from the
+  recovery phrase, only a backup brings them back to a restored maki. Then "Import these? from
+  Bitwarden", and the owner says "import" or "cancel" (60 s).
+- **Room.** maki keeps at most 500 logins and 250 codes (its vault lists and searches them all
+  in its memory), 150 passkeys (its authenticator's), and 1 MiB of all three in its encrypted
+  database, beside the room apps have. An import that would take more is refused before anything's
+  asked, saying how much maki has and how much the import adds. Should a write fail all the same,
+  maki stops there, and the counts say exactly what was added: they and `skipped` then add up to
+  fewer than the records sent, and the rest weren't added. (So, too, for a login the vault can't
+  keep beside one of its own: it names a login's record by its site and username run together,
+  and two can run together the same way, "a.co" with "mkara" and "a.com" with "kara". Next to
+  never.)
+- **Logins and codes** are kept as the vault keeps its own: a login as one saved from a browser
+  (SAVE_LOGIN), found by GET_LOGIN for its site, listed and typed on maki, its title as its notes
+  ("Notes" without one); a code as one scanned from a QR code, its name "issuer:account" (numbered,
+  "GitHub:kara (2)", when another code has that name), shown and typed in the Authenticator, and,
+  as any code, kept for the site the owner first picks it for when a site asks (GET_TOTP).
+- **Passkeys** are kept as the authenticator keeps its own (OpenSK's record, the key as it is,
+  the credential ID as it came), and used as its own: found by their site for a sign-in with no
+  list of credentials, by their ID in a site's list, signed with their key, the signature counter
+  maki's one counter for every passkey, as for those made on maki. GET_LOGIN answers `10` for
+  their sites, as for passkeys made on maki. What differs from the old manager: the counter is
+  maki's (a site that saw a higher one from the old manager may question it, though managers that
+  sync passkeys mostly report 0); hmac-secret (the PRF extension) gives maki's own outputs, not the
+  old manager's; maki's signatures don't say the passkey is backed up (WebAuthn's BE and BS flags),
+  where a manager that syncs passkeys says so, and a site that holds a passkey to what it said when
+  it was made may refuse it; and maki tells browsers it takes credential IDs of up to 241 bytes, so
+  a passkey with a longer ID (none known) is found by its site alone. maki marks them imported: it
+  keeps which credential IDs it was given, its backups carry the marks and restore them, and
+  VAULT_STATUS counts them.
 
 ## Apps
 

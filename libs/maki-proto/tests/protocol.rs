@@ -703,3 +703,126 @@ fn wallet_status_says_which_wallet_and_its_fingerprint() {
     let (k, body) = ask(&mut device(), kind::WALLET_STATUS, vec![]);
     assert_eq!((k, body), (kind::WALLET_STATUS | kind::REPLY, vec![0, 0, 0, 0, 0]));
 }
+
+/// A platform with a vault to count, as maki-keys answers for it.
+struct Vault(Option<(Approval, VaultCounts)>);
+
+impl Platform for Vault {
+    fn fill_random(&mut self, buf: &mut [u8]) { buf.fill(7) }
+
+    fn uptime_ms(&self) -> u64 { 0 }
+
+    fn utc_ms(&self) -> Option<u64> { None }
+
+    fn set_time(&mut self, _: u64, _: i32) {}
+
+    fn vault(&mut self) -> Option<(Approval, VaultCounts)> { self.0 }
+}
+
+#[test]
+fn vault_status_says_what_the_vault_holds() {
+    let counts = VaultCounts { logins: 312, codes: 40, passkeys: 5, imported: 2 };
+    let status = |vault| {
+        let mut d = Device::new(Vault(vault), "maki", "0.1.0".into());
+        match d.handle(&Packet { kind: kind::VAULT_STATUS, id: 1, body: vec![] }) {
+            Handled::Reply(k, b) => (k, b),
+            other => panic!("{other:?}"),
+        }
+    };
+    let (k, body) = status(Some((Approval::Approved, counts)));
+    assert_eq!(k, kind::VAULT_STATUS | kind::REPLY);
+    let mut r = Reader::new(&body);
+    assert_eq!(r.u8().unwrap(), 0);
+    assert_eq!((r.u32().unwrap(), r.u32().unwrap(), r.u32().unwrap(), r.u32().unwrap()), (312, 40, 5, 2));
+    r.end().unwrap();
+    // locked, or no phrase yet: the counts are 0, whatever the platform had
+    for why in [Approval::Locked, Approval::NoPhrase, Approval::Unavailable] {
+        let (_, body) = status(Some((why, counts)));
+        assert_eq!(body, [[why as u8].as_slice(), &[0; 16]].concat());
+    }
+    // it carries nothing
+    let mut d = Device::new(Vault(Some((Approval::Approved, counts))), "maki", "0.1.0".into());
+    match d.handle(&Packet { kind: kind::VAULT_STATUS, id: 2, body: vec![0] }) {
+        Handled::Reply(k, b) => assert_eq!((k, b[0]), (kind::ERROR, ErrorCode::Malformed as u8)),
+        other => panic!("{other:?}"),
+    }
+    // a maki with no vault to count answers as firmware before it did
+    let (k, body) = ask(&mut device(), kind::VAULT_STATUS, vec![]);
+    assert_eq!((k, body[0]), (kind::ERROR, ErrorCode::UnknownKind as u8));
+}
+
+#[test]
+fn import_pieces_go_to_maki_keys() {
+    let mut d = device();
+    let piece = vec![b'M'; IMPORT_PIECE];
+    assert_eq!(
+        handled(&mut d, kind::IMPORT_PUT, Writer::new().u32(9000).u32(4096).bytes16(&piece).finish()),
+        Handled::Import { total: 9000, offset: 4096, data: piece.clone() }
+    );
+    // the last piece, and the largest import maki takes
+    assert_eq!(
+        handled(
+            &mut d,
+            kind::IMPORT_PUT,
+            Writer::new().u32(MAX_IMPORT).u32(MAX_IMPORT - 10).bytes16(&[1; 10]).finish()
+        ),
+        Handled::Import { total: MAX_IMPORT, offset: MAX_IMPORT - 10, data: vec![1; 10] }
+    );
+    // pieces that can't be part of an import maki would take
+    for (total, offset, len) in
+        [(0, 0, 0), (MAX_IMPORT + 1, 0, 10), (10_000, 0, IMPORT_PIECE + 1), (100, 50, 51), (100, u32::MAX, 1)]
+    {
+        let body = Writer::new().u32(total).u32(offset).bytes16(&vec![0; len]).finish();
+        let reply = ask(&mut d, kind::IMPORT_PUT, body);
+        assert_eq!(error_code(&reply), ErrorCode::BadArgument as u8, "{total} {offset} {len}");
+    }
+    // cut short, or more after the piece
+    let reply = ask(&mut d, kind::IMPORT_PUT, Writer::new().u32(100).u32(0).finish());
+    assert_eq!(error_code(&reply), ErrorCode::Malformed as u8);
+    let reply = ask(&mut d, kind::IMPORT_PUT, Writer::new().u32(100).u32(0).bytes16(&[1]).u8(0).finish());
+    assert_eq!(error_code(&reply), ErrorCode::Malformed as u8);
+}
+
+#[test]
+fn import_replies_carry_only_what_the_answer_allows() {
+    let added = ImportAdded { logins: 312, codes: 40, passkeys: 5, skipped: 7 };
+    let parts = |body: &[u8]| {
+        let mut r = Reader::new(body);
+        let head = (r.u8().unwrap(), r.u8().unwrap());
+        let counts = (r.u16().unwrap(), r.u16().unwrap(), r.u16().unwrap(), r.u16().unwrap());
+        let reason = r.str8().unwrap().to_string();
+        r.end().unwrap();
+        (head, counts, reason)
+    };
+    // a piece taken in: nothing else
+    let (k, body) = reply::import_piece(false, Approval::Approved, added, "ignored");
+    assert_eq!((k, body.as_slice()), (kind::IMPORT_PUT | kind::REPLY, &[0u8; 11][..]));
+    // approved: what was added, and what maki had
+    let (_, body) = reply::import_piece(true, Approval::Approved, added, "");
+    assert_eq!(parts(&body), ((1, 0), (312, 40, 5, 7), String::new()));
+    // and, when it added less than it was given, why
+    let full = "its database is full, and the rest wasn\u{2019}t added";
+    let (_, body) = reply::import_piece(true, Approval::Approved, added, full);
+    assert_eq!(parts(&body), ((1, 0), (312, 40, 5, 7), full.to_string()));
+    // anything else: none of it
+    for why in
+        [Approval::Denied, Approval::TimedOut, Approval::Locked, Approval::NoPhrase, Approval::Unavailable]
+    {
+        let (_, body) = reply::import_piece(true, why, added, "ignored");
+        assert_eq!(parts(&body), ((1, why as u8), (0, 0, 0, 0), String::new()), "{why:?}");
+    }
+    // refused: why, and nothing was asked
+    let (_, body) =
+        reply::import_piece(true, Approval::Refused, added, "record 12: a password with a control character");
+    assert_eq!(
+        parts(&body),
+        (
+            (1, Approval::Refused as u8),
+            (0, 0, 0, 0),
+            "record 12: a password with a control character".to_string()
+        )
+    );
+    // cut at a character, never inside one
+    let (_, body) = reply::import_piece(true, Approval::Refused, added, &"’".repeat(100));
+    assert_eq!(parts(&body).2, "’".repeat(85));
+}

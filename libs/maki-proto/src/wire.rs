@@ -95,6 +95,13 @@ impl<'a> Reader<'a> {
         self.take(n)
     }
 
+    /// A `str8`'s bytes, before they're known to be UTF-8: for a reader that says which it was,
+    /// cut short or not text.
+    pub fn bytes8(&mut self) -> Result<&'a [u8], Truncated> {
+        let n = self.u8()? as usize;
+        self.take(n)
+    }
+
     /// Whether everything has been read: for a field a request may leave off at its end.
     pub fn at_end(&self) -> bool { self.pos == self.data.len() }
 

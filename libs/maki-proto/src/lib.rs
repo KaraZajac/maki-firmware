@@ -6,6 +6,7 @@
 
 pub mod device;
 pub mod frame;
+pub mod import;
 pub mod names;
 pub mod site;
 pub mod wire;
@@ -28,10 +29,16 @@ pub mod kind {
     pub const GET_LOGIN: u8 = 0x10;
     pub const GET_TOTP: u8 = 0x11;
     pub const SAVE_LOGIN: u8 = 0x12;
+    /// How many logins, codes and passkeys the vault holds, and how many of the passkeys were
+    /// imported. Nothing is asked.
+    pub const VAULT_STATUS: u8 = 0x13;
     /// A piece of maki's backup (encrypted with a key from the recovery phrase).
     pub const BACKUP_GET: u8 = 0x20;
     /// A piece of a backup to restore; the last is answered once the owner decides.
     pub const BACKUP_PUT: u8 = 0x21;
+    /// A piece of an import from another password manager (`import`); the last is answered once
+    /// maki has checked every record and the owner decides.
+    pub const IMPORT_PUT: u8 = 0x22;
     /// The apps installed on maki, one per request.
     pub const APP_LIST: u8 = 0x50;
     /// A piece of a `.maki` bundle to install; the last is answered once the owner decides.

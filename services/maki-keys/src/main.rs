@@ -11,6 +11,7 @@
 //! The secret basis gets a fresh random name at each setup: after a wipe, the old one can't be
 //! opened (its key is gone), and its name mustn't collide with the new one.
 
+mod import;
 mod passkeys;
 mod xmr_bench;
 
@@ -63,6 +64,9 @@ const BACKUP_DICTS: [&str; 3] = ["vault.passwords", "vault.totp", passkeys::DICT
 /// data, keyed `ID\tkey`. Not the apps themselves: the whole backup is made in maki's RAM.
 const APP_RECORD: u8 = 3;
 const APP_DATA: u8 = 4;
+/// maki's marks on the passkeys it was given in an import (`maki_proto::import::vault::IMPORTED`),
+/// so a restored maki knows them for imported too. An older firmware restoring them skips them.
+const IMPORTED_MARKS: u8 = 5;
 use maki_app_host_api::RESTORED;
 const BACKUP_MAGIC: &[u8; 8] = b"MAKIBAK1";
 const RESTORE_TIMEOUT_S: u32 = maki_launcher::ask_timeout(60);
@@ -146,6 +150,12 @@ fn gather(store: &Store, basis: &str) -> Vec<u8> {
             value.zeroize();
         }
     }
+    let imported = maki_proto::import::vault::IMPORTED;
+    for key in store.pddb.list_keys(imported, Some(basis)).unwrap_or_default() {
+        if let Some(value) = read_key(store, imported, &key, basis) {
+            entry(&mut out, IMPORTED_MARKS, &key, &value);
+        }
+    }
     gather_apps(store, basis, &mut out);
     out
 }
@@ -164,7 +174,7 @@ fn parse(plain: &[u8]) -> Option<Vec<Entry>> {
         let key = String::from_utf8(take(klen, &mut rest)?).ok()?;
         let vlen = u32::from_le_bytes(take(4, &mut rest)?.try_into().ok()?) as usize;
         let value = take(vlen, &mut rest)?;
-        if (dict as usize) < BACKUP_DICTS.len() || dict == APP_RECORD || dict == APP_DATA {
+        if (dict as usize) < BACKUP_DICTS.len() || [APP_RECORD, APP_DATA, IMPORTED_MARKS].contains(&dict) {
             entries.push(Entry { dict, key, value });
         }
     }
@@ -269,12 +279,28 @@ fn credentials(store: &Store, basis: &str) -> Vec<(usize, Vec<u8>)> {
         .collect()
 }
 
+/// The account a resident credential is for: its site (RP ID) and user handle. OpenSK keeps one
+/// passkey an account (a site that makes another replaces the first), and two for one account
+/// would fail every later registration for it.
+fn account(credential: &[u8]) -> Option<(String, Vec<u8>)> {
+    maki_proto::import::opensk::read(credential).map(|held| (held.rp_id, held.user_handle))
+}
+
 /// Add what maki doesn't have (or with `write` false, count it): logins and codes by their
 /// record's name, passkeys by credential ID, each into a free slot. The signature counter only
 /// ever goes up, so sites never see it go back.
 fn restore(store: &Store, basis: &str, entries: &[Entry], write: bool) -> Added {
     let mut added = Added::default();
     let mut have = credentials(store, basis);
+    let mut accounts: Vec<(String, Vec<u8>)> = have
+        .iter()
+        .filter_map(|(slot, _)| {
+            let mut value = read_key(store, passkeys::DICT, &slot.to_string(), basis)?;
+            let account = account(&value);
+            value.zeroize();
+            account
+        })
+        .collect();
     let mut free = passkeys::CREDENTIALS
         .filter(|n| !have.iter().any(|(slot, _)| slot == n))
         .collect::<Vec<_>>()
@@ -347,9 +373,15 @@ fn restore(store: &Store, basis: &str, entries: &[Entry], write: bool) -> Added 
             if have.iter().any(|(_, have)| have == id) {
                 continue; // maki has it already: keep maki's
             }
+            // maki has another passkey for its account, made since: the one it has stays
+            let theirs = account(&e.value);
+            if theirs.as_ref().is_some_and(|a| accounts.contains(a)) {
+                continue;
+            }
             let Some(slot) = free.next() else { continue }; // no room left
             if !write || put(dict, &slot.to_string(), &e.value) {
                 have.push((slot, id.to_vec()));
+                accounts.extend(theirs);
                 added.passkeys += 1;
             }
             continue;
@@ -363,6 +395,15 @@ fn restore(store: &Store, basis: &str, entries: &[Entry], write: bool) -> Added 
             } else {
                 added.codes += 1;
             }
+        }
+    }
+    // which passkeys were imported: each mark maki hasn't (named by the ID it holds), whether its
+    // passkey came back now or maki has it already. Not counted: they add nothing to ask about
+    let imported = maki_proto::import::vault::IMPORTED;
+    for e in entries.iter().filter(|e| e.dict == IMPORTED_MARKS && write) {
+        if e.key == maki_proto::import::vault::mark_key(&e.value) && !has_key(store, imported, &e.key, basis)
+        {
+            put(imported, &e.key, &e.value);
         }
     }
     if write {
@@ -548,6 +589,9 @@ impl Store {
         self.pddb.delete_key(DICT, KEY_LOCK_NEXT, Some(PDDB_DEFAULT_SYSTEM_BASIS)).ok();
         self.pddb.sync()
     }
+
+    /// Whether there's a recovery phrase, its entropy wiped once looked at.
+    fn has_phrase(&self, basis: &str) -> bool { self.entropy(basis).map(|mut e| e.zeroize()).is_some() }
 
     /// The recovery phrase's entropy, from the secret basis (open only while unlocked).
     fn entropy(&self, basis: &str) -> Option<Vec<u8>> {
@@ -924,6 +968,10 @@ fn main() -> ! {
     let mut sealed: Option<Vec<u8>> = None;
     let mut incoming: Vec<u8> = Vec::new();
     let mut incoming_total: u32 = 0;
+    // and an import coming in, in plain text (passwords, codes' secrets, passkeys' keys): kept in
+    // a buffer of its whole size from its first piece, which never grows (and leaves copies)
+    let mut importing: Vec<u8> = Vec::new();
+    let mut importing_total: u32 = 0;
     let mut seed = SeedCache(None);
     // wallet apps' keys (maki_hd), from the seed, while unlocked: the phrase's alone (the standard
     // wallet), or with a passphrase
@@ -1267,6 +1315,119 @@ fn main() -> ! {
                         }
                     }
                 });
+            }
+            Some(KeysOp::VaultStatus) => {
+                let Some(mem) = msg.body.memory_message_mut() else { continue };
+                let mut buffer = unsafe { Buffer::from_memory_message_mut(mem) };
+                if buffer.to_original::<VaultCounts, _>().is_err() {
+                    continue;
+                }
+                let basis = match (state, store.lock()) {
+                    (State::Unlocked, Some(lock)) if store.has_phrase(&lock.basis) => lock.basis,
+                    (State::Unlocked, Some(_)) => {
+                        buffer.replace(VaultCounts { result: RESULT_NO_PHRASE, ..Default::default() }).ok();
+                        continue;
+                    }
+                    _ => {
+                        buffer.replace(VaultCounts { result: RESULT_NOT_NOW, ..Default::default() }).ok();
+                        continue;
+                    }
+                };
+                drop(buffer);
+                // counted on a thread (reading the passkeys takes a moment), so status keeps
+                // being answered; the answer goes back as the message does, when it's dropped
+                let counting = std::thread::Builder::new().stack_size(64 * 1024).spawn(move || {
+                    let mut msg = msg;
+                    let store = Store { pddb: Pddb::new() };
+                    let counts = import::counts(&store, &basis)
+                        .unwrap_or(VaultCounts { result: RESULT_FAILED, ..Default::default() });
+                    if let Some(mem) = msg.body.memory_message_mut() {
+                        let mut buffer = unsafe { Buffer::from_memory_message_mut(mem) };
+                        buffer.replace(counts).ok();
+                    }
+                });
+                if let Err(e) = counting {
+                    log::error!("couldn't count the vault: {e:?}");
+                }
+            }
+            Some(KeysOp::ImportChunk) => {
+                let basis = match (state, store.lock()) {
+                    (State::Unlocked, Some(lock)) => Some(lock.basis),
+                    _ => None,
+                };
+                let Some(mem) = msg.body.memory_message_mut() else { continue };
+                let mut buffer = unsafe { Buffer::from_memory_message_mut(mem) };
+                let Ok(mut req) = buffer.to_original::<ImportPiece, _>() else { continue };
+                let mut piece = std::mem::take(&mut req.data);
+                req.reason.clear();
+                let first = req.offset == 0;
+                if first {
+                    importing.zeroize();
+                    importing = Vec::new();
+                    importing_total = req.total;
+                }
+                let in_order = req.offset as usize == importing.len()
+                    && req.total == importing_total
+                    && req.total as usize <= MAX_IMPORT
+                    && importing.len() + piece.len() <= req.total as usize;
+                // nothing to import into before there's a phrase: asked at the first piece
+                let refusal = match &basis {
+                    None => Some(RESULT_NOT_NOW),
+                    Some(basis) if first && !store.has_phrase(basis) => Some(RESULT_NO_PHRASE),
+                    Some(_) if !in_order => Some(RESULT_FAILED),
+                    Some(_) => None,
+                };
+                if let Some(result) = refusal {
+                    piece.zeroize();
+                    importing.zeroize();
+                    importing = Vec::new();
+                    req.result = result;
+                    req.done = true;
+                    buffer.replace(req).ok();
+                    continue;
+                }
+                if first {
+                    importing = Vec::with_capacity(req.total as usize);
+                }
+                importing.extend_from_slice(&piece);
+                piece.zeroize();
+                if importing.len() < importing_total as usize {
+                    req.result = RESULT_OK;
+                    req.done = false;
+                    buffer.replace(req).ok();
+                    continue;
+                }
+                // the last piece: read, checked, asked about and added on a thread, so status
+                // keeps being answered; the answer goes back as the message does (and if no thread
+                // can be had, it goes back as it came: failed), the import wiped either way
+                let blob = zeroize::Zeroizing::new(std::mem::take(&mut importing));
+                drop(req);
+                drop(buffer);
+                let (generation, basis) = (generation.clone(), basis.unwrap_or_default());
+                let importing_thread = std::thread::Builder::new().spawn(move || {
+                    let mut msg = msg;
+                    let store = Store { pddb: Pddb::new() };
+                    let outcome = import::run(&store, &basis, blob);
+                    if outcome.logins + outcome.codes + outcome.passkeys > 0 {
+                        // the vault changed behind its back: its FIDO side re-reads its store
+                        generation.fetch_add(1, Ordering::SeqCst);
+                    }
+                    if let Some(mem) = msg.body.memory_message_mut() {
+                        let mut buffer = unsafe { Buffer::from_memory_message_mut(mem) };
+                        if let Ok(mut req) = buffer.to_original::<ImportPiece, _>() {
+                            req.data.zeroize();
+                            req.result = outcome.result;
+                            req.done = true;
+                            (req.logins, req.codes, req.passkeys, req.skipped) =
+                                (outcome.logins, outcome.codes, outcome.passkeys, outcome.skipped);
+                            req.reason = outcome.reason;
+                            buffer.replace(req).ok();
+                        }
+                    }
+                });
+                if let Err(e) = importing_thread {
+                    log::error!("couldn't take the import in: {e:?}");
+                }
             }
             Some(KeysOp::FidoStoreChanged) => {
                 generation.fetch_add(1, Ordering::SeqCst);
@@ -1685,6 +1846,9 @@ fn main() -> ! {
                             if let Some(mut b) = sealed.take() {
                                 b.zeroize();
                             }
+                            // an import half sent is in plain text: it goes too
+                            importing.zeroize();
+                            importing = Vec::new();
                             wallet = None;
                             forget_passphrase(&mut passphrase);
                             seed.forget();
