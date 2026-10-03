@@ -5,10 +5,13 @@
 use crate::deck::{self, Deck, Entry, Kept, MAX_DECK, MAX_DECKS, MAX_NAME_BYTES, NotKept, Reader};
 use crate::{App, leitner};
 
-/// The version of the messages the app speaks.
+/// The version of the messages the app speaks: 1 since the first, `R` added in the app's 1.1
+/// without changing the others (1.0 refuses it as any message it doesn't take).
 pub const VERSION: u8 = 1;
 /// A message's most bytes, and an answer's.
 pub const MAX_MESSAGE: usize = 4096;
+/// The most a read's answer holds of a deck: a message, less its status and the length.
+const READ_PIECE: usize = MAX_MESSAGE - 5;
 
 const OK: u8 = 0;
 const BAD: u8 = 4;
@@ -17,12 +20,69 @@ const MORE: u8 = 6;
 const NOT_FOUND: u8 = 7;
 const EXISTS: u8 = 8;
 const OTHER_VERSION: u8 = 9;
+const DAMAGED: u8 = 10;
 
 /// A deck coming in pieces: the deck it replaces (0: none), its whole length, what's come.
 pub struct Upload {
     target: u8,
     total: usize,
     data: Vec<u8>,
+}
+
+/// A deck being read a piece at a time (`R`): the deck as `U` carries it, then each card's box and
+/// the day it's next due. The cards are read from storage as each piece needs them, the value
+/// they're in kept for the next piece (but while a deck comes in); their progress is as it was when
+/// the read began.
+pub struct Reading {
+    entry: Entry,
+    /// how long each value holding its cards is
+    lengths: Vec<usize>,
+    /// what comes before its cards (its name and how many cards), and after them (their progress)
+    head: Vec<u8>,
+    tail: Vec<u8>,
+    /// all there is to read, and where the next piece starts
+    total: usize,
+    next: usize,
+    /// the value last read: which, and its bytes
+    value: Option<(usize, Vec<u8>)>,
+}
+
+impl Reading {
+    /// Bytes `from..to` of what there is to read; None if a value holding the cards isn't the
+    /// length it was when the read began.
+    fn piece(&mut self, from: usize, to: usize) -> Option<Vec<u8>> {
+        let mut out = Vec::with_capacity(to - from);
+        within(&self.head, 0, from..to, &mut out);
+        let mut start = self.head.len();
+        for n in 0..self.lengths.len() {
+            let len = self.lengths[n];
+            if from < start + len && start < to {
+                within(self.value(n)?, start, from..to, &mut out);
+            }
+            start += len;
+        }
+        within(&self.tail, start, from..to, &mut out);
+        Some(out)
+    }
+
+    /// Value `n` of those holding the cards: the one kept from the last piece, or read now in its
+    /// place (that one let go first: a value takes up to 16 KiB).
+    fn value(&mut self, n: usize) -> Option<&[u8]> {
+        if self.value.as_ref().is_none_or(|(kept, _)| *kept != n) {
+            self.value = None;
+            let len = *self.lengths.get(n)?;
+            self.value = Some((n, deck::value(&self.entry, n as u8, len)?));
+        }
+        self.value.as_ref().map(|(_, b)| b.as_slice())
+    }
+}
+
+/// What of `part`, which starts at `start` in what there is to read, is in `range`, onto `out`.
+fn within(part: &[u8], start: usize, range: std::ops::Range<usize>, out: &mut Vec<u8>) {
+    let end = start + part.len();
+    let from = range.start.clamp(start, end);
+    let to = range.end.clamp(from, end);
+    out.extend_from_slice(&part[from - start..to - start]);
 }
 
 /// `BAD`, and why, for whoever wrote the software sending it.
@@ -51,8 +111,73 @@ impl App {
         match (op, body) {
             (b'L', []) => self.list(),
             (b'U', _) => self.upload(body),
+            (b'R', [id, at @ ..]) if at.len() == 4 => {
+                self.read(*id, u32::from_le_bytes([at[0], at[1], at[2], at[3]]) as usize)
+            }
             (b'D', [id]) => self.remove(*id),
             _ => bad("not a message this app takes"),
+        }
+    }
+
+    /// `R`: a piece of deck `id` from `offset`, of the deck as `U` carries it and then its cards'
+    /// progress. Any read refused ends the read under way.
+    fn read(&mut self, id: u8, offset: usize) -> Vec<u8> {
+        let Some(e) = self.decks.iter().find(|e| e.id == id).cloned() else {
+            self.reading = None;
+            return vec![NOT_FOUND];
+        };
+        if offset == 0 {
+            // the last read let go first: it holds a value of up to 16 KiB
+            self.reading = None;
+            self.reading = self.begin_read(e);
+            if self.reading.is_none() {
+                return vec![DAMAGED];
+            }
+        }
+        let Some(r) = self.reading.as_mut().filter(|r| (r.entry.id, r.next) == (id, offset)) else {
+            self.reading = None;
+            return bad("a read out of order");
+        };
+        let end = r.total.min(offset + READ_PIECE);
+        let Some(piece) = r.piece(offset, end) else {
+            self.reading = None;
+            return vec![DAMAGED];
+        };
+        let mut a = Vec::with_capacity(5 + piece.len());
+        a.push(OK);
+        a.extend_from_slice(&(r.total as u32).to_le_bytes());
+        a.extend_from_slice(&piece);
+        r.next = end;
+        if end == r.total {
+            self.reading = None;
+        }
+        a
+    }
+
+    /// A read of deck `e` from its start: None if its cards don't read whole. Their progress as it
+    /// stands today: each card's box (0 while it's new) and the day it's next due (0 while it's new).
+    fn begin_read(&mut self, e: Entry) -> Option<Reading> {
+        let lengths = deck::lengths(&e)?;
+        let (today, _) = self.today();
+        let kept = deck::load_progress(&e);
+        let mut head = vec![e.name.len() as u8];
+        head.extend_from_slice(e.name.as_bytes());
+        head.extend_from_slice(&e.cards.to_le_bytes());
+        let mut tail = Vec::with_capacity(3 * kept.cards.len());
+        for p in &kept.cards {
+            let due = if p.is_new() { 0 } else { p.due(today) };
+            tail.push(p.boxed);
+            tail.extend_from_slice(&due.to_le_bytes());
+        }
+        let total = head.len() + lengths.iter().sum::<usize>() + tail.len();
+        Some(Reading { entry: e, lengths, head, tail, total, next: 0, value: None })
+    }
+
+    /// Ends a read of deck `id`, if one is under way: it's been kept anew or removed, and what's
+    /// left to read of it isn't what the read began with.
+    pub(crate) fn end_read(&mut self, id: u8) {
+        if self.reading.as_ref().is_some_and(|r| r.entry.id == id) {
+            self.reading = None;
         }
     }
 
@@ -87,6 +212,11 @@ impl App {
 
     /// `U`: a piece of a deck; the last one keeps it.
     fn upload(&mut self, body: &[u8]) -> Vec<u8> {
+        // a read under way lets go of the value it keeps for its next piece: a deck coming in, and
+        // kept, takes most of the app's memory
+        if let Some(r) = self.reading.as_mut() {
+            r.value = None;
+        }
         let answer = self.piece(body);
         // an upload that ended without the deck kept, for which a sitting was ended, says so
         if self.upload.is_none() && answer.first() != Some(&OK) && self.coming.take().is_some() {

@@ -70,7 +70,9 @@ the `maki` tool that packs, signs, checks and simulates them. The examples:
 - **Flashcards**: decks maki desktop sends (from a CSV file, pasted text or Anki), studied a card
   at a time: the centre turns it over, left says you missed it and right that you knew it, and
   Leitner's boxes bring a card back less often each time you know it. Up to 8 decks of up to 1000
-  cards, sent in pieces over the link; a deck sent again keeps each card's progress by its front.
+  cards, sent in pieces over the link, and read back the same way with each card's box and when
+  it's due, for maki desktop to show and change; a deck sent again keeps each card's progress by
+  its front.
 - **Name Tag**: your name as big as it fits (host API 9's `text_scaled`), on as many lines as
   that takes, with a line under it and a link of yours as a QR code people can scan, all read
   from a QR code you make.

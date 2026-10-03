@@ -1,5 +1,6 @@
 //! Flashcards: decks studied on maki, a card at a time. maki desktop sends the decks (the link
-//! permission), from a CSV or tab-separated file, pasted text, or Anki's plain text export.
+//! permission), from a CSV or tab-separated file, pasted text, or Anki's plain text export; and
+//! reads them back, with how each card stands, to show them and to send them again changed.
 //!
 //! On maki, the decks, each with how many cards it has for today; the centre opens one, and again
 //! starts studying it. A card's front shows, the centre turns it over, and then left says you
@@ -33,14 +34,15 @@
 //! removes is left for its page, or the list, which say why: a sitting ends as the first piece of
 //! its deck's new version comes, since a big deck takes most of the app's memory, and twice over
 //! wouldn't fit (256 KiB; the most it needs, replacing the biggest deck there's room for while
-//! it's studied, is 192).
+//! it's studied and read by the computer, is 192).
 //!
 //! The link's messages (`wire`). Numbers are little-endian. Each message starts with the version
 //! of these messages, 1, then a letter saying what it is; each answer with a status: 0 done, 4
 //! not a message the app takes (why follows, in English), 5 no room for it (why follows), 6 a
 //! piece taken (how much of the deck it has follows, u32), 7 no such deck, 8 another deck has that
-//! name, 9 another version (the one it speaks follows, a byte). A message refused changes nothing,
-//! but for a piece: one refused ends the upload it was part of.
+//! name, 9 another version (the one it speaks follows, a byte), 10 the deck doesn't read whole (what
+//! maki keeps of it is damaged: it's to be sent again). A message refused changes nothing, but for
+//! a piece or a read: one refused ends the upload, or the read, under way.
 //! - `L`: the decks. Answered `0`; the version; today (u16, days since 1970) and whether maki knows it (a
 //!   byte; if not, today is the last day it knew); the days in a row (u16); new cards a day (u16); the bytes
 //!   used and the room (u32 each); how many decks (a byte); then each deck: its ID (a byte), its name (a
@@ -57,6 +59,14 @@
 //!   each card whose front the old deck had (the first not taken yet, for a front it had more than once), and
 //!   takes its place in the list; its name may change, but not to another deck's. A new deck's ID is one no
 //!   deck has had for a while: IDs go round from 1 to 255.
+//! - `R`, a deck's ID (a byte), where to read from (u32): a piece of the deck as `U` carries it, followed by
+//!   each card's progress, in the deck's order: its box (a byte, 0 while it's new) and the day it's next due
+//!   (u16, days since 1970; 0 while it's new). Answered `0`, how long all of that is (u32), then as much of
+//!   it from there as a message holds (4091 bytes), or as is left. The first read is at 0, which starts it
+//!   afresh, the progress as it stands then; each next read goes where the last ended, and any other is
+//!   refused (`4`), as is the next once the deck has been kept anew or removed (`7` if it's gone). `7` for no
+//!   such deck, `10` if its cards don't read whole. New in the app's 1.1, the messages' version still 1: 1.0
+//!   answers it `4`, as any message it doesn't take.
 //! - `D`, a deck's ID (a byte): that deck removed, and its progress. Answered `0`, or `7`.
 
 use std::collections::VecDeque;
@@ -158,6 +168,8 @@ pub(crate) struct App {
     /// a line for the footer, until the next press
     note: String,
     pub(crate) upload: Option<wire::Upload>,
+    /// a deck being read by the computer, a piece at a time
+    pub(crate) reading: Option<wire::Reading>,
     /// the deck a new version of is coming, whose sitting was ended for it
     coming: Option<u8>,
 }
@@ -179,6 +191,7 @@ impl App {
             menu: Vec::new(),
             note: String::new(),
             upload: None,
+            reading: None,
             coming: None,
         };
         app.recount();
@@ -215,8 +228,10 @@ impl App {
     pub(crate) fn selected_id(&self) -> Option<u8> { self.decks.get(self.selected).map(|e| e.id) }
 
     /// After deck `id` was kept, replaced or removed from the computer: the selected deck found
-    /// again; a deck being studied, or asked about, that's been replaced or removed, left.
+    /// again; a deck being studied, or asked about, that's been replaced or removed, left; a read
+    /// of it ended.
     pub(crate) fn after_change(&mut self, was: Option<u8>, id: u8) {
+        self.end_read(id);
         match was.and_then(|w| self.decks.iter().position(|e| e.id == w)) {
             Some(at) => self.selected = at,
             None => {
@@ -311,7 +326,10 @@ impl App {
             (View::Done { .. }, Event::Centre | Event::Left | Event::Right) => View::Deck,
             (View::Delete, Event::Centre) => {
                 match deck::remove(&mut self.decks, self.selected) {
-                    Ok(gone) => self.note = format!("deleted {}", gone.name),
+                    Ok(gone) => {
+                        self.end_read(gone.id);
+                        self.note = format!("deleted {}", gone.name);
+                    }
                     Err(_) => self.note = "maki couldn't delete it".into(),
                 }
                 self.selected = self.selected.min(self.decks.len().saturating_sub(1));
@@ -445,7 +463,7 @@ impl App {
             text::centred(8, "No decks yet", BOLD);
             let says = [
                 "Send decks from maki",
-                "desktop's Connections",
+                "desktop's Flashcards",
                 "page. maki keeps 8, of",
                 "up to 1000 cards each,",
                 "in 64 KiB.",

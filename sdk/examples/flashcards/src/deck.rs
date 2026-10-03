@@ -320,6 +320,29 @@ fn pieces(e: &Entry, mut each: impl FnMut(&[u8]) -> Option<()>) -> Option<()> {
     Some(())
 }
 
+/// How long each value holding deck `e`'s cards is, if they read whole: each of whole cards, as
+/// many in all as the list says. None if not. Read one value at a time, as `pieces` reads them.
+pub fn lengths(e: &Entry) -> Option<Vec<usize>> {
+    let mut lengths = Vec::with_capacity(e.pieces as usize);
+    let mut cards = 0;
+    pieces(e, |piece| {
+        lengths.push(piece.len());
+        let mut at = 0;
+        while at < piece.len() {
+            at = card_at(piece, at).ok()?.2;
+            cards += 1;
+        }
+        Some(())
+    })?;
+    (cards == e.cards as usize).then_some(lengths)
+}
+
+/// Value `n` of those holding deck `e`'s cards, if it's `len` bytes long.
+pub fn value(e: &Entry, n: u8, len: usize) -> Option<Vec<u8>> {
+    let mut b = vec![0u8; len];
+    (storage::get(&piece_key(e, n), &mut b) == Some(len)).then_some(b)
+}
+
 /// A deck's cards, to study; None if what's kept isn't what the list says. Read straight into
 /// memory of the deck's size: a big deck takes most of the app's, and twice it wouldn't fit.
 pub fn load_text(e: &Entry) -> Option<Text> {

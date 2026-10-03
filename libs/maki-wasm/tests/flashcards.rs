@@ -1,10 +1,11 @@
 //! The Flashcards example (sdk/examples/flashcards), as `maki build` packed it and maki runs it:
 //! decks sent from the computer in pieces and kept within the app's 64 KiB, listed on maki and over
-//! the link; cards studied a press at a time, drawn as big as they fit without breaking a word, a
-//! long one scrolled with the jog dial; Leitner's boxes over the days of maki's clock, and without
-//! it; a deck replaced keeping the progress of the cards it still has, whether or not there's room
-//! for both at once; and every message, and everything read back from storage, that isn't what the
-//! app takes, refused. Rebuild the fixture after changing the app: `maki build
+//! the link, and read back by the computer a piece at a time with each card's box and when it's
+//! due; cards studied a press at a time, drawn as big as they fit without breaking a word, a long
+//! one scrolled with the jog dial; Leitner's boxes over the days of maki's clock, and without it; a
+//! deck replaced keeping the progress of the cards it still has, whether or not there's room for
+//! both at once; and every message, and everything read back from storage, that isn't what the app
+//! takes, refused. Rebuild the fixture after changing the app: `maki build
 //! sdk/examples/flashcards`, then copy `sdk/target/maki/com.leviathan.maki.flashcards.maki` to
 //! `tests/fixtures/flashcards.maki`.
 
@@ -144,6 +145,31 @@ fn upload_in(target: u8, deck: &[u8], size: usize) -> Vec<Vec<u8>> {
 fn upload(target: u8, deck: &[u8]) -> Vec<Vec<u8>> { upload_in(target, deck, 4096 - 11) }
 
 fn list() -> Vec<u8> { vec![V, b'L'] }
+
+/// `R`: deck `id` read from `at`.
+fn read(id: u8, at: usize) -> Vec<u8> {
+    let mut m = vec![V, b'R', id];
+    m.extend((at as u32).to_le_bytes());
+    m
+}
+
+/// A read's answer: how long all there is to read is, and the piece.
+fn piece(a: &[u8]) -> (usize, &[u8]) {
+    assert_eq!(a[0], 0, "{a:?}");
+    assert!(a.len() <= 4096);
+    (u32::from_le_bytes([a[1], a[2], a[3], a[4]]) as usize, &a[5..])
+}
+
+/// The reads that take all of a deck `len` bytes long with `cards` cards, each where the last ended:
+/// the deck, then three bytes a card, 4091 bytes at a time.
+fn reads(id: u8, len: usize, cards: usize) -> Vec<Vec<u8>> {
+    (0..len + 3 * cards).step_by(4091).map(|at| read(id, at)).collect()
+}
+
+/// Each card's progress as a read has it: its box (0 while it's new) and the day it's next due.
+fn due(cards: &[(u8, u16)]) -> Vec<u8> {
+    cards.iter().flat_map(|&(boxed, day)| [boxed, day as u8, (day >> 8) as u8]).collect()
+}
 
 fn delete(id: u8) -> Vec<u8> { vec![V, b'D', id] }
 
@@ -355,7 +381,7 @@ fn flashcards_starts_with_no_decks_and_says_where_they_come_from() {
     assert!(centred(f, 8, "No decks yet", Style::Bold));
     let says = [
         "Send decks from maki",
-        "desktop's Connections",
+        "desktop's Flashcards",
         "page. maki keeps 8, of",
         "up to 1000 cards each,",
         "in 64 KiB.",
@@ -1113,4 +1139,205 @@ fn what_it_keeps_is_read_back_strictly_and_what_s_left_over_is_tidied() {
     let r = run(&[Message], &[list()], s);
     assert_eq!(listing(&r.replies[0]).new_a_day, 20);
     assert_eq!(r.storage["state"], [1, 0x20, 0x4e, 0, 0, 0, 0, 20, 0, 1]);
+}
+
+#[test]
+fn a_deck_is_read_back_as_it_was_sent_with_each_card_s_box_and_when_it_s_due() {
+    let five = deck("Five", &[("one", "1"), ("two", "2"), ("three", "3"), ("four", "4"), ("five", "5")]);
+    let mut storage = with_decks(&[spanish(), five.clone()]);
+    // box 2 seen yesterday; new; box 5 seen twenty days ago; box 3 seen after today (maki's clock was
+    // wrong then); box 7 seen today
+    storage.insert(
+        "p2a".into(),
+        progress(DAY - 1, 3, &[(2, DAY - 1), (0, 0), (5, DAY - 20), (3, DAY + 5), (7, DAY)]),
+    );
+    let r = run(&[Event::Message, Event::Message], &[read(2, 0), read(1, 0)], storage.clone());
+    // the deck as it was sent, then each card's box and the day it's next due: box n waits 2^(n-1)
+    // days from when it was seen; one seen after today is due today; a new one has neither
+    let mut want = five.clone();
+    want.extend(due(&[(2, DAY + 1), (0, 0), (5, DAY - 4), (3, DAY), (7, DAY + 64)]));
+    assert_eq!(piece(&r.replies[0]), (want.len(), &want[..]));
+    let mut want = spanish();
+    want.extend(due(&[(0, 0); 3]));
+    assert_eq!(piece(&r.replies[1]), (want.len(), &want[..]));
+    // reading changes nothing
+    assert_eq!(r.storage, storage);
+
+    // a thousand cards, in values of 16 KiB: a piece at a time, each where the last ended, all of
+    // them 4091 bytes but the last; a deck's own pieces as they come off maki, its progress after
+    let many =
+        cards(1000, |i| (format!("word {i:04}"), format!("the meaning of word {i:04}, at some length")));
+    let d = deck("Many", &many);
+    let mut storage = with_decks(std::slice::from_ref(&d));
+    let seen: Vec<(u8, u16)> = (0..1000).map(|i| ((i % 8) as u8, if i % 8 == 0 { 0 } else { DAY })).collect();
+    storage.insert("p1a".into(), progress(DAY, 0, &seen));
+    let inbox = reads(1, d.len(), 1000);
+    assert_eq!(inbox.len(), 14);
+    let r = run(&vec![Event::Message; inbox.len()], &inbox, storage.clone());
+    let mut got: Vec<u8> = Vec::new();
+    for (i, a) in r.replies.iter().enumerate() {
+        let (total, bytes) = piece(a);
+        assert_eq!(total, d.len() + 3000);
+        assert_eq!(bytes.len(), if i < 13 { 4091 } else { total - 13 * 4091 }, "piece {i}");
+        got.extend(bytes);
+    }
+    let mut want = d.clone();
+    let wait = |b: u8| if b == 0 { 0 } else { DAY + (1 << (b - 1)) };
+    want.extend(due(&seen.iter().map(|&(b, _)| (b, wait(b))).collect::<Vec<_>>()));
+    assert_eq!(got, want);
+    assert_eq!(r.storage, storage);
+    // and from the start again, part of the way through
+    let again = [&inbox[..5], &inbox[..]].concat();
+    let r = run(&vec![Event::Message; again.len()], &again, storage);
+    assert_eq!(r.replies[..5], r.replies[5..10]);
+    let got: Vec<u8> = r.replies[5..].iter().flat_map(|a| piece(a).1.to_vec()).collect();
+    assert_eq!(got, want);
+}
+
+#[test]
+fn a_read_is_where_the_last_ended_and_of_a_deck_as_it_was() {
+    use Event::*;
+    let three = cards(300, |i| (format!("word {i}"), format!("meaning {i}")));
+    let d = deck("Three hundred", &three);
+    let storage = with_decks(&[spanish(), d.clone()]);
+    let whole = reads(2, d.len(), 300);
+    assert_eq!(whole.len(), 2);
+    let order = refused(4, "a read out of order");
+    let inbox = vec![
+        whole[1].clone(), // no read under way
+        whole[0].clone(),
+        read(2, 100),     // not where the last ended
+        whole[1].clone(), // and so the read is over
+        whole[0].clone(),
+        read(1, 4091),    // another deck's
+        whole[1].clone(), // over too
+        whole[0].clone(),
+        list(),           // something else between reads leaves it be
+        whole[1].clone(), // the rest
+        whole[1].clone(), // all of it read, the read is over
+        read(2, d.len() + 900),
+        read(9, 0),
+        read(0, 0),
+        whole[0].clone(),
+        read(9, 4091), // a read refused ends the one under way
+        whole[1].clone(),
+    ];
+    let r = run(&vec![Message; inbox.len()], &inbox, storage.clone());
+    let first = &r.replies[1];
+    assert_eq!(piece(first).1.len(), 4091);
+    let rest = &r.replies[9];
+    assert_eq!(piece(rest).1.len(), d.len() + 900 - 4091);
+    let want = [
+        order.clone(),
+        first.clone(),
+        order.clone(),
+        order.clone(),
+        first.clone(),
+        order.clone(),
+        order.clone(),
+        first.clone(),
+        r.replies[8].clone(),
+        rest.clone(),
+        order.clone(),
+        order.clone(),
+        vec![7],
+        vec![7],
+        first.clone(),
+        vec![7],
+        order.clone(),
+    ];
+    assert_eq!(r.replies, want);
+    assert_eq!(listing(&r.replies[8]).decks.len(), 2);
+    assert_eq!(r.storage, storage);
+    // what isn't a read: no deck, no place, too short or too long a place
+    let cases = [vec![V, b'R'], vec![V, b'R', 2], vec![V, b'R', 2, 0, 0, 0], vec![V, b'R', 2, 0, 0, 0, 0, 0]];
+    let r = run(&[Message; 4], &cases, storage.clone());
+    assert_eq!(r.replies, vec![refused(4, "not a message this app takes"); 4]);
+
+    // the deck kept anew while it's read: the next read is refused, and one from the start reads
+    // the new one
+    let new = deck("Three hundred", &three[..299]);
+    let mut inbox = vec![whole[0].clone()];
+    inbox.extend(upload(2, &new));
+    inbox.push(whole[1].clone());
+    inbox.extend(reads(2, new.len(), 299));
+    let r = run(&vec![Message; inbox.len()], &inbox, storage.clone());
+    assert_eq!(r.replies[1..4], [more(4085), kept(2, 299, 0), order.clone()]);
+    let got: Vec<u8> = r.replies[4..].iter().flat_map(|a| piece(a).1.to_vec()).collect();
+    assert_eq!(got, [new.clone(), due(&[(0, 0); 299])].concat());
+    // removed from the computer, or from maki's menu: it's gone
+    let r = run(&[Message; 3], &[whole[0].clone(), delete(2), whole[1].clone()], storage.clone());
+    assert_eq!(r.replies[1..], [vec![0], vec![7]]);
+    let r = run(
+        &[Message, Right, Centre, Menu(0), Centre, Message],
+        &[whole[0].clone(), whole[1].clone()],
+        storage.clone(),
+    );
+    assert!(footer(&r.frames[5], "deleted Three hundred"));
+    assert_eq!(r.replies[1], vec![7]);
+    // another deck kept, or removed, while it's read: the read goes on
+    let mut inbox = vec![whole[0].clone()];
+    inbox.extend(upload(0, &deck("French", &[("oui", "yes")])));
+    inbox.extend([delete(1), whole[1].clone()]);
+    let r = run(&[Message; 4], &inbox, storage.clone());
+    assert_eq!(r.replies[1..3], [kept(3, 1, 0), vec![0]]);
+    assert_eq!(r.replies[3], rest.clone());
+    // studied on maki while it's read: the read has the progress it began with
+    let r = run(&[Message, Right, Centre, Centre, Centre, Right, Message], &whole, storage.clone());
+    assert_eq!(r.storage["p2a"][5..8], [2, 0x20, 0x4e], "the first card known, in box 2");
+    assert_eq!(r.replies, [first.clone(), rest.clone()]);
+    assert!(piece(rest).1.ends_with(&due(&[(0, 0); 300])));
+    let r = run(&[Message; 2], &whole, r.storage);
+    let mut progress = due(&[(2, DAY + 2)]);
+    progress.extend(due(&[(0, 0); 299]));
+    assert!(piece(&r.replies[1]).1.ends_with(&progress));
+}
+
+#[test]
+fn a_deck_that_does_not_read_whole_is_not_read() {
+    let storage = with_decks(&[spanish()]);
+    let spanish_cards = records(&[("hola", "hello"), ("gracias", "thank you"), ("el perro", "the dog")]);
+    let mut damaged = Vec::new();
+    // its cards missing; a value of them cut short, so not whole cards; fewer cards than the list says
+    let mut s = storage.clone();
+    s.remove("c1a.0");
+    damaged.push(s);
+    let mut s = storage.clone();
+    s.insert("c1a.0".into(), spanish_cards[..spanish_cards.len() - 1].to_vec());
+    damaged.push(s);
+    let mut s = storage.clone();
+    s.insert("c1a.0".into(), records(&[("hola", "hello"), ("gracias", "thank you")]));
+    damaged.push(s);
+    let mut s = storage.clone();
+    s.insert("c1a.0".into(), records(&[("hola", "hello"), ("", "thank you"), ("el perro", "the dog")]));
+    damaged.push(s);
+    for (i, s) in damaged.into_iter().enumerate() {
+        let r = run(&[Event::Message, Event::Message], &[read(1, 0), list()], s.clone());
+        assert_eq!(r.replies[0], [10], "case {i}");
+        // still listed, and nothing changed
+        assert_eq!(listing(&r.replies[1]).decks.len(), 1);
+        assert_eq!(r.storage, s);
+    }
+}
+
+#[test]
+fn the_biggest_deck_studied_read_and_replaced_at_once_fits_the_app_s_memory() {
+    use Event::*;
+    // the biggest deck there's room for, studied, read part of the way (a value of its cards held
+    // for the next piece), then replaced: within the memory the manifest asks for
+    let big = cards(1000, |i| (format!("w{i:04}"), format!("{i:04} {}", "x".repeat(45))));
+    let mut storage = with_decks(&[deck("Big", &big)]);
+    storage.insert("p1a".into(), progress(DAY, 0, &[(1, DAY - 1); 1000]));
+    let mut changed = big.clone();
+    changed[500].1 = format!("0500 {}", "y".repeat(45));
+    let pieces = upload(1, &deck("Big", &changed));
+    let mut events = OPEN_AND_STUDY.to_vec();
+    events.extend(answer_cards(&[true, true]));
+    events.extend(vec![Message; 2 + pieces.len()]);
+    let mut inbox = vec![read(1, 0), read(1, 4091)];
+    inbox.extend(pieces);
+    let r = run(&events, &inbox, storage);
+    assert_eq!(piece(&r.replies[1]).1.len(), 4091);
+    assert_eq!(r.replies.last().unwrap(), &kept(1, 1000, 1000));
+    assert!(used(&r.storage) <= ROOM);
 }
