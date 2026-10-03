@@ -53,10 +53,11 @@ the `maki` tool that packs, signs, checks and simulates them. The examples:
   first) or a QR code, typed into a field on request; the computer sees their titles alone.
 - **Scanner**: reads a QR code and shows what it says, a page at a time, and types it into the
   computer (camera and keyboard); text that would press Enter or Tab waits for the centre first.
-- **Macro Pad**: keystrokes maki types into a computer at the press of a button — text, keys and
-  DuckyScript (1.0, plus STRINGLN), loaded from maki desktop (the link permission). Host API 10's
-  `chord` presses shortcuts (Gui+R, Ctrl+Alt+Delete), so it can open and run programs; it runs
-  attended, on maki's screen, with you holding the device.
+- **Macro Pad**: keystrokes maki types into a computer at the press of a button — text as it is,
+  keys and DuckyScript (1.0, plus STRINGLN), from maki desktop (the link permission), which lists
+  the scripts, reads them back to edit and removes them; maki asks first, the script itself on its
+  review screen (`AskPages`). Host API 10's `chord` presses shortcuts (Gui+R, Ctrl+Alt+Delete), so
+  it can open and run programs; it runs attended, on maki's screen, with you holding the device.
 - **Snake**: the game, steered the way it's to go with the jog dial and left and right, timed
   with `wait`.
 - **2048** and **Minesweeper**: the games, with the jog dial for up and down. Minesweeper's
