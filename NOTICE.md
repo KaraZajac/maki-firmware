@@ -24,7 +24,7 @@ of Xous's crates say "Added for maki" at their top, and are under that crate's l
 ## maki: MIT License
 
 maki's own code is licensed under the MIT License: `LICENSES/MIT.txt`, Copyright (c) 2026
-.leviathan. It's everything maki added, each crate's `Cargo.toml` saying `license = "MIT"`:
+.kara. It's everything maki added, each crate's `Cargo.toml` saying `license = "MIT"`:
 
 - `apps-baosec/maki-launcher`, `maki-app-host`, `maki-apps` and `maki-spawn`
 - `services/maki-keys` and `services/maki-link`

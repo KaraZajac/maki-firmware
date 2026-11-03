@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: MIT
-# Part of maki (see NOTICE.md): Copyright (c) 2026 .leviathan
+# Part of maki (see NOTICE.md): Copyright (c) 2026 .kara
 """Third-party notices for what maki ships: the badge image, and the maki store's apps.
 
     tools/maki-notices.py image   > THIRD-PARTY-NOTICES.md
